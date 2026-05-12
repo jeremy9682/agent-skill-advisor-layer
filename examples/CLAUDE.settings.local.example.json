@@ -1,0 +1,9 @@
+{
+  "skillOverrides": {
+    "huashu-agent-swarm": "name-only",
+    "gstack-pair-agent": "user-invocable-only",
+    "gstack-retro": "user-invocable-only",
+    "gstack-setup-gbrain": "user-invocable-only"
+  }
+}
+
