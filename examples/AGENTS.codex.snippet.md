@@ -6,6 +6,27 @@ does, load that skill's `SKILL.md` first and follow its workflow.
 
 Do not load every skill preemptively. Load the smallest relevant set.
 
+## Skill-First Development Standard
+
+Use the shared standard as the canonical source:
+
+- Workflow standard: `~/Projects/agent-skill-advisor-layer/docs/development-workflow-standard.md`
+- Task routing: `~/Projects/agent-skill-advisor-layer/docs/task-routing.md`
+- Gate policy: `~/Projects/agent-skill-advisor-layer/docs/gate-policy.md`
+- Intent schema: `~/Projects/agent-skill-advisor-layer/schemas/intent.md`
+- Solution schema: `~/Projects/agent-skill-advisor-layer/schemas/solution.md`
+
+Default split:
+
+- Claude handles 0-to-1 design, long-context synthesis, implementation-ready
+  plans, and broad refactors.
+- Codex handles scoped edits, bug fixes, diff review, regression checks, and
+  final gate confirmation.
+- The agent that authored a substantial change should not be the only reviewer.
+
+For reviews and release gates, require an intent statement that captures the
+user's goal and constraints, not just the diff summary.
+
 ## High-Cost Skill Suggestions
 
 Some skills are valuable but costly, permissioned, or operationally disruptive.
@@ -33,6 +54,12 @@ Suggest these high-cost skills in these situations:
 - `gstack-setup-gbrain`: suggest when the user asks for persistent project
   brain, gbrain, MCP-backed memory, long-term knowledge capture, or repeatedly
   loses project context across sessions.
+- `no-mistakes`: suggest when the user wants a release gate, safe push,
+  no-mistakes validation, PR/CI gate, or asks to ship with full validation.
+- `lfg`: suggest when the user explicitly wants a hands-off implementation
+  pipeline from plan through PR and CI watch.
+- `ship` or `overnight-execution`: suggest before production-facing or
+  long-running autonomous execution.
 
 Suggestion format:
 
@@ -43,6 +70,5 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 Skip this suggestion layer when the user is asking a small, urgent, or clearly
 single-step task. Never let suggestion text block the requested work.
 
-Routing QA expectation: for these four skills, the default answer is "suggest
-and wait for approval", not "execute directly".
-
+Routing QA expectation: for these high-cost skills, the default answer is
+"suggest and wait for approval", not "execute directly".

@@ -1,6 +1,6 @@
 ---
 name: skill-advisor
-description: "Suggest high-cost or permissioned skills without executing them. Use this advisor for proactive suggestions: huashu-agent-swarm for large multi-module parallel work; gstack-pair-agent for sharing browser/page context with Claude, OpenClaw, Hermes, Cursor, or another agent; gstack-retro after a sprint/week/large repair/deploy; gstack-setup-gbrain for persistent project brain, gbrain, or MCP-backed memory. Never execute these from a mere outcome request; ask for explicit approval first."
+description: "Suggest high-cost or permissioned skills without executing them. Use this advisor for proactive suggestions: huashu-agent-swarm for large multi-module parallel work; gstack-pair-agent for sharing browser/page context; gstack-retro after large repair/deploy; gstack-setup-gbrain for persistent project brain; no-mistakes, lfg, ship, or overnight-execution for gated or autonomous shipping. Never execute these from a mere outcome request; ask for explicit approval first."
 ---
 
 # Skill Advisor
@@ -35,6 +35,9 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 | `gstack-pair-agent` | Another agent needs shared browser/page/session context, or browser QA should be handed to Claude/OpenClaw/Hermes/Cursor. | No live browser/page context is involved. |
 | `gstack-retro` | End of a sprint/week/large repair sequence, after deploy/QA, or when repeated patterns should be captured. | Work is not done yet, or user needs immediate execution rather than reflection. |
 | `gstack-setup-gbrain` | User wants persistent project brain, gbrain, MCP memory, or recurring cross-session context loss is blocking work. | One-off task, existing memory is enough, or setup/install would distract from urgent work. |
+| `no-mistakes` | User asks for safe push, release gate, PR/CI validation, no-mistakes validation, or shipping through a full gate. | Small local fix where focused verification is enough, or repo is not initialized for no-mistakes. |
+| `lfg` | User explicitly wants a hands-off plan-to-PR implementation pipeline. | Requirements are unclear, task is small, or the user has not approved autonomous execution. |
+| `ship` / `overnight-execution` | Production-facing or long-running autonomous execution would be useful. | User has not explicitly approved the specific production or long-running workflow. |
 
 ## Common Routing Pitfalls
 
@@ -47,6 +50,10 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 - `claude-mem:knowledge-agent` helps query memory; it is not the setup workflow
   for persistent project brain. For gbrain/MCP brain setup, suggest
   `gstack-setup-gbrain`.
+- `no-mistakes` and `lfg` are both full pipeline shapes. Do not suggest both at
+  once; choose the one that matches the user's explicit wording.
+- Release gates need an intent statement. Intent is the user's goal and
+  constraints, not a diff summary.
 
 ## Operating Notes
 

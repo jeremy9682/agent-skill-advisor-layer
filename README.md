@@ -24,6 +24,15 @@ This repo provides a small middle layer:
 3. Wait for explicit approval before execution.
 4. Stay silent when the task is small, urgent, or unrelated.
 
+It also now carries a portable skill-first development standard for teams that
+want Codex, Claude Code, and other agents to share the same workflow rules:
+
+- [Skill-first workflow standard](docs/development-workflow-standard.md)
+- [Task routing](docs/task-routing.md)
+- [Gate policy](docs/gate-policy.md)
+- [Intent statement schema](schemas/intent.md)
+- [Solution note schema](schemas/solution.md)
+
 ## What Is Included
 
 ```text
@@ -31,6 +40,7 @@ skills/skill-advisor/       Routing skill
 scripts/skill_audit.py      Local skill inventory and governance audit
 examples/                   Codex and Claude configuration snippets
 docs/                       Routing, governance, and QA docs
+schemas/                    Intent and solution note schemas
 tests/                      Lightweight pytest coverage
 ```
 
@@ -44,6 +54,9 @@ The bundled advisor covers these high-cost workflows by default:
 | `gstack-pair-agent` | Another agent needs shared browser, page, or live QA context | Suggest only |
 | `gstack-retro` | End of a week, sprint, deploy, or large repair sequence | Suggest only |
 | `gstack-setup-gbrain` | Persistent project brain, gbrain, or MCP-backed memory setup | Suggest only |
+| `no-mistakes` | Safe push, release gate, PR/CI validation, or no-mistakes validation | Suggest only |
+| `lfg` | Hands-off plan-to-PR implementation pipeline | Suggest only |
+| `ship` / `overnight-execution` | Production-facing or long-running autonomous execution | Suggest only |
 
 You can edit `skills/skill-advisor/SKILL.md` if your local skill names differ.
 
@@ -67,8 +80,9 @@ Then add the routing snippet from
 `examples/AGENTS.codex.snippet.md` to your global or project `AGENTS.md`.
 
 For Claude projects, use
-`examples/CLAUDE.settings.local.example.json` as a starting point for
-project-local `skillOverrides`.
+`examples/CLAUDE.snippet.md` and
+`examples/CLAUDE.settings.local.example.json` as starting points for project
+instructions and project-local `skillOverrides`.
 
 ## Usage Pattern
 
@@ -120,4 +134,3 @@ See `docs/qa-matrix.md` for black-box prompt cases.
 ## License
 
 MIT.
-

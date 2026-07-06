@@ -36,6 +36,10 @@ def test_high_cost_skill_names_are_suggest_confirm():
         "gstack-pair-agent",
         "gstack-retro",
         "gstack-setup-gbrain",
+        "no-mistakes",
+        "lfg",
+        "ship",
+        "overnight-execution",
     ]:
         assert audit.call_policy(name, "", {}) == "suggest-confirm"
 
@@ -44,4 +48,3 @@ def test_regular_skill_is_auto_eligible():
     audit = load_audit_module()
 
     assert audit.call_policy("format-json", "Format JSON files safely.", {}) == "auto-eligible"
-

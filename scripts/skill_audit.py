@@ -95,6 +95,12 @@ SUGGEST_CONFIRM_SKILLS = {
     "retro",
     "gstack-setup-gbrain",
     "setup-gbrain",
+    "no-mistakes",
+    "lfg",
+    "ship",
+    "gstack-ship",
+    "land-and-deploy",
+    "overnight-execution",
 }
 
 SUGGEST_CONFIRM_HINTS = (
@@ -109,6 +115,14 @@ SUGGEST_CONFIRM_HINTS = (
     "weekly retro",
     "engineering retrospective",
     "gbrain",
+    "no-mistakes",
+    "safe push",
+    "push safely",
+    "release gate",
+    "ci watch",
+    "autonomous pipeline",
+    "hands-off",
+    "overnight execution",
 )
 
 
