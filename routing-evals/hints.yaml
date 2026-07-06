@@ -1,0 +1,155 @@
+# Routing hints overlay — policy-layer routing metadata.
+#
+# Purpose: fix trigger reachability WITHOUT editing third-party SKILL.md
+# (upstream drift). The router hook and routing_eval merge these into the
+# lexical index, so eval measures exactly what production scores.
+#
+# Fields per entry (M2, blind-review mandated):
+#   skill:             target skill name (must exist locally; unknown = ignored)
+#   extra_triggers:    additional trigger tokens/phrases (mostly Chinese — the
+#                      user prompts in Chinese; 80/109 descriptions have no CJK)
+#   negative_triggers: prompt patterns that must EXCLUDE this skill from
+#                      candidates (black-hole damping)
+#   domains:           optional cwd substrings; outside them the skill is
+#                      excluded (project-scoped skills)
+#   rationale:         why this hint exists (one line)
+#   source:            where the need was measured
+#
+# Rule: hints are curated by humans after eval/doctor evidence. Do not bulk-
+# generate; each entry needs a rationale.
+
+version: 1
+hints:
+  # --- black-hole damping (measured 2026-07-06: attractor in 8/18 miss cases) ---
+  - skill: xyq-nest-skill
+    extra_triggers: []
+    negative_triggers: ["修 bug", "review", "审查", "测试网站", "安全", "复盘", "ship", "上线", "原型", "封面", "字幕"]
+    domains: ["xyq", "nest"]
+    rationale: "242-CJK-char description attracts every Chinese prompt; scope to its own project"
+    source: "routing_eval baseline 2026-07-06, 8/18 miss cases"
+
+  # --- English-only descriptions, Chinese triggers unreachable (80/109 problem) ---
+  - skill: investigate
+    extra_triggers: ["查一下为什么", "报错", "排查", "接口 500", "坏了", "昨天还好好的", "不预期", "根因"]
+    negative_triggers: []
+    rationale: "gstack debugging skill, EN-only description; bug reports arrive in Chinese"
+    source: "eval miss regression-500"
+  - skill: review
+    extra_triggers: ["审查", "看看改动", "审 diff", "分支改动", "代码审查", "终审"]
+    negative_triggers: []
+    rationale: "EN-only description; review requests arrive in Chinese"
+    source: "eval miss diff-review"
+  - skill: qa
+    extra_triggers: ["测试网站", "找 bug", "试一下这个站", "质检", "点一遍"]
+    negative_triggers: []
+    rationale: "EN-only description"
+    source: "eval miss site-qa"
+  - skill: qa-only
+    extra_triggers: ["只报告 bug", "只测不修", "出个 bug 报告"]
+    negative_triggers: []
+    rationale: "EN-only description"
+    source: "eval miss site-qa"
+  - skill: browse
+    extra_triggers: ["打开网站", "浏览器测试", "截图验证", "dogfood"]
+    negative_triggers: []
+    rationale: "EN-only description"
+    source: "eval miss site-qa"
+  - skill: cso
+    extra_triggers: ["安全审计", "扫漏洞", "安全检查", "威胁建模", "渗透"]
+    negative_triggers: []
+    rationale: "EN-only description; security asks arrive in Chinese"
+    source: "eval miss security-audit"
+  - skill: security-best-practices
+    extra_triggers: ["安全漏洞", "安全规范"]
+    negative_triggers: []
+    rationale: "EN-only description"
+    source: "eval miss security-audit"
+  - skill: retro
+    extra_triggers: ["复盘", "sprint 总结", "回顾这周"]
+    negative_triggers: []
+    rationale: "EN-only description; suggest-confirm gate still applies. Phrases kept free of function-word bigrams (一下/这个) after 2026-07-06 leak"
+    source: "eval miss sprint-retro"
+  - skill: pair-agent
+    extra_triggers: ["共享浏览器", "两个 agent 一起", "共享上下文排查"]
+    negative_triggers: []
+    rationale: "EN-only description; suggest-confirm gate still applies"
+    source: "eval miss shared-browser-debug"
+  - skill: ship
+    extra_triggers: ["上线", "发布到 production", "推上去发版", "项目上线", "ship 上线", "发版", "部署上线"]
+    negative_triggers: []
+    rationale: "EN-only long description dilutes overlap (norm penalty); needs dense natural-phrasing triggers. Suggest-confirm gate still applies"
+    source: "eval miss ship-to-prod + smoke 2026-07-06: scored below FIRE_THRESHOLD"
+  - skill: land-and-deploy
+    extra_triggers: ["部署上线", "合并发布"]
+    negative_triggers: []
+    rationale: "EN-only description; suggest-confirm gate still applies"
+    source: "eval miss ship-to-prod"
+  - skill: setup-deploy
+    extra_triggers: ["配置部署", "部署环境"]
+    negative_triggers: []
+    rationale: "EN-only description"
+    source: "eval miss ship-to-prod"
+  - skill: imagegen
+    extra_triggers: ["生成图片", "生成一张图", "宣传图", "配图"]
+    negative_triggers: []
+    rationale: "EN-only description"
+    source: "eval miss product-image"
+  - skill: huashu-script-polish
+    extra_triggers: ["润色讲稿", "口播稿", "念稿自然"]
+    negative_triggers: []
+    rationale: "description lacks trigger wording"
+    source: "eval miss script-polish"
+  - skill: huashu-speech-coach
+    extra_triggers: ["口播练习", "演讲节奏"]
+    negative_triggers: []
+    rationale: "description lacks trigger wording"
+    source: "eval miss script-polish"
+  - skill: superdesign
+    extra_triggers: ["hi-fi 原型", "界面原型", "onboarding 流程原型"]
+    negative_triggers: []
+    rationale: "no trigger clause in description (lint L2)"
+    source: "lint 2026-07-06"
+  - skill: frontend-design
+    extra_triggers: ["前端组件", "页面实现", "interactive prototype"]
+    negative_triggers: []
+    rationale: "EN-only description"
+    source: "eval miss onboarding-prototype"
+
+  # --- high-cost skills missing confirm language (lint L4) ---
+  - skill: huashu-agent-swarm
+    extra_triggers: ["多 agent 并行", "蜂群开发"]
+    negative_triggers: ["设计系统", "DESIGN.md", "配色", "字体"]
+    rationale: "L4 no confirm language; measured leaking into innocent design-system prompt at rank 3"
+    source: "eval known leak new-design-system"
+  - skill: gstack-openclaw-retro
+    extra_triggers: ["复盘"]
+    negative_triggers: []
+    rationale: "L4 no confirm language; suggest-confirm gate applies"
+    source: "lint 2026-07-06"
+  - skill: setup-gbrain
+    extra_triggers: ["项目脑", "长期记忆库"]
+    negative_triggers: []
+    rationale: "L4 no confirm language"
+    source: "lint 2026-07-06"
+  - skill: sync-gbrain
+    extra_triggers: ["同步 gbrain", "gbrain 同步"]
+    negative_triggers: []
+    rationale: "L4 no confirm language. '项目脑' dropped: 项目 bigram leaked into unrelated 新项目 prompts"
+    source: "lint 2026-07-06"
+
+  # --- no-trigger descriptions (lint L2), non-eval-case fixes ---
+  - skill: cut-draft
+    extra_triggers: ["剪映", "加字幕", "草稿", "CapCut"]
+    negative_triggers: []
+    rationale: "description describes features, no trigger clause"
+    source: "lint 2026-07-06"
+  - skill: guizang-ppt-skill
+    extra_triggers: ["电子杂志", "翻页 PPT", "横向幻灯片", "汇报 PPT"]
+    negative_triggers: []
+    rationale: "description lacks trigger clause"
+    source: "lint 2026-07-06"
+  - skill: skill-advisor
+    extra_triggers: ["该用哪个 skill", "workflow 建议"]
+    negative_triggers: []
+    rationale: "router-policy skill, no trigger clause"
+    source: "lint 2026-07-06"

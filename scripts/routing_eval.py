@@ -32,11 +32,48 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "routing-evals" / "cases.yaml"
+DEFAULT_HINTS = ROOT / "routing-evals" / "hints.yaml"
 
 TOP_K = 3
-# Ratchet, not aspiration: set at the measured 2026-07-06 baseline (44%).
-# Raise it as description fixes land; never lower it.
-RECALL_THRESHOLD = 0.40
+# Ratchet, not aspiration. History: 0.40 (bare baseline 2026-07-06 AM),
+# 0.90 (hints overlay landed 2026-07-06 PM, measured 100%; 0.90 leaves
+# fleet-churn slack of ~2 misses). Never lower without a written reason.
+RECALL_THRESHOLD = 0.90
+
+# Router firing threshold — single source shared with skill_router_hook.py.
+# Calibrated 2026-07-06 with hints: true hits 4.03-16.83, hardest negatives
+# <= 2.54. The eval counts an unexpected high-cost candidate as a violation
+# only when production would actually SHOW it (see chosen_candidates);
+# other sightings still appear in gate_dependency_events for visibility.
+FIRE_THRESHOLD = 4.0
+
+# Companion bar: runners-up are shown only when they clear this fraction of
+# the top score. Calibration 2026-07-06: suppressed every noisy runner-up
+# while keeping legitimate co-candidates.
+COMPANION_RATIO = 0.6
+
+
+def chosen_candidates(
+    ranked: list[tuple[str, float]],
+    fire_threshold: float | None = None,
+    companion_ratio: float | None = None,
+    top_k: int | None = None,
+) -> list[tuple[str, float]]:
+    """Production display rule, shared by hook and eval (single source).
+
+    Fires only when the top candidate clears fire_threshold; then shows at
+    most top_k entries that also clear companion_ratio * top score. The
+    truncation lives HERE so a caller passing a full ranking cannot make
+    hook and eval drift.
+    """
+    fire = FIRE_THRESHOLD if fire_threshold is None else fire_threshold
+    ratio = COMPANION_RATIO if companion_ratio is None else companion_ratio
+    k = TOP_K if top_k is None else top_k
+    ranked = ranked[:k]
+    if not ranked or ranked[0][1] < fire:
+        return []
+    bar = ranked[0][1] * ratio
+    return [(n, s) for n, s in ranked if s >= bar]
 
 TRIGGER_CLAUSE_RE = re.compile(
     r"use (this )?(skill|advisor|command|tool)? ?(when|for|to)"
@@ -49,6 +86,13 @@ CONFIRM_CLAUSE_RE = re.compile(
     re.IGNORECASE,
 )
 CJK_RE = re.compile(r"[㐀-鿿]")
+
+# Chinese function-word bigrams: near-zero routing signal, high leak risk
+# (measured 2026-07-06: "一下" dragged `retro` into three unrelated cases).
+CJK_STOP_BIGRAMS = {
+    "一下", "帮我", "这个", "一个", "什么", "怎么", "可以",
+    "需要", "我们", "你的", "我的", "现在", "然后", "还是",
+}
 
 
 def load_audit_module() -> Any:
@@ -67,31 +111,86 @@ def tokenize(text: str) -> list[str]:
         tokens.append(word.lower())
     cjk_chars = CJK_RE.findall(text)
     tokens.extend(cjk_chars)
-    tokens.extend(a + b for a, b in zip(cjk_chars, cjk_chars[1:]))
+    tokens.extend(
+        bigram
+        for a, b in zip(cjk_chars, cjk_chars[1:])
+        if (bigram := a + b) not in CJK_STOP_BIGRAMS
+    )
     return tokens
 
 
-class LexicalIndex:
-    """IDF-weighted token overlap between a prompt and skill name+description."""
+def load_hints(path: Path) -> dict[str, dict[str, Any]]:
+    """Load the routing-hints overlay. Empty dict when unavailable (degrade)."""
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except (OSError, Exception):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for entry in data.get("hints", []) or []:
+        name = entry.get("skill")
+        if not name:
+            continue
+        out[name] = {
+            "extra_triggers": entry.get("extra_triggers") or [],
+            "negative_triggers": entry.get("negative_triggers") or [],
+            "domains": entry.get("domains") or [],
+        }
+    return out
 
-    def __init__(self, skills: list[dict[str, Any]]):
+
+class LexicalIndex:
+    """IDF-weighted token overlap between a prompt and skill name+description.
+
+    `hints` merges the routing overlay: extra_triggers extend a skill's token
+    set; negative_triggers exclude a skill when the raw prompt contains any of
+    them; domains restrict a skill to prompts/cwd mentioning that domain.
+    The router hook and the eval share this class — eval measures production.
+    """
+
+    def __init__(self, skills: list[dict[str, Any]], hints: dict[str, dict[str, Any]] | None = None):
         self.skills = skills
+        self.hints = hints or {}
         self.doc_tokens: list[set[str]] = []
         df: dict[str, int] = {}
         for skill in skills:
-            toks = set(tokenize(f"{skill['name']} {skill.get('description', '')}"))
+            text = f"{skill['name']} {skill.get('description', '')}"
+            extra = self.hints.get(skill["name"], {}).get("extra_triggers", [])
+            if extra:
+                text += " " + " ".join(extra)
+            toks = set(tokenize(text))
             self.doc_tokens.append(toks)
             for t in toks:
                 df[t] = df.get(t, 0) + 1
         n = max(len(skills), 1)
         self.idf = {t: math.log((n + 1) / (c + 0.5)) for t, c in df.items()}
 
-    def rank(self, prompt: str, top_k: int = TOP_K) -> list[tuple[str, float]]:
+    def _excluded(self, name: str, prompt: str, cwd: str) -> bool:
+        hint = self.hints.get(name)
+        if not hint:
+            return False
+        lowered = prompt.lower()
+        for neg in hint["negative_triggers"]:
+            if neg.lower() in lowered:
+                return True
+        domains = hint["domains"]
+        if domains:
+            hay = f"{lowered} {cwd.lower()}"
+            if not any(d.lower() in hay for d in domains):
+                return True
+        return False
+
+    def rank(self, prompt: str, top_k: int = TOP_K, cwd: str = "") -> list[tuple[str, float]]:
         q = set(tokenize(prompt))
         scored: list[tuple[str, float]] = []
         for skill, toks in zip(self.skills, self.doc_tokens):
             overlap = q & toks
             if not overlap:
+                continue
+            if self._excluded(skill["name"], prompt, cwd):
                 continue
             score = sum(self.idf.get(t, 0.0) for t in overlap)
             norm = 1.0 + math.log(1 + len(toks))
@@ -169,9 +268,11 @@ def collect_skills(audit: Any, skills_dir: Path | None) -> list[dict[str, Any]]:
 
 
 def run_eval(
-    skills: list[dict[str, Any]], cases: list[dict[str, Any]]
+    skills: list[dict[str, Any]],
+    cases: list[dict[str, Any]],
+    hints: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    index = LexicalIndex(skills)
+    index = LexicalIndex(skills, hints=hints)
     policy = {s["name"]: s["policy"] for s in skills}
     installed = set(policy)
 
@@ -196,16 +297,24 @@ def run_eval(
             hit = any(e in top_names for e in expect_installed)
             recall_hits += bool(hit)
 
+        scores = dict(top)
+        shown = {n for n, _ in chosen_candidates(top)}
         case_high_cost = [n for n in top_names if policy.get(n) == "suggest-confirm"]
         for name in case_high_cost:
-            event = {"case": case["id"], "skill": name, "rank": top_names.index(name) + 1}
+            event = {
+                "case": case["id"],
+                "skill": name,
+                "rank": top_names.index(name) + 1,
+                "score": round(scores.get(name, 0.0), 2),
+            }
             gate_events.append(event)
             if name in high_cost_ok:
                 continue
             if name in known_leaks:
                 event = dict(event, known=True)
                 known_leak_events.append(event)
-            else:
+            elif name in shown:
+                # violation only if production would actually display it
                 unexpected_high_cost.append(event)
 
         results.append(
@@ -271,17 +380,64 @@ def run_lint(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return findings
 
 
+def run_doctor() -> int:
+    """skill-doctor v0: summarize router-log emissions into candidate drafts.
+
+    Output is a YAML fragment for the `candidates:` zone of cases.yaml —
+    always human-reviewed, never merged automatically.
+    """
+    log_path = Path.home() / ".codex" / "skill-governance" / "routing-log.jsonl"
+    if not log_path.is_file():
+        print("# no routing log yet:", log_path)
+        return 0
+    fired: dict[str, int] = {}
+    high_cost: dict[str, int] = {}
+    total = 0
+    for line in log_path.read_text(errors="ignore").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        total += 1
+        for cand in rec.get("candidates", []):
+            fired[cand["skill"]] = fired.get(cand["skill"], 0) + 1
+            if cand.get("policy") == "suggest-confirm":
+                high_cost[cand["skill"]] = high_cost.get(cand["skill"], 0) + 1
+    print(f"# routing-log: {total} emissions from {log_path}")
+    print("# review each stanza, then promote manually into cases.yaml candidates:")
+    for name, count in sorted(high_cost.items(), key=lambda x: -x[1]):
+        print(f"""
+  - id: cand-doctor-{name}
+    observed: "(fill date)"
+    source: "router-log, {count}/{total} emissions"
+    prompt: "(paste a representative prompt from the log)"
+    failure: >-
+      suggest-confirm skill {name} surfaced {count} times; review whether
+      these were legitimate candidacies or hint/description over-reach.""")
+    top = sorted(fired.items(), key=lambda x: -x[1])[:10]
+    print("\n# top surfaced skills (frequency):", ", ".join(f"{n}×{c}" for n, c in top))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
+    parser.add_argument("--hints", type=Path, default=DEFAULT_HINTS)
+    parser.add_argument("--no-hints", action="store_true", help="score without the overlay")
     parser.add_argument("--skills-dir", type=Path, default=None)
     parser.add_argument("--lint", action="store_true", help="lint only, skip eval")
+    parser.add_argument("--doctor", action="store_true",
+                        help="summarize the router log into candidate case drafts")
     parser.add_argument("--json", type=Path, default=None)
     parser.add_argument("--check", action="store_true", help="exit 1 on failures")
     args = parser.parse_args()
 
+    if args.doctor:
+        return run_doctor()
+
     audit = load_audit_module()
     skills = collect_skills(audit, args.skills_dir)
+    hints = {} if args.no_hints else load_hints(args.hints)
 
     report: dict[str, Any] = {
         "skills": [
@@ -300,7 +456,8 @@ def main() -> int:
     failed = False
     if not args.lint:
         cases = parse_cases(args.cases).get("cases", [])
-        eval_report = run_eval(skills, cases)
+        eval_report = run_eval(skills, cases, hints=hints)
+        eval_report["hints_loaded"] = len(hints)
         report["eval"] = eval_report
         print(f"skills evaluated: {eval_report['skills_evaluated']}")
         print(

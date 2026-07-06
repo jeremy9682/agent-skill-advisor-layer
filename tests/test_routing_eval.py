@@ -96,11 +96,28 @@ def test_unexpected_high_cost_candidate_is_flagged(tmp_path):
             # no high_cost_ok: fixture-ship surfacing must be flagged
         }
     ]
+    # Mechanism test: force the firing bar to zero so the tiny fixture
+    # fleet's low IDF ceiling cannot mask the flagging logic itself.
+    routing.FIRE_THRESHOLD = 0.0
     report = routing.run_eval(skills, cases)
     assert any(
         e["skill"] == "fixture-ship"
         for e in report["unexpected_high_cost_candidates"]
     )
+
+
+def test_sub_threshold_sighting_is_exposure_not_violation(tmp_path):
+    routing = load_routing_module()
+    audit = routing.load_audit_module()
+    skills = routing.collect_skills(audit, build_fixture(tmp_path))
+
+    cases = [{"id": "faint", "prompt": "production release gate ci watch ship", "expect": []}]
+    # With an unreachably high bar, the sighting stays visible in
+    # gate_dependency_events but is not a violation (production never fires).
+    routing.FIRE_THRESHOLD = 999.0
+    report = routing.run_eval(skills, cases)
+    assert report["unexpected_high_cost_candidates"] == []
+    assert any(e["skill"] == "fixture-ship" for e in report["gate_dependency_events"])
 
 
 def test_known_leak_is_reported_but_not_a_violation(tmp_path):

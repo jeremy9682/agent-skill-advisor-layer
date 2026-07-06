@@ -13,6 +13,7 @@ Use the smallest workflow that protects the user's goal.
 | Code review | Reviewer compares the diff to an intent statement, not only local style | Findings with severity, file references, and verification needs |
 | Release or ship | High-cost gate workflow after explicit approval | Green checks before push or production action |
 | Retrospective or learning | Capture only reusable learnings into project-local `docs/solutions/` | A solution note that future planning can read |
+| Skill install or update | Supply-chain change: Codex-led review of the SKILL.md diff and any `scripts/`, provenance pinned | Manifest provenance entry (repo, ref, tree hash) from `skill_audit` |
 
 ## Default Agent Split
 

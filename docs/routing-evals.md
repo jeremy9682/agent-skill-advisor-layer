@@ -31,11 +31,23 @@ contract did not regress, not that routing is semantically correct. Do not
 optimize descriptions into keyword soup to game recall; lint checks
 structure, evals check regressions, humans check meaning.
 
+## Router Hook And Hints
+
+`scripts/skill_router_hook.py` (UserPromptSubmit) suggests up to three
+candidate skills per prompt using the same index plus the
+`routing-evals/hints.yaml` overlay — extra triggers (mostly Chinese),
+negative triggers to damp black-hole skills, and cwd domain scoping. Hints
+never edit third-party SKILL.md. The hook fires only above
+`FIRE_THRESHOLD` (single source in `routing_eval.py`, calibration table in
+its header), speaks in advisory language only, degrades to `{}` on any
+internal failure, and logs each emission (sha + 80-char head, repo
+basename only) to `~/.codex/skill-governance/routing-log.jsonl`.
+
 ## Growing The Case Set
 
 New cases come from real routing failures (missed triggers, wrong
 suggestions, rejected suggestions), appended to the `candidates:` zone in
-`cases.yaml` and promoted after human review. Planned next iteration:
-a `skill doctor` step that records these events per session automatically.
-Eval before router: no retrieval hook lands until this eval can measure
-whether it helped.
+`cases.yaml` and promoted after human review. `routing_eval.py --doctor`
+drafts candidate stanzas from the router log; promotion stays manual.
+Eval before router held: the hook landed only after this eval measured
+the hints overlay (recall@3 44% -> 100%, 2026-07-06).
