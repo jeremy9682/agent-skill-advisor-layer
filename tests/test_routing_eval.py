@@ -106,6 +106,23 @@ def test_unexpected_high_cost_candidate_is_flagged(tmp_path):
     )
 
 
+def test_displayed_recall_tracks_firing_not_just_rank(tmp_path):
+    routing = load_routing_module()
+    audit = routing.load_audit_module()
+    skills = routing.collect_skills(audit, build_fixture(tmp_path))
+    cases = [{"id": "ppt", "prompt": "帮我做一个汇报用的幻灯片", "expect": ["fixture-ppt"]}]
+
+    # At a reachable threshold the expected skill both ranks AND displays.
+    low = routing.run_eval(skills, cases, fire_threshold=0.1)
+    assert low["recall_at_k"] == 1.0
+    assert low["displayed_recall"] == 1.0
+
+    # Raise the bar above any score: still ranked (recall ok) but never shown.
+    high = routing.run_eval(skills, cases, fire_threshold=999.0)
+    assert high["recall_at_k"] == 1.0
+    assert high["displayed_recall"] == 0.0
+
+
 def test_sub_threshold_sighting_is_exposure_not_violation(tmp_path):
     routing = load_routing_module()
     audit = routing.load_audit_module()

@@ -151,8 +151,22 @@ def main() -> int:
         index = routing.LexicalIndex(skills, hints=hints)
         top = index.rank(prompt, top_k=getattr(routing, "TOP_K", 3), cwd=cwd)
 
+        # Optional machine-local threshold override (manual escape hatch to
+        # quiet the router on one host without editing canonical code). Absent
+        # by default -> canonical FIRE_THRESHOLD is used. Validate any value
+        # with `routing_eval.py --check --fire-threshold X` before setting it;
+        # displayed-recall must stay green.
+        fire = None
+        try:
+            tune = json.loads((GOV_DIR / "router-tune.json").read_text())
+            v = tune.get("fire_threshold")
+            if isinstance(v, (int, float)):
+                fire = float(v)
+        except (OSError, ValueError):
+            fire = None
+
         # Single-source display rule shared with the eval (finding 2).
-        chosen = routing.chosen_candidates(top)
+        chosen = routing.chosen_candidates(top, fire_threshold=fire)
         if not chosen:
             write_log(prompt, cwd, [
                 {"skill": n, "score": round(s, 2)} for n, s in top[:1]

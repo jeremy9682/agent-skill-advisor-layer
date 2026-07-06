@@ -40,6 +40,12 @@ TOP_K = 3
 # fleet-churn slack of ~2 misses). Never lower without a written reason.
 RECALL_THRESHOLD = 0.90
 
+# Displayed recall = expected skill actually SHOWN by the production display
+# rule (fire threshold + companion + top-k), not just present in the top-k
+# ranking. Measured 0.94 at threshold 4.0 on 2026-07-06 (one weak case scores
+# below the fire bar). Gate guards against future display regressions.
+DISPLAYED_RECALL_THRESHOLD = 0.90
+
 # Router firing threshold — single source shared with skill_router_hook.py.
 # Calibrated 2026-07-06 with hints: true hits 4.03-16.83, hardest negatives
 # <= 2.54. The eval counts an unexpected high-cost candidate as a violation
@@ -271,6 +277,7 @@ def run_eval(
     skills: list[dict[str, Any]],
     cases: list[dict[str, Any]],
     hints: dict[str, dict[str, Any]] | None = None,
+    fire_threshold: float | None = None,
 ) -> dict[str, Any]:
     index = LexicalIndex(skills, hints=hints)
     policy = {s["name"]: s["policy"] for s in skills}
@@ -278,6 +285,7 @@ def run_eval(
 
     results: list[dict[str, Any]] = []
     recall_hits = recall_total = 0
+    displayed_hits = 0  # expected skill actually shown by the production display rule
     gate_events: list[dict[str, Any]] = []
     unexpected_high_cost: list[dict[str, Any]] = []
     known_leak_events: list[dict[str, Any]] = []
@@ -288,17 +296,21 @@ def run_eval(
         known_leaks = set(case.get("known_leaks", []) or [])
         top = index.rank(case["prompt"])
         top_names = [name for name, _ in top]
+        scores = dict(top)
+        shown = {n for n, _ in chosen_candidates(top, fire_threshold=fire_threshold)}
 
         expect_installed = [e for e in expect if e in installed]
         skipped = [e for e in expect if e not in installed]
         hit = None
+        displayed_hit = None
         if expect_installed:
             recall_total += 1
             hit = any(e in top_names for e in expect_installed)
             recall_hits += bool(hit)
-
-        scores = dict(top)
-        shown = {n for n, _ in chosen_candidates(top)}
+            # displayed recall: would production actually SHOW the expected skill,
+            # after the firing threshold + companion + top-k rule? (Codex finding)
+            displayed_hit = any(e in shown for e in expect_installed)
+            displayed_hits += bool(displayed_hit)
         case_high_cost = [n for n in top_names if policy.get(n) == "suggest-confirm"]
         for name in case_high_cost:
             event = {
@@ -323,12 +335,14 @@ def run_eval(
                 "prompt": case["prompt"],
                 "top": [{"skill": n, "score": round(s, 3)} for n, s in top],
                 "recall_hit": hit,
+                "displayed_hit": displayed_hit,
                 "skipped_missing_skill": skipped,
                 "high_cost_in_top": case_high_cost,
             }
         )
 
     recall = recall_hits / recall_total if recall_total else 1.0
+    displayed_recall = displayed_hits / recall_total if recall_total else 1.0
 
     # Cross-lingual reachability: a description with zero CJK characters is
     # lexically unreachable from a Chinese prompt (and vice versa). Semantic
@@ -343,6 +357,8 @@ def run_eval(
         "recall_at_k": round(recall, 3),
         "recall_hits": recall_hits,
         "recall_total": recall_total,
+        "displayed_recall": round(displayed_recall, 3),
+        "displayed_hits": displayed_hits,
         "descriptions_without_cjk": no_cjk,
         "gate_dependency_events": gate_events,
         "known_leaks": known_leak_events,
@@ -430,6 +446,8 @@ def main() -> int:
                         help="summarize the router log into candidate case drafts")
     parser.add_argument("--json", type=Path, default=None)
     parser.add_argument("--check", action="store_true", help="exit 1 on failures")
+    parser.add_argument("--fire-threshold", type=float, default=None,
+                        help="validate recall at this firing threshold (for self-tune)")
     args = parser.parse_args()
 
     if args.doctor:
@@ -456,13 +474,17 @@ def main() -> int:
     failed = False
     if not args.lint:
         cases = parse_cases(args.cases).get("cases", [])
-        eval_report = run_eval(skills, cases, hints=hints)
+        eval_report = run_eval(skills, cases, hints=hints, fire_threshold=args.fire_threshold)
         eval_report["hints_loaded"] = len(hints)
         report["eval"] = eval_report
         print(f"skills evaluated: {eval_report['skills_evaluated']}")
         print(
-            f"recall@{TOP_K}: {eval_report['recall_at_k']:.0%}"
+            f"recall@{TOP_K} (rank): {eval_report['recall_at_k']:.0%}"
             f" ({eval_report['recall_hits']}/{eval_report['recall_total']})"
+        )
+        print(
+            f"displayed recall (would fire): {eval_report['displayed_recall']:.0%}"
+            f" ({eval_report['displayed_hits']}/{eval_report['recall_total']})"
         )
         print(
             f"descriptions lexically unreachable from Chinese prompts: "
@@ -482,6 +504,10 @@ def main() -> int:
             print(f"  miss {miss['id']}: wanted one of case expects, got [{got}]")
         if eval_report["recall_at_k"] < RECALL_THRESHOLD:
             print(f"FAIL: recall@{TOP_K} below threshold {RECALL_THRESHOLD:.0%}")
+            failed = True
+        if eval_report["displayed_recall"] < DISPLAYED_RECALL_THRESHOLD:
+            print(f"FAIL: displayed recall below threshold {DISPLAYED_RECALL_THRESHOLD:.0%}"
+                  " — a threshold/hint change hid an expected skill from firing")
             failed = True
         if eval_report["unexpected_high_cost_candidates"]:
             failed = True
