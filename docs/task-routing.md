@@ -22,8 +22,39 @@ understanding, cross-file refactors, and implementation-ready plan creation.
 Codex handles the landing side: precise edits, bug fixes, diff review, focused
 regression checks, and confirming that the gate evidence is real.
 
-When both agents contributed materially, the final reviewer should be the agent
-that did not author the main change.
+Direction ownership follows task shape: fix-shaped work (bugs, diff
+convergence, regressions) may take direction from Codex; judgment-shaped work
+(architecture, product tradeoffs, schema, 0-to-1) takes direction from the
+Claude side. No agent holds direction and sole final review of the same
+judgment-shaped change.
+
+## Seats Rule
+
+Each change has three seats: direction, landing, final review.
+
+- Landing seat and final-review seat are never the same agent.
+- Direction seat and final-review seat are never the same agent.
+- Final review defaults to Codex (cross-family autopsy); keep it there even
+  when other seats rotate.
+- Direction-seat fallback when Fable is unavailable or not warranted:
+  Fable -> Opus -> Claude session plus a blind Codex plan review.
+
+Monitoring is not a seat: replace live monitoring with three gate events —
+plan gate (only when a change spans 2+ modules, a public interface, or a data
+model), final diff review, and the ship gate.
+
+## Repo Profiles
+
+Restricted-zone-heavy repos (money, permissions, migrations, DocType, PII —
+e.g. a production ERP) default non-mechanical work to:
+
+```text
+plan (Claude) -> blind plan review (Codex) -> implement -> final review (Codex)
+```
+
+Other repos use the conditional triggers above. Small fixes bypass everywhere.
+Every task gets a process budget up front; when exceeded, drop extra agents
+and keep only minimal verification plus final review.
 
 ## Scale Guardrail
 

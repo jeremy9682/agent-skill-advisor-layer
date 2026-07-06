@@ -12,7 +12,8 @@ link here instead of copying long, drifting workflow text.
 2. Small fixes stay small. Do not wrap a single-file fix in a six-step process.
 3. Complex work needs a durable plan before implementation.
 4. Review uses the user's intent, not just the diff.
-5. The agent that writes a substantial change should not be the only reviewer.
+5. Seats rule: neither the landing seat nor the direction seat final-reviews
+   its own change; final review defaults to Codex.
 6. Nothing gets pushed or shipped without green evidence.
 7. Autonomous pipelines are high-cost workflows. Suggest them, then wait for
    explicit approval.

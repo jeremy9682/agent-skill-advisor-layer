@@ -26,6 +26,19 @@ user's objective and constraints, not a summary of the files changed. See
 Thin intent produces noisy review. A good intent tells reviewers what would look
 surprising in the diff but was deliberate.
 
+The final reviewer must state accept or challenge, with a reason, for every
+deliberate tradeoff listed in the intent. Rejecting a listed tradeoff by
+default as "not best practice" is a review defect, not a finding.
+
+## Evidence Is A Gate, Not A Reviewer
+
+Green checks are a necessary condition, never an exemption. Changes touching a
+public interface, schema, permissions, or a migration still require
+cross-family review even when all checks pass. Final review runs at high
+reasoning effort by default and must escalate to maximum effort when the diff
+touches any restricted-zone trigger. Downshifting under a process budget
+shrinks review scope, never review depth.
+
 ## Finding Classes
 
 | Class | Meaning | Default action |

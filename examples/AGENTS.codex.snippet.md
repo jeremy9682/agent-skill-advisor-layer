@@ -22,7 +22,17 @@ Default split:
   plans, and broad refactors.
 - Codex handles scoped edits, bug fixes, diff review, regression checks, and
   final gate confirmation.
-- The agent that authored a substantial change should not be the only reviewer.
+- Seats rule: landing seat never final-reviews itself; direction seat never
+  final-reviews itself; final review defaults to Codex. Direction fallback:
+  Fable -> Opus -> Claude session + blind Codex plan review.
+- Direction ownership: fix-shaped work may take direction from Codex;
+  judgment-shaped work takes direction from the Claude side.
+- No live monitoring; three gates instead: conditional plan gate (2+ modules /
+  public interface / data model), final diff review, ship gate.
+- Restricted-zone-heavy repos default non-mechanical work to
+  plan -> blind plan review -> implement -> final review; small fixes bypass.
+- Executor may downshift effort freely (final review backstops it); final
+  review runs high by default, max on restricted-zone diffs, never below high.
 
 For reviews and release gates, require an intent statement that captures the
 user's goal and constraints, not just the diff summary.
