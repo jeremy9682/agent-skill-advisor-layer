@@ -1,0 +1,140 @@
+# Routing eval cases — trigger contract for skill routing.
+#
+# Each case is a realistic user prompt plus routing expectations:
+#   expect:        recall@3 passes if ANY listed skill ranks in top-3.
+#                  Empty list = no recall assertion (negative case).
+#   high_cost_ok:  suggest-confirm skills that are LEGITIMATE candidates
+#                  for this prompt. Any other suggest-confirm skill in
+#                  top-3 is reported as an unexpected high-cost candidate.
+#
+# These cases are a regression contract, not a benchmark of intelligence.
+# The baseline scorer is lexical; passing here does NOT prove semantic
+# routing quality. It proves the contract did not silently regress.
+#
+# Overfit warning (from Codex review): cases are tuned to this machine's
+# skill fleet. When a case references a skill that is not installed, the
+# runner reports it as `skipped_missing_skill` instead of failing.
+
+version: 1
+cases:
+  # --- recall cases: the skill SHOULD surface ---
+  - id: xhs-cover-image
+    prompt: "帮我做一张好看的小红书封面图"
+    expect: [huashu-xhs-image, huashu-design, guizang-ppt-skill]
+
+  - id: magazine-ppt
+    prompt: "做一个电子杂志风格的横向翻页 PPT 汇报"
+    expect: [guizang-ppt-skill, html-ppt, huashu-slides]
+
+  - id: regression-500
+    prompt: "这个接口报 500 了，昨天还好好的，帮我查一下为什么"
+    expect: [investigate, gstack-openclaw-investigate]
+
+  - id: diff-review
+    prompt: "review 一下我当前分支的改动"
+    expect: [review, devex-review]
+
+  - id: site-qa
+    prompt: "帮我测试一下这个网站，找找有没有 bug"
+    expect: [qa, qa-only, browse]
+
+  - id: new-design-system
+    prompt: "新项目要开工了，先定一套设计系统，建个 DESIGN.md"
+    expect: [design-consultation, design-systems]
+    # Known leak, measured 2026-07-06: huashu-agent-swarm's keyword-dense
+    # description attracts this innocent prompt to rank 3. Tolerated (the
+    # governance gate holds it at suggest-confirm); remove this entry once
+    # the description is fixed upstream — the leak then fails the check.
+    known_leaks: [huashu-agent-swarm]
+
+  - id: html-to-mp4
+    prompt: "把这个 HTML 动画导出成 60fps 的 MP4"
+    expect: [huashu-design]
+
+  - id: social-scan
+    prompt: "今天 X 和 Reddit 上有什么 AI agent 的新讨论"
+    expect: [social-monitor]
+
+  - id: security-audit
+    prompt: "扫一下这个 repo 有没有安全漏洞"
+    expect: [cso, security-best-practices, security-threat-model]
+
+  - id: onboarding-prototype
+    prompt: "make an interactive hi-fi prototype of the onboarding flow"
+    expect: [huashu-design, superdesign, frontend-design]
+
+  - id: script-polish
+    prompt: "把这段口播讲稿润色一下，节奏自然一点"
+    expect: [huashu-script-polish, huashu-speech-coach]
+
+  - id: capcut-subtitles
+    prompt: "剪映里帮我给这个视频加字幕"
+    expect: [cut-draft]
+
+  - id: product-image
+    prompt: "帮我生成一张产品宣传图"
+    expect: [imagegen, higgsfield-generate, higgsfield-product-photoshoot, awesome-gpt-image]
+
+  # --- gate cases: high-cost skill is a legitimate candidate,
+  #     but must remain suggest-confirm (router may surface, gate must hold) ---
+  - id: ship-to-prod
+    prompt: "没问题了的话帮我把这个项目 ship 上线"
+    expect: [ship, land-and-deploy, setup-deploy]
+    high_cost_ok: [ship, land-and-deploy]
+
+  - id: overnight-run
+    prompt: "我要睡觉了，剩下的任务你通宵跑完，明早给我结果"
+    expect: [overnight-execution]
+    high_cost_ok: [overnight-execution]
+
+  - id: parallel-swarm
+    prompt: "这个大项目前后端测试文档一起并行推进吧"
+    expect: [huashu-agent-swarm]
+    high_cost_ok: [huashu-agent-swarm]
+
+  - id: sprint-retro
+    prompt: "这个 sprint 结束了，复盘一下"
+    expect: [retro, gstack-openclaw-retro]
+    high_cost_ok: [retro, gstack-openclaw-retro]
+
+  - id: shared-browser-debug
+    prompt: "把浏览器上下文共享给另一个 agent 一起排查这个页面问题"
+    expect: [pair-agent]
+    high_cost_ok: [pair-agent]
+
+  # --- negative cases: no skill should be needed;
+  #     assert only that no high-cost skill surfaces ---
+  - id: plain-question
+    prompt: "python 的 GIL 到底是什么？"
+    expect: []
+
+  - id: goodbye
+    prompt: "谢谢，今天先到这里"
+    expect: []
+
+# --- candidate zone ---
+# Reserved for the skill-doctor loop: real routing failures observed in
+# sessions (should-have-triggered, wrongly-suggested, user-rejected
+# suggestions) get appended here as candidates, then promoted into
+# `cases:` after human review. Do not promote automatically.
+candidates:
+  - id: cand-workflow-basename-false-trigger
+    observed: "2026-07-06"
+    source: "vercel-plugin PreToolUse hook, this repo"
+    prompt: "edit docs/development-workflow-standard.md (agent governance doc)"
+    failure: >-
+      Basename pattern `*workflow*` fired the Vercel durable-workflow skill
+      suggestion for a markdown governance doc. Lexical trigger, wrong
+      domain. Lesson: filename/keyword triggers need a domain check before
+      suggesting; candidate rule for description lint or router hook.
+
+  - id: cand-cicd-suffix-false-trigger
+    observed: "2026-07-06"
+    source: "vercel-plugin PreToolUse hook, this repo"
+    prompt: "read .github/workflows/ci.yml (plain pytest CI, no Vercel surface)"
+    failure: >-
+      Suffix pattern `.github/workflows/*.yml` fired the Vercel
+      deployments-cicd skill for a repo with no Vercel usage. Second false
+      positive from the same hook family within one session: path-pattern
+      triggers without a repo-level domain check are a systematic false
+      positive source, not an anecdote.

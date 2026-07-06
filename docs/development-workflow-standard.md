@@ -42,8 +42,12 @@ link here instead of copying long, drifting workflow text.
 
 - Intent statement: see [`schemas/intent.md`](../schemas/intent.md).
 - Reusable learning note: see [`schemas/solution.md`](../schemas/solution.md).
+  If a project has no `docs/solutions/` yet, planning should offer to create
+  it from [`examples/project-overrides/docs/solutions/`](../examples/project-overrides/docs/solutions/),
+  not fail; only complex or recurring problems require a note.
 - Task routing: see [`docs/task-routing.md`](task-routing.md).
 - Gate policy: see [`docs/gate-policy.md`](gate-policy.md).
+- Routing evals: see [`docs/routing-evals.md`](routing-evals.md).
 
 ## Non-Goals
 
