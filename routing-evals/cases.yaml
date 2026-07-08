@@ -55,6 +55,14 @@ cases:
     prompt: "今天 X 和 Reddit 上有什么 AI agent 的新讨论"
     expect: [social-monitor]
 
+  - id: social-scan-readonly
+    prompt: "请只读分析今天 X 和 Reddit 上 AI agent 的新讨论"
+    expect: [social-monitor]
+    # Guards against re-introducing the over-broad "只读分析" negative_trigger.
+    # This is a GENUINE user request (read-only social scan) and must still
+    # surface social-monitor; agent-brief leaks are handled by the global
+    # should_skip_prompt guard, not per-skill suppression.
+
   - id: security-audit
     prompt: "扫一下这个 repo 有没有安全漏洞"
     expect: [cso, security-best-practices, security-threat-model]
@@ -62,6 +70,10 @@ cases:
   - id: onboarding-prototype
     prompt: "make an interactive hi-fi prototype of the onboarding flow"
     expect: [huashu-design, superdesign, frontend-design]
+
+  - id: claude-code-design-context
+    prompt: "在 Claude Code 里帮我设计一个落地页视觉原型"
+    expect: [huashu-design]
 
   - id: script-polish
     prompt: "把这段口播讲稿润色一下，节奏自然一点"
@@ -111,6 +123,34 @@ cases:
   - id: goodbye
     prompt: "谢谢，今天先到这里"
     expect: []
+
+  - id: fable-independent-review
+    prompt: "你是 Claude Fable 5，作为独立外部审核者。请只基于下面事实包分析，不需要读文件，不要调用工具。"
+    expect: []
+
+  - id: claude-code-second-opinion
+    prompt: "你是 Claude Code，作为 Codex 之外的独立第二意见。只做只读分析，不要改文件。"
+    expect: []
+
+  - id: task-notification-meta
+    prompt: "<task-notification><task-id>w8s8esecj</task-id><tool-use-id>toolu_01QgJk3HawMK</tool-use-id></task-notification>"
+    expect: []
+
+  # Agent-brief leaks locked in: seat labels put words between "你是" and the
+  # model name, defeating the "你是 Claude" substring. These must be skipped as
+  # agent_to_agent_prompt (role markers added to AGENT_TO_AGENT_PATTERNS), so
+  # no skill — high-cost or otherwise — may fire.
+  - id: dispatch-judge-brief-leak
+    prompt: "你是本项目的 Claude 动态工作流调度/判断席。请只读文件，不要修改文件。评估当前分支的改动方向是否合理。"
+    expect: []
+
+  - id: fable-final-reviewer-brief-leak
+    prompt: "你是 Fable5 反方终审席。请只读，不要修改文件。对下面的方案做对抗性复核。"
+    expect: []
+    # NOTE: the anti-over-suppression invariant for seat words (genuine
+    # "判断席/终审席" prompts must NOT be globally skipped) is asserted directly
+    # against should_skip_prompt in tests/test_routing_eval.py — it lives at the
+    # skip layer, which cases.yaml (fire layer) cannot distinguish from no-fire.
 
 # --- candidate zone ---
 # Reserved for the skill-doctor loop: real routing failures observed in

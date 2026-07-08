@@ -106,7 +106,13 @@ def load_skills_cached(routing) -> list[dict]:
     return skills
 
 
-def write_log(prompt: str, cwd: str, candidates: list[dict], fired: bool) -> None:
+def write_log(
+    prompt: str,
+    cwd: str,
+    candidates: list[dict],
+    fired: bool,
+    skip_reason: str = "",
+) -> None:
     try:
         GOV_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -120,6 +126,7 @@ def write_log(prompt: str, cwd: str, candidates: list[dict], fired: bool) -> Non
             "prompt_head": prompt[:80],
             "repo": os.path.basename(cwd) if cwd else "",
             "fired": fired,
+            "skip_reason": skip_reason,
             "candidates": candidates,
         }
         line = json.dumps(record, ensure_ascii=False) + "\n"
@@ -146,6 +153,11 @@ def main() -> int:
             return 0
 
         routing = load_routing_module()
+        skip_reason = routing.should_skip_prompt(prompt)
+        if skip_reason:
+            write_log(prompt, cwd, [], fired=False, skip_reason=skip_reason)
+            noop()
+            return 0
         skills = load_skills_cached(routing)
         hints = routing.load_hints(ROOT / "routing-evals" / "hints.yaml")
         index = routing.LexicalIndex(skills, hints=hints)
