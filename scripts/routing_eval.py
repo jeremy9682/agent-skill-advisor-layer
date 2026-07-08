@@ -58,6 +58,39 @@ FIRE_THRESHOLD = 4.0
 # while keeping legitimate co-candidates.
 COMPANION_RATIO = 0.6
 
+AGENT_TO_AGENT_PATTERN_WINDOW = 240
+AGENT_TO_AGENT_PATTERNS = (
+    "<task-notification>",
+    "你是 Claude",
+    "你是Claude",
+    "你是 Codex",
+    "你是Codex",
+    "你是 ChatGPT",
+    "你是ChatGPT",
+    "你是 Gemini",
+    "你是Gemini",
+    "你是 Fable",
+    "你是Fable",
+    "作为独立外部审核者",
+    "You are Claude",
+    "You are Codex",
+    "You are ChatGPT",
+    "You are Gemini",
+    "You are an independent",
+    "You are an external reviewer",
+    "You are the final reviewer",
+)
+
+# Seat-label role briefs (e.g. "你是本项目的 Claude 动态工作流调度/判断席",
+# "你是 Fable5 反方终审席") defeat the "你是 Claude" substring because words sit
+# between "你是" and the model name. Anchor on the role ASSIGNMENT — "你是"
+# followed within a short span by a seat label — so genuine prompts that merely
+# mention a seat ("帮我设计一个判断席评分面板", "解释一下判断席/落地席/终审席")
+# are NOT skipped. The (?!不是) lookahead excludes the colloquial opener "你是不是…".
+AGENT_SEAT_BRIEF_RE = re.compile(
+    r"你是(?!不是)[^。！？\n]{0,40}(判断席|终审席|复核席|落地席|调度席|仲裁席)"
+)
+
 
 def chosen_candidates(
     ranked: list[tuple[str, float]],
@@ -80,6 +113,25 @@ def chosen_candidates(
         return []
     bar = ranked[0][1] * ratio
     return [(n, s) for n, s in ranked if s >= bar]
+
+
+def should_skip_prompt(prompt: str) -> str:
+    """Return a guard reason when a prompt should bypass routing entirely.
+
+    Router hints are for user intent. Agent-to-agent review briefs and task
+    notifications are already meta-prompts; scoring their dense workflow
+    language caused measured false positives such as `huashu-design`.
+    """
+    # Agent review/task briefs put the role instruction first; the window keeps
+    # this guard from swallowing ordinary user prompts that mention model names.
+    stripped = prompt.lstrip()
+    window = stripped[:AGENT_TO_AGENT_PATTERN_WINDOW]
+    for pattern in AGENT_TO_AGENT_PATTERNS:
+        if pattern in window:
+            return "agent_to_agent_prompt"
+    if AGENT_SEAT_BRIEF_RE.search(window):
+        return "agent_to_agent_prompt"
+    return ""
 
 TRIGGER_CLAUSE_RE = re.compile(
     r"use (this )?(skill|advisor|command|tool)? ?(when|for|to)"
@@ -289,15 +341,32 @@ def run_eval(
     gate_events: list[dict[str, Any]] = []
     unexpected_high_cost: list[dict[str, Any]] = []
     known_leak_events: list[dict[str, Any]] = []
+    false_positive_events: list[dict[str, Any]] = []
+    negative_total = negative_silent_hits = 0
 
     for case in cases:
         expect = list(case.get("expect", []) or [])
         high_cost_ok = set(case.get("high_cost_ok", []) or [])
         known_leaks = set(case.get("known_leaks", []) or [])
-        top = index.rank(case["prompt"])
+        skip_reason = should_skip_prompt(case["prompt"])
+        top = [] if skip_reason else index.rank(case["prompt"])
         top_names = [name for name, _ in top]
         scores = dict(top)
         shown = {n for n, _ in chosen_candidates(top, fire_threshold=fire_threshold)}
+        if not expect and not high_cost_ok and not known_leaks:
+            negative_total += 1
+            if not shown:
+                negative_silent_hits += 1
+            else:
+                false_positive_events.append(
+                    {
+                        "case": case["id"],
+                        "shown": [
+                            {"skill": n, "score": round(scores.get(n, 0.0), 2)}
+                            for n in sorted(shown)
+                        ],
+                    }
+                )
 
         expect_installed = [e for e in expect if e in installed]
         skipped = [e for e in expect if e not in installed]
@@ -338,11 +407,13 @@ def run_eval(
                 "displayed_hit": displayed_hit,
                 "skipped_missing_skill": skipped,
                 "high_cost_in_top": case_high_cost,
+                "skip_reason": skip_reason,
             }
         )
 
     recall = recall_hits / recall_total if recall_total else 1.0
     displayed_recall = displayed_hits / recall_total if recall_total else 1.0
+    negative_precision = negative_silent_hits / negative_total if negative_total else 1.0
 
     # Cross-lingual reachability: a description with zero CJK characters is
     # lexically unreachable from a Chinese prompt (and vice versa). Semantic
@@ -359,10 +430,14 @@ def run_eval(
         "recall_total": recall_total,
         "displayed_recall": round(displayed_recall, 3),
         "displayed_hits": displayed_hits,
+        "negative_precision": round(negative_precision, 3),
+        "negative_silent_hits": negative_silent_hits,
+        "negative_total": negative_total,
         "descriptions_without_cjk": no_cjk,
         "gate_dependency_events": gate_events,
         "known_leaks": known_leak_events,
         "unexpected_high_cost_candidates": unexpected_high_cost,
+        "false_positive_candidates": false_positive_events,
         "cases": results,
     }
 
@@ -487,6 +562,10 @@ def main() -> int:
             f" ({eval_report['displayed_hits']}/{eval_report['recall_total']})"
         )
         print(
+            f"negative precision (should stay silent): {eval_report['negative_precision']:.0%}"
+            f" ({eval_report['negative_silent_hits']}/{eval_report['negative_total']})"
+        )
+        print(
             f"descriptions lexically unreachable from Chinese prompts: "
             f"{eval_report['descriptions_without_cjk']}/{eval_report['skills_evaluated']}"
         )
@@ -498,6 +577,10 @@ def main() -> int:
               f"{len(eval_report['unexpected_high_cost_candidates'])}")
         for event in eval_report["unexpected_high_cost_candidates"]:
             print(f"  !! {event['case']}: {event['skill']} at rank {event['rank']}")
+        print(f"false positive candidates: {len(eval_report['false_positive_candidates'])}")
+        for event in eval_report["false_positive_candidates"]:
+            got = ", ".join(c["skill"] for c in event["shown"])
+            print(f"  !! {event['case']}: showed [{got}]")
         misses = [c for c in eval_report["cases"] if c["recall_hit"] is False]
         for miss in misses:
             got = ", ".join(t["skill"] for t in miss["top"]) or "(nothing)"
@@ -510,6 +593,8 @@ def main() -> int:
                   " — a threshold/hint change hid an expected skill from firing")
             failed = True
         if eval_report["unexpected_high_cost_candidates"]:
+            failed = True
+        if eval_report["false_positive_candidates"]:
             failed = True
 
     lint_findings = run_lint(skills)

@@ -114,6 +114,21 @@ hints:
     negative_triggers: []
     rationale: "EN-only description"
     source: "eval miss onboarding-prototype"
+  - skill: huashu-design
+    extra_triggers: []
+    negative_triggers: ["独立审核", "外部审核", "skill 治理", "agent governance"]
+    rationale: "measured false positives: agent-to-agent review briefs scored as design work. Bare '只读分析' dropped — agent briefs now caught by the global should_skip_prompt guard, so it no longer over-suppresses genuine '只读分析' user requests"
+    source: "routing-log 2026-07-07 + fable audit; global-skip move 2026-07-08"
+  - skill: social-monitor
+    extra_triggers: ["社交监控", "X 和 Reddit", "小红书 抖音", "社媒讨论"]
+    negative_triggers: ["独立审核", "外部审核", "skill 治理", "agent governance"]
+    rationale: "social-monitor should require social-platform intent, not generic AI-agent text. Bare '只读分析' dropped — it wrongly suppressed genuine '请只读分析今天 X/Reddit' asks; agent briefs are handled by the global should_skip_prompt guard instead"
+    source: "routing-log 2026-07-07: frequent no-policy social-monitor surfacing; global-skip move 2026-07-08"
+  - skill: skill-creator
+    extra_triggers: ["创建 skill", "写 SKILL.md", "新增 skill", "安装 skill"]
+    negative_triggers: ["独立审核", "外部审核"]
+    rationale: "skill-creator should not surface for generic governance analysis. Bare '只读分析' dropped — over-broad; agent briefs handled by the global should_skip_prompt guard"
+    source: "routing-log 2026-07-07: skill-creator surfaced on non-creation prompts; global-skip move 2026-07-08"
 
   # --- high-cost skills missing confirm language (lint L4) ---
   - skill: huashu-agent-swarm

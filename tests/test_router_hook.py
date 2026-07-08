@@ -82,6 +82,39 @@ def test_vercel_style_false_triggers_stay_silent():
             assert "suggest-confirm" not in ctx, f"high-cost skill on: {prompt}"
 
 
+def test_agent_to_agent_prompts_skip_router():
+    prompts = [
+        "你是 Claude Fable 5，作为独立外部审核者。请只基于下面事实包分析。",
+        "你是Codex，作为最终审查席，只读审核这个 diff。",
+        "你是 Claude Code，作为 Codex 之外的独立第二意见。只做只读分析。",
+        "<task-notification><task-id>w8s8esecj</task-id></task-notification>",
+    ]
+    for prompt in prompts:
+        out = run_hook(json.dumps({"prompt": prompt}))
+        assert out == "{}", f"hook fired on agent-to-agent prompt: {prompt}"
+
+
+def test_agent_to_agent_skip_is_logged(tmp_path):
+    env_home = tmp_path / "home"
+    env_home.mkdir()
+    prompt = "你是Codex，作为最终审查席，只读审核这个 diff。"
+    proc = subprocess.run(
+        [sys.executable, str(HOOK)],
+        input=json.dumps({"prompt": prompt, "cwd": "/Users/x/agent-skill-advisor-layer"}),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**__import__("os").environ, "HOME": str(env_home)},
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == "{}"
+    log = env_home / ".codex" / "skill-governance" / "routing-log.jsonl"
+    rec = json.loads(log.read_text().splitlines()[-1])
+    assert rec["fired"] is False
+    assert rec["skip_reason"] == "agent_to_agent_prompt"
+    assert rec["candidates"] == []
+
+
 def test_hints_negative_triggers_and_domains(tmp_path):
     routing = load_routing_module()
     audit = routing.load_audit_module()
@@ -105,6 +138,24 @@ def test_hints_negative_triggers_and_domains(tmp_path):
     in_names = [n for n, _ in index.rank("改一下演示 页面", cwd="/Users/x/demo-project")]
     assert "scoped-skill" not in out_names
     assert "scoped-skill" in in_names
+
+
+def test_hints_do_not_suppress_product_context_design_prompt(tmp_path):
+    routing = load_routing_module()
+    audit = routing.load_audit_module()
+    skills_dir = tmp_path / "skills"
+    make_skill(
+        skills_dir,
+        "huashu-design",
+        "Use when making landing page visual designs and prototypes. Claude Code 落地页 设计 原型",
+    )
+    skills = routing.collect_skills(audit, skills_dir)
+    hints = routing.load_hints(ROOT / "routing-evals" / "hints.yaml")
+    index = routing.LexicalIndex(skills, hints=hints)
+
+    names = [n for n, _ in index.rank("在 Claude Code 里帮我设计一个落地页视觉原型")]
+
+    assert "huashu-design" in names
 
 
 def test_extra_triggers_change_ranking(tmp_path):
