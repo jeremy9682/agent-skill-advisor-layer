@@ -33,6 +33,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "routing-evals" / "cases.yaml"
 DEFAULT_HINTS = ROOT / "routing-evals" / "hints.yaml"
+GOVERNANCE_FILES = {
+    "claude": Path.home() / ".claude" / "CLAUDE.md",
+    "skill-advisor": Path.home() / ".claude" / "skills" / "skill-advisor" / "SKILL.md",
+    "codex": Path.home() / ".codex" / "AGENTS.md",
+}
 
 TOP_K = 3
 # Ratchet, not aspiration. History: 0.40 (bare baseline 2026-07-06 AM),
@@ -155,6 +160,11 @@ CONFIRM_CLAUSE_RE = re.compile(
     re.IGNORECASE,
 )
 CJK_RE = re.compile(r"[㐀-鿿]")
+INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+HIGH_COST_HEADING_RE = re.compile(
+    r"^#{1,6}\s+.*(?:high[- ]cost|skill advisor)", re.IGNORECASE
+)
+NON_SKILL_MARKERS = ("非 skill", "not a skill", "native feature")
 
 # Chinese function-word bigrams: near-zero routing signal, high leak risk
 # (measured 2026-07-06: "一下" dragged `retro` into three unrelated cases).
@@ -177,6 +187,63 @@ def load_audit_module() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def extract_high_cost_skills(text: str) -> set[str]:
+    """Extract backtick-delimited skill names from the high-cost table/list."""
+    lines = text.splitlines()
+    section_start = next(
+        (i + 1 for i, line in enumerate(lines) if HIGH_COST_HEADING_RE.match(line.strip())),
+        0,
+    )
+
+    skills: set[str] = set()
+    in_list = False
+    for line in lines[section_start:]:
+        stripped = line.strip()
+        is_entry = stripped.startswith("|") or bool(re.match(r"^[-*+]\s+", stripped))
+        code_spans = INLINE_CODE_RE.findall(line)
+        if not in_list:
+            if not (is_entry and code_spans):
+                continue
+            in_list = True
+        elif not stripped:
+            break
+        elif not is_entry:
+            break
+
+        lowered = stripped.lower()
+        if any(marker in lowered for marker in NON_SKILL_MARKERS):
+            continue
+        for name in code_spans:
+            if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9:_-]*", name):
+                skills.add(name)
+    return skills
+
+
+def check_governance_consistency(paths: dict[str, Path]) -> dict[str, Any]:
+    """Compare high-cost skill declarations; missing files skip the CI check."""
+    missing = {name: str(path) for name, path in paths.items() if not path.is_file()}
+    if missing:
+        return {"status": "skipped", "missing_files": missing, "sets": {}, "differences": {}}
+
+    sets = {
+        name: extract_high_cost_skills(path.read_text(errors="ignore"))
+        for name, path in paths.items()
+    }
+    names = list(sets)
+    differences: dict[str, list[str]] = {}
+    for left in names:
+        for right in names:
+            delta = sets[left] - sets[right]
+            if delta:
+                differences[f"{left} - {right}"] = sorted(delta)
+    return {
+        "status": "passed" if not differences else "failed",
+        "missing_files": {},
+        "sets": {name: sorted(values) for name, values in sets.items()},
+        "differences": differences,
+    }
 
 
 def tokenize(text: str) -> list[str]:
@@ -809,6 +876,21 @@ def main() -> int:
         print(f"  {finding['name']} [{finding['policy']}]: {', '.join(finding['issues'])}")
     if any("L1_missing_description" in f["issues"] for f in lint_findings):
         failed = True
+
+    if args.check:
+        governance = check_governance_consistency(GOVERNANCE_FILES)
+        report["governance_consistency"] = governance
+        if governance["status"] == "skipped":
+            for name, path in governance["missing_files"].items():
+                print(f"WARN: governance consistency skipped; {name} file missing: {path}")
+        elif governance["status"] == "failed":
+            print("FAIL: high-cost governance lists are inconsistent")
+            for comparison, delta in governance["differences"].items():
+                print(f"  {comparison}: {', '.join(delta)}")
+            failed = True
+        else:
+            count = len(next(iter(governance["sets"].values()), []))
+            print(f"governance consistency: passed ({count} high-cost skills in each file)")
 
     if args.json:
         args.json.write_text(json.dumps(report, ensure_ascii=False, indent=2))
