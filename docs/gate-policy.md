@@ -72,13 +72,27 @@ the current run and require re-validation.
 
 ## Runtime Verification Evidence
 
-- 2026-07-11 spawn-effort-gate probe: the hook is registered in
+- 2026-07-11 spawn-effort-gate probe #1: the hook is registered in
   `~/.codex/hooks.json` (PreToolUse) and passes 9/9 unit tests, but
   `~/.codex/config.toml` `[hooks.state]` carries **no trusted hash for the
   user-level `pre_tool_use` entry** (only `session_start`/`stop` are trusted),
   and a live probe session asking for a param-less `spawn_agent` produced zero
-  new lines in `~/.codex/hooks/spawn-gate.log` (all 10 existing lines are
-  same-second unit-test traffic). Conclusion: **the gate is installed but not
-  active at runtime**. Fix requires the user to approve the hook trust prompt
-  in an interactive Codex session; do not hand-edit trusted hashes on the
-  user's behalf. Until then, treat the spawn effort rule as prose, not a gate.
+  new lines in `~/.codex/hooks/spawn-gate.log` (the 10 existing lines are two
+  sub-second unit-test bursts from 2026-07-10).
+- 2026-07-11 probe #2 (user approved gate activation): re-ran the param-less
+  `spawn_agent` probe under `--dangerously-bypass-hook-trust`, which removes
+  the trust barrier for that one invocation. **The spawn succeeded and the
+  gate still logged nothing** — lack of trust is NOT the blocker. Upstream
+  docs and third-party testing agree: Codex CLI PreToolUse currently
+  dispatches reliably **only for shell (Bash) tool calls**; `apply_patch`,
+  most MCP tools, and collab tools like `spawn_agent` never reach the hook
+  pipeline. This resolves the MF-2 uncertainty flagged in the gate's own
+  design memo — negatively.
+- Conclusion: **the gate is upstream-inert; no local action (including hook
+  trust approval) can activate it on codex-cli 0.144.1.** The spawn effort
+  rule stays prose (AGENTS.md spawn table: explicit `model` +
+  `reasoning_effort` + `fork_turns` on every `spawn_agent`), same failure
+  family as openai/codex#31814. Canary: after each Codex CLI upgrade, re-run
+  the probe (`codex exec --dangerously-bypass-hook-trust` asking for a
+  param-less spawn) and check `spawn-gate.log` for a deny line; flip this
+  entry to "active" only on log evidence.
