@@ -37,6 +37,7 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 | `gstack-setup-gbrain` | User wants persistent project brain, gbrain, MCP memory, or recurring cross-session context loss is blocking work. | One-off task, existing memory is enough, or setup/install would distract from urgent work. |
 | `no-mistakes` | User asks for safe push, release gate, PR/CI validation, no-mistakes validation, or shipping through a full gate. | Small local fix where focused verification is enough, or repo is not initialized for no-mistakes. |
 | `lfg` | User explicitly wants a hands-off plan-to-PR implementation pipeline. | Requirements are unclear, task is small, or the user has not approved autonomous execution. |
+| `huashu-design` (candidate) | MP4/GIF export or 60fps frame-interpolation rendering is requested (GPU-heavy). | Plain HTML prototype/design work without video export. |
 | `ship` / `overnight-execution` | Production-facing or long-running autonomous execution would be useful. | User has not explicitly approved the specific production or long-running workflow. |
 | `agent-teams` (native feature, not a skill) | Task could use Claude Code's experimental multi-teammate execution mode. | User has not explicitly approved launching Agent Teams; feature is experimental with significant token multiplier and compaction/duplicate-teammate/architecture-drift risk. |
 
