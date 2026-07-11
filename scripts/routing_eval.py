@@ -37,6 +37,7 @@ GOVERNANCE_FILES = {
     "claude": Path.home() / ".claude" / "CLAUDE.md",
     "skill-advisor": Path.home() / ".claude" / "skills" / "skill-advisor" / "SKILL.md",
     "codex": Path.home() / ".codex" / "AGENTS.md",
+    "repo-skill-advisor": ROOT / "skills" / "skill-advisor" / "SKILL.md",
 }
 
 TOP_K = 3
@@ -189,13 +190,20 @@ def load_audit_module() -> Any:
     return module
 
 
-def extract_high_cost_skills(text: str) -> set[str]:
-    """Extract backtick-delimited skill names from the high-cost table/list."""
+def extract_high_cost_skills(text: str) -> set[str] | None:
+    """Extract backtick skill names from the high-cost section.
+
+    Returns None when the high-cost heading is absent — scanning from the top
+    would harvest unrelated tables (e.g. the design decision table), producing
+    a misleading diff. Callers treat None like a missing file: WARN + skip.
+    """
     lines = text.splitlines()
     section_start = next(
         (i + 1 for i, line in enumerate(lines) if HIGH_COST_HEADING_RE.match(line.strip())),
-        0,
+        None,
     )
+    if section_start is None:
+        return None
 
     skills: set[str] = set()
     in_list = False
@@ -227,10 +235,14 @@ def check_governance_consistency(paths: dict[str, Path]) -> dict[str, Any]:
     if missing:
         return {"status": "skipped", "missing_files": missing, "sets": {}, "differences": {}}
 
-    sets = {
+    extracted = {
         name: extract_high_cost_skills(path.read_text(errors="ignore"))
         for name, path in paths.items()
     }
+    no_heading = {name: str(paths[name]) for name, v in extracted.items() if v is None}
+    if no_heading:
+        return {"status": "skipped", "missing_files": no_heading, "sets": {}, "differences": {}}
+    sets = {name: v for name, v in extracted.items() if v is not None}
     names = list(sets)
     differences: dict[str, list[str]] = {}
     for left in names:

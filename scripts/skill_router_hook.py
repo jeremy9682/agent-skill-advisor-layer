@@ -165,12 +165,16 @@ def purge_expired_plaintext() -> None:
                         keep = json.dumps(rec, ensure_ascii=False)
                         changed = True
             out_lines.append(keep)
+        # Known race: concurrent sessions append via O_APPEND while we
+        # read->rewrite; lines appended in that window are lost. Accepted:
+        # only reachable when expired debug plaintext exists, loss is log-only.
         if not changed:
             return
         text = ("\n".join(out_lines) + "\n") if out_lines else ""
         tmp_path = LOG_PATH.with_suffix(".jsonl.tmp")
         try:
             tmp_path.write_text(text, encoding="utf-8")
+            os.chmod(tmp_path, 0o600)  # keep write_log's permission; umask would widen to 0644
             os.replace(tmp_path, LOG_PATH)
         except OSError:
             try:
