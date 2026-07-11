@@ -37,6 +37,12 @@ Default split:
 For reviews and release gates, require an intent statement that captures the
 user's goal and constraints, not just the diff summary.
 
+Use `grilling` as a lightweight daily adversarial pressure-test when the user
+asks to be grilled, challenged, red-teamed, or says "push back", "challenge my
+thinking", "拷问我", "质询我", "反方审一下", "别顺着我", or "找漏洞". `/grill-me` is
+the explicit wrapper that delegates to `/grilling`. This is not a high-cost
+workflow and must not replace code review, QA, security review, or ship gates.
+
 ## High-Cost Skill Suggestions
 
 Some skills are valuable but costly, permissioned, or operationally disruptive.

@@ -1,6 +1,6 @@
 ---
 name: skill-advisor
-description: "Suggest high-cost or permissioned skills without executing them. Use this advisor for proactive suggestions: huashu-agent-swarm for large multi-module parallel work; gstack-pair-agent for sharing browser/page context; gstack-retro after large repair/deploy; gstack-setup-gbrain for persistent project brain; no-mistakes, lfg, ship, or overnight-execution for gated or autonomous shipping. Never execute these from a mere outcome request; ask for explicit approval first."
+description: "Suggest high-cost or permissioned skills without executing them. Use this advisor for proactive suggestions: huashu-agent-swarm for large multi-module parallel work; gstack-pair-agent for sharing browser/page context; gstack-retro after large repair/deploy; gstack-setup-gbrain for persistent project brain; no-mistakes, lfg, ship, or overnight-execution for gated or autonomous shipping; Claude Code's native Agent Teams feature for experimental multi-teammate execution. Never execute these from a mere outcome request; ask for explicit approval first."
 ---
 
 # Skill Advisor
@@ -38,6 +38,7 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 | `no-mistakes` | User asks for safe push, release gate, PR/CI validation, no-mistakes validation, or shipping through a full gate. | Small local fix where focused verification is enough, or repo is not initialized for no-mistakes. |
 | `lfg` | User explicitly wants a hands-off plan-to-PR implementation pipeline. | Requirements are unclear, task is small, or the user has not approved autonomous execution. |
 | `ship` / `overnight-execution` | Production-facing or long-running autonomous execution would be useful. | User has not explicitly approved the specific production or long-running workflow. |
+| `agent-teams` (native feature, not a skill) | Task could use Claude Code's experimental multi-teammate execution mode. | User has not explicitly approved launching Agent Teams; feature is experimental with significant token multiplier and compaction/duplicate-teammate/architecture-drift risk. |
 
 ## Common Routing Pitfalls
 
