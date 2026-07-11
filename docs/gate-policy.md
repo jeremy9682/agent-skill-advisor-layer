@@ -88,11 +88,26 @@ the current run and require re-validation.
   most MCP tools, and collab tools like `spawn_agent` never reach the hook
   pipeline. This resolves the MF-2 uncertainty flagged in the gate's own
   design memo — negatively.
-- Conclusion: **the gate is upstream-inert; no local action (including hook
-  trust approval) can activate it on codex-cli 0.144.1.** The spawn effort
-  rule stays prose (AGENTS.md spawn table: explicit `model` +
-  `reasoning_effort` + `fork_turns` on every `spawn_agent`), same failure
-  family as openai/codex#31814. Canary: after each Codex CLI upgrade, re-run
-  the probe (`codex exec --dangerously-bypass-hook-trust` asking for a
-  param-less spawn) and check `spawn-gate.log` for a deny line; flip this
-  entry to "active" only on log evidence.
+- 2026-07-11 probe #3 (scripted interactive session — user's idea): drove the
+  real Codex TUI via tmux, approved the user-level `pre_tool_use` hook trust
+  through the actual review UI (trusted hash now persisted in
+  `config.toml [hooks.state]`; the claude-mem plugin's new PreToolUse hook was
+  deliberately left untrusted — outside the approval's scope). Result is
+  **mixed and supersedes probe #2's "upstream-inert" conclusion**:
+  - Two real `spawn_agent` dispatches hit the gate the moment trust landed
+    (log lines 11-12): first missing `fork_turns` → code path reaches
+    `_deny`; second arrived with `fork_turns` added → allowed. That is a
+    live **deny → retry-with-params → allow** sequence: the gate's first
+    real-traffic catch.
+  - An explicit param-less spawn probe in the same session **succeeded with
+    no gate log line** — a second spawn path (likely MultiAgent V2's
+    `collaboration.` namespace, openai/codex#31814) bypasses the hook
+    pipeline entirely. `codex exec` mode dispatches nothing (probe #2).
+- Conclusion: **the gate is now trusted and PARTIALLY live — it intercepts
+  one interactive spawn path and misses the V2 model-initiated path.**
+  Treat coverage as incomplete: the prose rule (AGENTS.md spawn table:
+  explicit `model` + `reasoning_effort` + `fork_turns` on every
+  `spawn_agent`) remains the primary defense. Canary after each Codex CLI
+  upgrade: re-run both probes (exec + interactive param-less spawn) and
+  check `spawn-gate.log`; flip this entry to "active" only when the
+  model-initiated path also produces log lines.
