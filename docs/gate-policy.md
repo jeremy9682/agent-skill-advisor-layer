@@ -130,7 +130,29 @@ the current run and require re-validation.
   are ungated; and the metadata-visibility flag is a community workaround the
   upstream fix may obsolete. The AGENTS.md prose spawn table stays the
   belt-and-suspenders defense. Canary after each Codex CLI upgrade: re-run the
-  interactive param-less `agents.spawn_agent` probe and confirm a fresh deny
-  line in `spawn-gate.log`; if upstream ships the real #31814 fix, revisit
-  whether the `multi_agent_v2` overrides and the widened matcher are still
-  needed.
+  interactive param-less `agents.spawn_agent` probe in a **fresh** session and
+  look for the in-session deny message; if upstream ships the real #31814
+  fix, revisit whether the `multi_agent_v2` overrides and the widened matcher
+  are still needed.
+- 2026-07-11 probe #5 (post-hardening re-verification). After the final-review
+  hardening (matcher dot-optional + `endswith` second line + completion-check
+  `{}` fix), a bare `agents.spawn_agent` in a **fresh** session was again
+  **blocked with the gate's full deny message**. Two operational facts
+  learned the hard way:
+  1. **Trust changes arm only at session start.** Trusting a modified hook
+     mid-session persists the hash, but the running session's hook set is
+     already loaded — a probe in that same session shows the gate dead. The
+     first re-verification "failure" was exactly this. Canary runs MUST use
+     a fresh session after any hooks.json change.
+  2. **The deny message, not the log, is the canary signal.** In probe #5 the
+     deny fired but `spawn-gate.log` gained no line — hook filesystem writes
+     can be lost depending on how the startup trust prompt was answered, and
+     the script's fail-open `try/except` swallows the write error. Check the
+     in-session "Tool call blocked by PreToolUse hook" message; treat the log
+     as best-effort diagnostics only.
+  Also observed: with the metadata flags on, upstream itself now rejects
+  explicit `model`/`reasoning_effort` on full-history forks ("Full-history
+  forked agents inherit the parent…") **before** hooks run — an extra
+  upstream guard-rail on the worst-case (`fork_turns="all"`) path.
+  Note: commit `1097769`'s message claims this section; the insert silently
+  failed there and actually lands in this commit.
