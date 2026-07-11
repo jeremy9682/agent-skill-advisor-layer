@@ -69,3 +69,16 @@ or launch that specific workflow.
 If a gate workflow is active, do not silently bypass it. Either continue the
 gate, stop it intentionally, or tell the user that manual edits will invalidate
 the current run and require re-validation.
+
+## Runtime Verification Evidence
+
+- 2026-07-11 spawn-effort-gate probe: the hook is registered in
+  `~/.codex/hooks.json` (PreToolUse) and passes 9/9 unit tests, but
+  `~/.codex/config.toml` `[hooks.state]` carries **no trusted hash for the
+  user-level `pre_tool_use` entry** (only `session_start`/`stop` are trusted),
+  and a live probe session asking for a param-less `spawn_agent` produced zero
+  new lines in `~/.codex/hooks/spawn-gate.log` (all 10 existing lines are
+  same-second unit-test traffic). Conclusion: **the gate is installed but not
+  active at runtime**. Fix requires the user to approve the hook trust prompt
+  in an interactive Codex session; do not hand-edit trusted hashes on the
+  user's behalf. Until then, treat the spawn effort rule as prose, not a gate.
