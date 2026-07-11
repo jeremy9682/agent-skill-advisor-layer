@@ -110,7 +110,11 @@ the current run and require re-validation.
   `model`/`reasoning_effort` visibility in the spawn schema AND moves the tool
   out of the reserved `collaboration.` namespace into `agents.*`. (b) The
   hook matcher in `~/.codex/hooks.json` was widened from `spawn_agent|Agent`
-  to `(agents\.)?spawn_agent|Agent` so it fires on the renamed tool. Result:
+  to `(agents\.?)?spawn_agent|Agent` (dot optional — final-review hardening:
+  the dispatched name normalizes to `agentsspawn_agent`, so a literal-dot
+  branch alone relies on undocumented match semantics; the gate script also
+  now uses `tool.endswith("spawn_agent")` as a second line) so it fires on
+  the renamed tool. Result:
   a param-less `agents.spawn_agent` in a fresh trusted session was **blocked**
   — `spawn-gate.log` line 13 records `tool: "agentsspawn_agent"` (Codex
   normalizes the dot out) and the model received the full deny + resend
