@@ -82,12 +82,12 @@ the current run and require re-validation.
 - 2026-07-11 probe #2 (user approved gate activation): re-ran the param-less
   `spawn_agent` probe under `--dangerously-bypass-hook-trust`, which removes
   the trust barrier for that one invocation. **The spawn succeeded and the
-  gate still logged nothing** — lack of trust is NOT the blocker. Upstream
-  docs and third-party testing agree: Codex CLI PreToolUse currently
-  dispatches reliably **only for shell (Bash) tool calls**; `apply_patch`,
-  most MCP tools, and collab tools like `spawn_agent` never reach the hook
-  pipeline. This resolves the MF-2 uncertainty flagged in the gate's own
-  design memo — negatively.
+  gate still logged nothing** — lack of trust is NOT the blocker in exec
+  mode. Root cause narrowed by v4 Codex re-review + probe #3: it is the
+  `spawn_agent` handler in codex-cli 0.144.1 exec mode that emits no
+  PreToolUse payload — NOT a blanket "PreToolUse fires only for Bash"
+  (apply_patch/MCP handlers do emit payloads, and probe #3 shows one
+  interactive spawn path emits them too).
 - 2026-07-11 probe #3 (scripted interactive session — user's idea): drove the
   real Codex TUI via tmux, approved the user-level `pre_tool_use` hook trust
   through the actual review UI (trusted hash now persisted in
