@@ -39,6 +39,11 @@ hints:
     negative_triggers: []
     rationale: "EN-only description; review requests arrive in Chinese"
     source: "eval miss diff-review"
+  - skill: grilling
+    extra_triggers: ["grill me", "push back", "challenge my thinking", "red-team this", "拷问我", "质询我", "挑战我", "反方审一下", "别顺着我", "找漏洞", "压测观点", "压测计划"]
+    negative_triggers: ["review", "当前分支", "代码审查", "审 diff", "测试网站", "安全", "安全审计", "安全漏洞", "权限问题", "repo", "ship 上线", "发布到 production"]
+    rationale: "upstream mattpocock/skills uses grill-me as an explicit wrapper and grilling as model-invoked logic; surface grilling for natural-language pressure-test requests without replacing review/qa/security/ship gates"
+    source: "mattpocock grill-me/grilling install 2026-07-09"
   - skill: qa
     extra_triggers: ["测试网站", "找 bug", "试一下这个站", "质检", "点一遍"]
     negative_triggers: []
@@ -168,3 +173,31 @@ hints:
     negative_triggers: []
     rationale: "router-policy skill, no trigger clause"
     source: "lint 2026-07-06"
+
+  # --- 2026-07-11 recalibration companions (CJK-fragment fix shifted the
+  # Chinese score distribution down; these restore headroom for the four
+  # lowest true-hit cases so FIRE_THRESHOLD can sit above English noise) ---
+  - skill: huashu-design
+    extra_triggers: ["视觉原型", "落地页视觉", "设计一个落地页"]
+    negative_triggers: []
+    domains: []
+    rationale: "post-fragment-fix: 设计落地页视觉原型 case dropped to 1.48; explicit visual-prototype triggers restore it without re-widening the description blackhole"
+    source: "routing_eval recalibration 2026-07-11 (YunChouAI session false-positive audit)"
+  - skill: huashu-agent-swarm
+    extra_triggers: ["并行推进", "前后端并行", "一起并行"]
+    negative_triggers: []
+    domains: []
+    rationale: "post-fragment-fix: parallel-swarm case dropped to 1.55"
+    source: "routing_eval recalibration 2026-07-11"
+  - skill: retro
+    extra_triggers: ["复盘一下", "结束复盘", "sprint 复盘"]
+    negative_triggers: []
+    domains: []
+    rationale: "post-fragment-fix: sprint-retro case dropped to 1.57"
+    source: "routing_eval recalibration 2026-07-11"
+  - skill: gstack-openclaw-retro
+    extra_triggers: ["复盘一下", "sprint 复盘"]
+    negative_triggers: []
+    domains: []
+    rationale: "post-fragment-fix: sprint-retro case companion"
+    source: "routing_eval recalibration 2026-07-11"

@@ -47,11 +47,22 @@ RECALL_THRESHOLD = 0.90
 DISPLAYED_RECALL_THRESHOLD = 0.90
 
 # Router firing threshold — single source shared with skill_router_hook.py.
-# Calibrated 2026-07-06 with hints: true hits 4.03-16.83, hardest negatives
-# <= 2.54. The eval counts an unexpected high-cost candidate as a violation
+# Recalibrated 2026-07-11 after the CJK-fragment fix (tokenize no longer
+# emits single CJK chars or 1-2 digit numbers; stop-bigram list extended
+# with generic process words). Score distribution shifted down wholesale:
+# true hits now 1.48+, hardest surviving negatives <= 0.96 (guarded
+# agent-brief cases are intercepted by should_skip_prompt BEFORE scoring
+# and do not constrain this threshold; non-high-cost sightings on
+# out-of-contract prompts, e.g. investigate at 1.56 on 'plan approved
+# yesterday', are tolerated by design). Hard negatives: silent cases
+# <= 0.96, suggest-confirm sightings <= 1.13. 1.35 sits mid-margin
+# between those and the weakest true hit (1.55).
+# Previous calibration (2026-07-06, fragment-era scores): true hits
+# 4.03-16.83, negatives <= 2.54, threshold 4.0.
+# The eval counts an unexpected high-cost candidate as a violation
 # only when production would actually SHOW it (see chosen_candidates);
 # other sightings still appear in gate_dependency_events for visibility.
-FIRE_THRESHOLD = 4.0
+FIRE_THRESHOLD = 1.35
 
 # Companion bar: runners-up are shown only when they clear this fraction of
 # the top score. Calibration 2026-07-06: suppressed every noisy runner-up
@@ -150,6 +161,12 @@ CJK_RE = re.compile(r"[㐀-鿿]")
 CJK_STOP_BIGRAMS = {
     "一下", "帮我", "这个", "一个", "什么", "怎么", "可以",
     "需要", "我们", "你的", "我的", "现在", "然后", "还是",
+    # 2026-07-11 扩表（数据驱动，见 tokenize docstring 的实测案例）：
+    # 通用流程/元工作词——出现在几乎所有执行类指令里，对"选哪个技能"
+    # 零区分度，却让长中文 description 的技能（huashu-design 等）在
+    # 纯执行指令上虚高得分。
+    "根据", "执行", "任务", "不同", "建议", "按照", "最终",
+    "审核", "模型", "分配", "难度", "继续", "具体", "直接",
 }
 
 
@@ -163,12 +180,25 @@ def load_audit_module() -> Any:
 
 
 def tokenize(text: str) -> list[str]:
-    """CJK character bigrams + lowercased latin/digit words."""
+    """CJK character bigrams + lowercased latin/digit words.
+
+    Single CJK characters are deliberately NOT emitted (2026-07-11 fix):
+    they carry no discriminative meaning on their own — like indexing
+    single letters in English — yet in a mostly-English skill fleet they
+    get inflated IDF (e.g. 给 scored 4.31 because only the one skill with
+    a long Chinese description contained it). Measured effect: the prompt
+    「按照你们的建议执行…最终审核」 scored huashu-design at 13.43 (3.4x the
+    fire threshold) purely from 27 fragment hits. Real Chinese signal
+    lives in the bigrams (封面/设计/海报), which are kept.
+    """
     tokens: list[str] = []
     for word in re.findall(r"[a-zA-Z0-9_-]+", text):
+        # 1-2 位纯数字同样是零区分度碎片（"codex 5.6" 的 5/6 曾以 IDF 4.31
+        # 命中某技能描述里的 "5 维度评审"）。3 位以上保留（如报错码 500）。
+        if word.isdigit() and len(word) < 3:
+            continue
         tokens.append(word.lower())
     cjk_chars = CJK_RE.findall(text)
-    tokens.extend(cjk_chars)
     tokens.extend(
         bigram
         for a, b in zip(cjk_chars, cjk_chars[1:])
@@ -442,6 +472,141 @@ def run_eval(
     }
 
 
+def model_route_policy(case: dict[str, Any]) -> dict[str, Any]:
+    """Return the documented seat/effort/gate policy for a task shape.
+
+    This is deliberately deterministic and offline. It is an eval oracle for
+    scale policy, not a runtime router and not a provider/model dispatcher.
+    """
+    shape = str(case.get("task_shape") or "").strip().lower()
+    risk = str(case.get("risk_zone") or "default").strip().lower()
+    repo_profile = str(case.get("repo_profile") or "default").strip().lower()
+    mechanical = bool(case.get("mechanical"))
+
+    restricted = risk in {"restricted", "irreversible"}
+    restricted_repo = repo_profile == "restricted-zone-heavy"
+    small_mechanical = shape == "small_fix" and mechanical and risk in {"low", "default"}
+
+    if shape == "small_fix" and not restricted and (not restricted_repo or small_mechanical):
+        return {
+            "direction_seat": "codex",
+            "landing_seat": "codex",
+            "final_review_seat": "none",
+            "effort": "medium-fast",
+            "gates": ["focused_verification"],
+            "hot_path": False,
+        }
+
+    if shape == "release_ship" or risk == "irreversible":
+        return {
+            "direction_seat": "gate_owner",
+            "landing_seat": "release_owner",
+            "final_review_seat": "codex",
+            "effort": "xhigh",
+            "gates": ["intent", "green_checks", "final_diff_review", "ship_gate"],
+            "hot_path": False,
+        }
+
+    if restricted or restricted_repo:
+        return {
+            "direction_seat": "claude",
+            "landing_seat": "implementation_owner",
+            "final_review_seat": "codex",
+            "effort": "xhigh",
+            "gates": ["intent", "plan_gate", "blind_plan_review", "final_diff_review"],
+            "hot_path": False,
+        }
+
+    if shape == "code_review":
+        return {
+            "direction_seat": "reviewer",
+            "landing_seat": "none",
+            "final_review_seat": "none",
+            "effort": "high",
+            "gates": ["intent"],
+            "hot_path": False,
+        }
+
+    if shape == "bug":
+        return {
+            "direction_seat": "codex",
+            "landing_seat": "codex",
+            "final_review_seat": "codex",
+            "effort": "high",
+            "gates": ["reproduce", "root_cause", "regression"],
+            "hot_path": False,
+        }
+
+    if shape == "broad_refactor":
+        return {
+            "direction_seat": "claude",
+            "landing_seat": "implementation_owner",
+            "final_review_seat": "codex",
+            "effort": "high",
+            "gates": ["intent", "plan_gate", "final_diff_review"],
+            "hot_path": False,
+        }
+
+    if shape == "feature":
+        return {
+            "direction_seat": "claude",
+            "landing_seat": "implementation_owner",
+            "final_review_seat": "codex",
+            "effort": "high",
+            "gates": ["intent", "final_diff_review"],
+            "hot_path": False,
+        }
+
+    return {
+        "direction_seat": "codex",
+        "landing_seat": "codex",
+        "final_review_seat": "codex",
+        "effort": "high",
+        "gates": ["intent", "focused_verification"],
+        "hot_path": False,
+    }
+
+
+def run_model_routing_eval(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+
+    for case in cases:
+        actual = model_route_policy(case)
+        expected = case.get("expect_policy") or {}
+        mismatches: dict[str, dict[str, Any]] = {}
+        for key, expected_value in expected.items():
+            actual_value = actual.get(key)
+            if actual_value != expected_value:
+                mismatches[key] = {
+                    "expected": expected_value,
+                    "actual": actual_value,
+                }
+        result = {
+            "id": case.get("id", ""),
+            "task_shape": case.get("task_shape", ""),
+            "risk_zone": case.get("risk_zone", ""),
+            "repo_profile": case.get("repo_profile", ""),
+            "actual": actual,
+            "expected": expected,
+            "mismatches": mismatches,
+        }
+        results.append(result)
+        if mismatches:
+            failures.append(result)
+
+    total = len(cases)
+    hits = total - len(failures)
+    return {
+        "metric": "model-routing-policy-v1",
+        "total": total,
+        "hits": hits,
+        "pass_rate": round(hits / total, 3) if total else 1.0,
+        "failures": failures,
+        "cases": results,
+    }
+
+
 def run_lint(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for skill in skills:
@@ -548,7 +713,8 @@ def main() -> int:
 
     failed = False
     if not args.lint:
-        cases = parse_cases(args.cases).get("cases", [])
+        case_data = parse_cases(args.cases)
+        cases = case_data.get("cases", [])
         eval_report = run_eval(skills, cases, hints=hints, fire_threshold=args.fire_threshold)
         eval_report["hints_loaded"] = len(hints)
         report["eval"] = eval_report
@@ -595,6 +761,22 @@ def main() -> int:
         if eval_report["unexpected_high_cost_candidates"]:
             failed = True
         if eval_report["false_positive_candidates"]:
+            failed = True
+
+        model_cases = case_data.get("model_routing_cases", []) or []
+        model_report = run_model_routing_eval(model_cases)
+        report["model_routing_eval"] = model_report
+        print(
+            f"model routing policy: {model_report['pass_rate']:.0%}"
+            f" ({model_report['hits']}/{model_report['total']})"
+        )
+        for failure in model_report["failures"]:
+            got = ", ".join(
+                f"{k}: expected {v['expected']} got {v['actual']}"
+                for k, v in failure["mismatches"].items()
+            )
+            print(f"  !! model {failure['id']}: {got}")
+        if model_report["failures"]:
             failed = True
 
     lint_findings = run_lint(skills)
