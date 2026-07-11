@@ -103,11 +103,30 @@ the current run and require re-validation.
     no gate log line** — a second spawn path (likely MultiAgent V2's
     `collaboration.` namespace, openai/codex#31814) bypasses the hook
     pipeline entirely. `codex exec` mode dispatches nothing (probe #2).
-- Conclusion: **the gate is now trusted and PARTIALLY live — it intercepts
-  one interactive spawn path and misses the V2 model-initiated path.**
-  Treat coverage as incomplete: the prose rule (AGENTS.md spawn table:
-  explicit `model` + `reasoning_effort` + `fork_turns` on every
-  `spawn_agent`) remains the primary defense. Canary after each Codex CLI
-  upgrade: re-run both probes (exec + interactive param-less spawn) and
-  check `spawn-gate.log`; flip this entry to "active" only when the
-  model-initiated path also produces log lines.
+- 2026-07-11 probe #4 (the V2 bypass CLOSED): two changes landed together.
+  (a) `~/.codex/config.toml` `[features.multi_agent_v2]`
+  `hide_spawn_agent_metadata = false` + `tool_namespace = "agents"` — the
+  community workaround for openai/codex#31814/#31864: it restores
+  `model`/`reasoning_effort` visibility in the spawn schema AND moves the tool
+  out of the reserved `collaboration.` namespace into `agents.*`. (b) The
+  hook matcher in `~/.codex/hooks.json` was widened from `spawn_agent|Agent`
+  to `(agents\.)?spawn_agent|Agent` so it fires on the renamed tool. Result:
+  a param-less `agents.spawn_agent` in a fresh trusted session was **blocked**
+  — `spawn-gate.log` line 13 records `tool: "agentsspawn_agent"` (Codex
+  normalizes the dot out) and the model received the full deny + resend
+  guidance. The gate's internal classifier caught it via the
+  `task_name`+`message` field heuristic, not the tool-name string, which is
+  why normalization didn't defeat it. Separately confirmed the schema now
+  accepts explicit `reasoning_effort="low"` + `fork_turns="none"` (they were
+  hidden before the metadata flag).
+- Conclusion (supersedes probe #3): **the gate is trusted and live on the
+  interactive V2 spawn path — the same path that burned the quota on
+  2026-07-10.** Remaining known gap: `codex exec` non-interactive mode still
+  emits no PreToolUse payload for spawn (probe #2), so scripted exec spawns
+  are ungated; and the metadata-visibility flag is a community workaround the
+  upstream fix may obsolete. The AGENTS.md prose spawn table stays the
+  belt-and-suspenders defense. Canary after each Codex CLI upgrade: re-run the
+  interactive param-less `agents.spawn_agent` probe and confirm a fresh deny
+  line in `spawn-gate.log`; if upstream ships the real #31814 fix, revisit
+  whether the `multi_agent_v2` overrides and the widened matcher are still
+  needed.
