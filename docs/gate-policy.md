@@ -92,7 +92,8 @@ the current run and require re-validation.
   real Codex TUI via tmux, approved the user-level `pre_tool_use` hook trust
   through the actual review UI (trusted hash now persisted in
   `config.toml [hooks.state]`; the claude-mem plugin's new PreToolUse hook was
-  deliberately left untrusted — outside the approval's scope). Result is
+  meant to be left untrusted — but see probe #6: it was accidentally trusted
+  during these multi-session probes and later removed). Result is
   **mixed and supersedes probe #2's "upstream-inert" conclusion**:
   - Two real `spawn_agent` dispatches hit the gate the moment trust landed
     (log lines 11-12): first missing `fork_turns` → code path reaches
@@ -156,3 +157,28 @@ the current run and require re-validation.
   upstream guard-rail on the worst-case (`fork_turns="all"`) path.
   Note: commit `1097769`'s message claims this section; the insert silently
   failed there and actually lands in this commit.
+- 2026-07-11 probe #6 (Codex 5.6-sol re-review — Block, then fixed). The
+  re-review (run once the `codex exec` stall recipe was fixed — see below)
+  caught that `config.toml [hooks.state]` had **trusted** the claude-mem
+  `pre_tool_use` hook (`codex-hooks.json`, the Codex variant of the same
+  per-Bash `node` file-context worker audited earlier), contradicting the
+  stated "left untrusted" decision. Root cause: over ~6 tmux probe sessions a
+  trust keystroke landed on it (exact session unrecovered; effect corrected,
+  not the forensics). Fix: removed **only** that one trust-state entry
+  (backup `config.toml.bak-claudemem`), leaving the plugin enabled and its
+  other hooks (`session_start`/`stop`/etc.) untouched — those remain trusted
+  and are the source of the AGENTS.md "Memory Context" prepend and the
+  recurring "Stop hook: invalid JSON" noise; scoping them is a separate,
+  user-facing decision, not silently bundled here. Removing a trust entry is
+  a de-grant (reverts to re-prompt-on-next-session), which is why hand-editing
+  it is acceptable where hand-adding a trust hash is not.
+- codex exec stall (found while running probe #6): background `codex exec`
+  from Claude reliably hangs. Three compounding causes — (1) non-TTY stdin
+  makes it wait on `Reading additional input from stdin...` until EOF that a
+  background pipe never sends [primary]; (2) it inherits the full config.toml
+  MCP set (npm/uvx cold-resolve, no global startup timeout); (3) it leaves
+  MCP child processes orphaned, holding the stdout pipe open so `| tail`
+  never sees EOF. Safe recipe for any background review:
+  `timeout 1500 codex exec --ignore-user-config -m gpt-5.6-sol -c
+  model_reasoning_effort=high --sandbox read-only "$PROMPT" < /dev/null >
+  out.txt 2>&1`. Full write-up in the user's memory `codex-exec-stall-recipe`.
