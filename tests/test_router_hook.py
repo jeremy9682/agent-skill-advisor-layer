@@ -190,7 +190,9 @@ def test_routing_log_written_and_redacted(tmp_path, monkeypatch):
     if log.is_file():  # fired or not, a record should exist
         rec = json.loads(log.read_text().splitlines()[-1])
         assert len(rec["prompt_sha"]) == 16
-        assert len(rec["prompt_head"]) <= 80
+        # M-privacy: plaintext excerpt is gone by default; hash+len only.
+        assert "prompt_head" not in rec
+        assert isinstance(rec["prompt_len"], int)
         assert rec["repo"] == "secret-project"  # basename only, no full path
         assert "/Users/x" not in json.dumps(rec)
 

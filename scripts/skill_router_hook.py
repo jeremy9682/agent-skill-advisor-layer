@@ -18,10 +18,19 @@ candidates must clear COMPANION_RATIO * top score (0.6), which in
 calibration suppressed all noisy runners-up. Recalibrate when eval recall
 moves; never tune by feel.
 
-Log (M3): one JSON line per emission to
-~/.codex/skill-governance/routing-log.jsonl — prompt stored as sha256 +
-first 80 chars only; cwd stored as basename only; O_APPEND single-line
-writes; 5 MB rotate to .1; all log failures silent.
+Log (M3 + M-privacy): one JSON line per emission to
+~/.codex/skill-governance/routing-log.jsonl. Privacy-minimized by default —
+prompt stored as sha256 prefix + length only (NO plaintext); cwd stored as
+basename only; when available the record also carries a session pointer
+(session_id / transcript_path from the hook stdin) so an operator can trace
+a hash back to a transcript without the router persisting the text itself.
+Plaintext excerpt (prompt_head) is written ONLY when the environment variable
+SKILL_ROUTER_DEBUG_PLAINTEXT=1 is set, and every such record carries a
+ttl_expires (write time + 7 days). On startup the hook opportunistically
+strips plaintext from any expired debug records (in-place rewrite, best-effort
+— any failure is swallowed and never affects the main flow). Old log lines
+that already contain prompt_head are NOT migrated and never crash the cleanup.
+O_APPEND single-line writes; 5 MB rotate to .1; all log failures silent.
 
 Index cache (M4): parsed skill entries cached to
 ~/.codex/skill-governance/router-index.json keyed by the sum+count of all
@@ -32,6 +41,7 @@ design (blind-review T3): the three vercel-hook false-trigger incidents of
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import importlib.util
 import json
@@ -42,6 +52,11 @@ from pathlib import Path
 # Firing + companion display rule AND top-K truncation live in
 # routing_eval.chosen_candidates (single source; calibration table there).
 LOG_MAX_BYTES = 5 * 1024 * 1024
+
+# Plaintext excerpts are opt-in only, and self-expire after this window so a
+# forgotten debug flag cannot leave prompt text on disk indefinitely.
+DEBUG_PLAINTEXT_ENV = "SKILL_ROUTER_DEBUG_PLAINTEXT"
+DEBUG_PLAINTEXT_TTL_DAYS = 7
 
 ROOT = Path(__file__).resolve().parents[1]
 GOV_DIR = Path.home() / ".codex" / "skill-governance"
@@ -107,12 +122,73 @@ def load_skills_cached(routing) -> list[dict]:
     return skills
 
 
+def purge_expired_plaintext() -> None:
+    """Strip plaintext from expired debug records; rewrite the log in place.
+
+    Opportunistic and best-effort: bounded by the 5 MB rotation cap and wrapped
+    so ANY failure is swallowed — the hot path must never be affected. Cheap
+    early-out when no record carries a ttl_expires (the default, plaintext-off
+    case). Only expired debug records are touched: their prompt_head/ttl_expires
+    keys are dropped, leaving the hash+len skeleton intact. Old-format lines
+    (prompt_head without ttl_expires) and any non-JSON line are preserved
+    verbatim, so the cleanup can never be crashed by legacy content.
+    """
+    try:
+        try:
+            raw = LOG_PATH.read_text(encoding="utf-8")
+        except OSError:
+            return
+        if "ttl_expires" not in raw:
+            return  # nothing to expire; skip all per-line parsing + any write
+        now = datetime.datetime.now()
+        changed = False
+        out_lines: list[str] = []
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            keep = line
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                out_lines.append(keep)  # legacy / malformed: never choke
+                continue
+            if isinstance(rec, dict):
+                exp = rec.get("ttl_expires")
+                if exp:
+                    try:
+                        expired = datetime.datetime.fromisoformat(str(exp)) < now
+                    except (ValueError, TypeError):
+                        expired = False
+                    if expired:
+                        rec.pop("prompt_head", None)
+                        rec.pop("ttl_expires", None)
+                        keep = json.dumps(rec, ensure_ascii=False)
+                        changed = True
+            out_lines.append(keep)
+        if not changed:
+            return
+        text = ("\n".join(out_lines) + "\n") if out_lines else ""
+        tmp_path = LOG_PATH.with_suffix(".jsonl.tmp")
+        try:
+            tmp_path.write_text(text, encoding="utf-8")
+            os.replace(tmp_path, LOG_PATH)
+        except OSError:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass  # cleanup is strictly best-effort; never surface to the hot path
+
+
 def write_log(
     prompt: str,
     cwd: str,
     candidates: list[dict],
     fired: bool,
     skip_reason: str = "",
+    session_id: str = "",
+    transcript_path: str = "",
 ) -> None:
     try:
         GOV_DIR.mkdir(parents=True, exist_ok=True)
@@ -121,15 +197,29 @@ def write_log(
                 LOG_PATH.replace(LOG_PATH.with_suffix(".jsonl.1"))
         except OSError:
             pass
+        now = datetime.datetime.now()
         record = {
-            "ts": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+            "ts": now.isoformat(timespec="seconds"),
             "prompt_sha": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-            "prompt_head": prompt[:80],
+            "prompt_len": len(prompt),
             "repo": os.path.basename(cwd) if cwd else "",
             "fired": fired,
             "skip_reason": skip_reason,
             "candidates": candidates,
         }
+        # Session pointer: lets an operator trace a hash to a transcript without
+        # the router itself persisting the prompt text. Only present when the
+        # hook stdin actually carried these fields.
+        if session_id:
+            record["session_id"] = session_id
+        if transcript_path:
+            record["transcript_path"] = transcript_path
+        # Plaintext excerpt is opt-in and self-expiring (see module docstring).
+        if os.environ.get(DEBUG_PLAINTEXT_ENV) == "1":
+            record["prompt_head"] = prompt[:80]
+            record["ttl_expires"] = (
+                now + datetime.timedelta(days=DEBUG_PLAINTEXT_TTL_DAYS)
+            ).isoformat(timespec="seconds")
         line = json.dumps(record, ensure_ascii=False) + "\n"
         fd = os.open(LOG_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
@@ -149,14 +239,24 @@ def main() -> int:
         data = json.loads(raw)
         prompt = data.get("prompt") or ""
         cwd = data.get("cwd") or data.get("workspace") or ""
+        # Session pointer (Claude Code UserPromptSubmit stdin carries these);
+        # absent -> logged record falls back to hash+len only.
+        session_id = data.get("session_id") or ""
+        transcript_path = data.get("transcript_path") or ""
         if not prompt.strip():
             noop()
             return 0
 
+        # Opportunistic, best-effort expiry of debug plaintext. Self-guards
+        # against any failure so it can never degrade routing (unlike the outer
+        # try, which would drop the suggestion to {}).
+        purge_expired_plaintext()
+
         routing = load_routing_module()
         skip_reason = routing.should_skip_prompt(prompt)
         if skip_reason:
-            write_log(prompt, cwd, [], fired=False, skip_reason=skip_reason)
+            write_log(prompt, cwd, [], fired=False, skip_reason=skip_reason,
+                      session_id=session_id, transcript_path=transcript_path)
             noop()
             return 0
         skills = load_skills_cached(routing)
@@ -183,7 +283,7 @@ def main() -> int:
         if not chosen:
             write_log(prompt, cwd, [
                 {"skill": n, "score": round(s, 2)} for n, s in top[:1]
-            ], fired=False)
+            ], fired=False, session_id=session_id, transcript_path=transcript_path)
             noop()
             return 0
 
@@ -203,7 +303,8 @@ def main() -> int:
             "判断不符直接忽略即可）：\n" + "\n".join(lines) +
             "\n如采用，先加载该 skill 的 SKILL.md 再动手。"
         )
-        write_log(prompt, cwd, candidates, fired=True)
+        write_log(prompt, cwd, candidates, fired=True,
+                  session_id=session_id, transcript_path=transcript_path)
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
