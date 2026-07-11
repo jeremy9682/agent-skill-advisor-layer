@@ -590,8 +590,17 @@ def dependency_checks() -> dict[str, str]:
 USAGE_KINDS = (
     "actual_skill_invocation",
     "skill_file_read",
+    "self_audit_read",
     "gstack_timeline",
     "assistant_announcement",
+)
+
+SELF_AUDIT_MARKERS = (
+    "skill_audit.py",
+    "router_selftune.py",
+    "routing_eval.py --doctor",
+    "routing_eval.py\", \"--doctor",
+    "routing_eval.py', '--doctor",
 )
 
 
@@ -627,11 +636,25 @@ def skill_alias_from_path(path_text: str, valid: set[str]) -> str | None:
     return alias if alias in valid else None
 
 
+def is_self_audit_read(text: str) -> bool:
+    """Return true when one tool call identifies itself as audit/doctor work.
+
+    Session transcripts do not preserve child PID or parent-process metadata, so
+    reads issued in a *different* tool call cannot be attributed reliably.  This
+    deliberately conservative check catches explicit and batch shell reads whose
+    command also names the audit, self-tune, or doctor entry point; ambiguous
+    standalone reads remain skill_file_read rather than being silently excluded.
+    """
+    normalized = re.sub(r"\s+", " ", text).lower()
+    return any(marker in normalized for marker in SELF_AUDIT_MARKERS)
+
+
 def record_skill_paths(text: str, counts: dict[str, dict[str, int]], valid: set[str]) -> None:
+    kind = "self_audit_read" if is_self_audit_read(text) else "skill_file_read"
     for match in re.finditer(r"(?:~|/Users/[^\s\"']+)/[^\s\"']*/skills/[^\s\"']+/SKILL\.md", text):
         alias = skill_alias_from_path(match.group(0), valid)
         if alias:
-            record_usage(counts, alias, "skill_file_read", valid)
+            record_usage(counts, alias, kind, valid)
 
 
 def record_gstack_commands(text: str, counts: dict[str, dict[str, int]], valid: set[str]) -> None:
@@ -772,7 +795,10 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
                 combined[kind] += value
         entry["usage_recent"] = combined
         entry["usage_recent_file_hits"] = combined["skill_file_read"]
-        entry["usage_recent_total_evidence"] = sum(combined.values())
+        entry["self_read_excluded"] = combined["self_audit_read"]
+        entry["usage_recent_total_evidence"] = sum(
+            value for kind, value in combined.items() if kind != "self_audit_read"
+        )
 
     remotes = {name: ls_remote(meta["url"], meta["branch"]) for name, meta in KNOWN_REMOTES.items()}
     sync_actions = []
@@ -807,6 +833,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         },
         "entries": entries,
     }
+    report["usage_summary"]["self_read_excluded"] = report["usage_summary"]["self_audit_read"]
     return report
 
 
@@ -836,6 +863,7 @@ def main(argv: list[str]) -> int:
     print(json.dumps({
         "generated_at": report["generated_at"],
         "summary": report["summary"],
+        "usage_summary": report["usage_summary"],
         "dependency_checks": report["dependency_checks"],
         "sync_actions": report["sync_actions"][:20],
         "huashu_design": report["huashu_design"],
