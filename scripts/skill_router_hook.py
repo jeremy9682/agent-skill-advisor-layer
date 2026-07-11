@@ -11,8 +11,9 @@ Failure policy (blind-review M1): ANY internal error degrades to `{}` and
 exit 0. This hook must never block or delay a user prompt materially.
 
 Threshold (M4): FIRE_THRESHOLD = 4.0, calibrated 2026-07-06 against the
-live 109-skill fleet + hints: true hits scored 4.03-17.85, hardest
-negatives (rename/GIL/weather/goodbye prompts) scored <= 3.66. Companion
+live 111-skill fleet + hints (recalibrated 2026-07-11 post CJK-fragment
+fix): true hits >= 1.48, hardest scored negatives <= 0.96, threshold 1.35
+(see routing_eval.py FIRE_THRESHOLD for the full calibration note). Companion
 candidates must clear COMPANION_RATIO * top score (0.6), which in
 calibration suppressed all noisy runners-up. Recalibrate when eval recall
 moves; never tune by feel.

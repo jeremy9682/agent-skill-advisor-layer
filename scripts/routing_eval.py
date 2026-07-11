@@ -222,11 +222,23 @@ def load_hints(path: Path) -> dict[str, dict[str, Any]]:
         name = entry.get("skill")
         if not name:
             continue
-        out[name] = {
+        fresh = {
             "extra_triggers": entry.get("extra_triggers") or [],
             "negative_triggers": entry.get("negative_triggers") or [],
             "domains": entry.get("domains") or [],
         }
+        if name in out:
+            # Codex 终审 H3（2026-07-11）：此前同名 stanza 静默覆盖，一次追加式
+            # 编辑清空了 huashu-design 等 4 个 skill 的既有 negative_triggers，
+            # 且 eval 恰被 known_leaks 容忍而全绿。合并为并集，去重保序。
+            merged = out[name]
+            for key in ("extra_triggers", "negative_triggers", "domains"):
+                seen = set(merged[key])
+                merged[key] = merged[key] + [
+                    v for v in fresh[key] if v not in seen
+                ]
+        else:
+            out[name] = fresh
     return out
 
 
@@ -372,7 +384,7 @@ def run_eval(
     unexpected_high_cost: list[dict[str, Any]] = []
     known_leak_events: list[dict[str, Any]] = []
     false_positive_events: list[dict[str, Any]] = []
-    negative_total = negative_silent_hits = 0
+    negative_total = negative_silent_hits = guard_hits = 0
 
     for case in cases:
         expect = list(case.get("expect", []) or [])
@@ -384,19 +396,26 @@ def run_eval(
         scores = dict(top)
         shown = {n for n, _ in chosen_candidates(top, fire_threshold=fire_threshold)}
         if not expect and not high_cost_ok and not known_leaks:
-            negative_total += 1
-            if not shown:
-                negative_silent_hits += 1
+            # Codex 终审 H1（2026-07-11）：被 should_skip_prompt 拦截的负例
+            # 没经过评分器，混进 precision 分母会虚高"阈值挡住了负例"的证据。
+            # 拆两个口径：guard_hit（守卫拦截数）与 negative precision（真经过
+            # 评分器且保持沉默的比例）。
+            if skip_reason:
+                guard_hits += 1
             else:
-                false_positive_events.append(
-                    {
-                        "case": case["id"],
-                        "shown": [
-                            {"skill": n, "score": round(scores.get(n, 0.0), 2)}
-                            for n in sorted(shown)
-                        ],
-                    }
-                )
+                negative_total += 1
+                if not shown:
+                    negative_silent_hits += 1
+                else:
+                    false_positive_events.append(
+                        {
+                            "case": case["id"],
+                            "shown": [
+                                {"skill": n, "score": round(scores.get(n, 0.0), 2)}
+                                for n in sorted(shown)
+                            ],
+                        }
+                    )
 
         expect_installed = [e for e in expect if e in installed]
         skipped = [e for e in expect if e not in installed]
@@ -463,6 +482,7 @@ def run_eval(
         "negative_precision": round(negative_precision, 3),
         "negative_silent_hits": negative_silent_hits,
         "negative_total": negative_total,
+        "guard_hits": guard_hits,
         "descriptions_without_cjk": no_cjk,
         "gate_dependency_events": gate_events,
         "known_leaks": known_leak_events,
@@ -728,7 +748,10 @@ def main() -> int:
             f" ({eval_report['displayed_hits']}/{eval_report['recall_total']})"
         )
         print(
-            f"negative precision (should stay silent): {eval_report['negative_precision']:.0%}"
+            f"negative precision (should stay silent, scored only): "
+            f"{eval_report['negative_precision']:.0%} "
+            f"({eval_report['negative_silent_hits']}/{eval_report['negative_total']}; "
+            f"guard-intercepted: {eval_report['guard_hits']})"
             f" ({eval_report['negative_silent_hits']}/{eval_report['negative_total']})"
         )
         print(

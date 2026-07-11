@@ -70,7 +70,7 @@ hints:
     rationale: "EN-only description"
     source: "eval miss security-audit"
   - skill: retro
-    extra_triggers: ["复盘", "sprint 总结", "回顾这周"]
+    extra_triggers: ["复盘", "sprint 总结", "回顾这周", "复盘一下", "结束复盘", "sprint 复盘"]
     negative_triggers: []
     rationale: "EN-only description; suggest-confirm gate still applies. Phrases kept free of function-word bigrams (一下/这个) after 2026-07-06 leak"
     source: "eval miss sprint-retro"
@@ -120,10 +120,10 @@ hints:
     rationale: "EN-only description"
     source: "eval miss onboarding-prototype"
   - skill: huashu-design
-    extra_triggers: []
+    extra_triggers: ["视觉原型", "落地页视觉", "设计一个落地页"]
     negative_triggers: ["独立审核", "外部审核", "skill 治理", "agent governance"]
-    rationale: "measured false positives: agent-to-agent review briefs scored as design work. Bare '只读分析' dropped — agent briefs now caught by the global should_skip_prompt guard, so it no longer over-suppresses genuine '只读分析' user requests"
-    source: "routing-log 2026-07-07 + fable audit; global-skip move 2026-07-08"
+    rationale: "measured false positives: agent-to-agent review briefs scored as design work. Bare '只读分析' dropped — agent briefs now caught by the global should_skip_prompt guard. extra_triggers merged 2026-07-11 (post-fragment-fix companions; Codex final-review caught the duplicate-stanza overwrite that had wiped these negative_triggers)"
+    source: "routing-log 2026-07-07 + fable audit; recalibration 2026-07-11"
   - skill: social-monitor
     extra_triggers: ["社交监控", "X 和 Reddit", "小红书 抖音", "社媒讨论"]
     negative_triggers: ["独立审核", "外部审核", "skill 治理", "agent governance"]
@@ -137,12 +137,12 @@ hints:
 
   # --- high-cost skills missing confirm language (lint L4) ---
   - skill: huashu-agent-swarm
-    extra_triggers: ["多 agent 并行", "蜂群开发"]
+    extra_triggers: ["多 agent 并行", "蜂群开发", "并行推进", "前后端并行", "一起并行"]
     negative_triggers: ["设计系统", "DESIGN.md", "配色", "字体"]
     rationale: "L4 no confirm language; measured leaking into innocent design-system prompt at rank 3"
     source: "eval known leak new-design-system"
   - skill: gstack-openclaw-retro
-    extra_triggers: ["复盘"]
+    extra_triggers: ["复盘", "复盘一下", "sprint 复盘"]
     negative_triggers: []
     rationale: "L4 no confirm language; suggest-confirm gate applies"
     source: "lint 2026-07-06"
@@ -173,31 +173,9 @@ hints:
     negative_triggers: []
     rationale: "router-policy skill, no trigger clause"
     source: "lint 2026-07-06"
-
-  # --- 2026-07-11 recalibration companions (CJK-fragment fix shifted the
-  # Chinese score distribution down; these restore headroom for the four
-  # lowest true-hit cases so FIRE_THRESHOLD can sit above English noise) ---
-  - skill: huashu-design
-    extra_triggers: ["视觉原型", "落地页视觉", "设计一个落地页"]
+  - skill: benchmark-models
+    extra_triggers: ["模型对比", "比较模型", "跨模型评测", "比较两个模型", "哪个模型好"]
     negative_triggers: []
     domains: []
-    rationale: "post-fragment-fix: 设计落地页视觉原型 case dropped to 1.48; explicit visual-prototype triggers restore it without re-widening the description blackhole"
-    source: "routing_eval recalibration 2026-07-11 (YunChouAI session false-positive audit)"
-  - skill: huashu-agent-swarm
-    extra_triggers: ["并行推进", "前后端并行", "一起并行"]
-    negative_triggers: []
-    domains: []
-    rationale: "post-fragment-fix: parallel-swarm case dropped to 1.55"
-    source: "routing_eval recalibration 2026-07-11"
-  - skill: retro
-    extra_triggers: ["复盘一下", "结束复盘", "sprint 复盘"]
-    negative_triggers: []
-    domains: []
-    rationale: "post-fragment-fix: sprint-retro case dropped to 1.57"
-    source: "routing_eval recalibration 2026-07-11"
-  - skill: gstack-openclaw-retro
-    extra_triggers: ["复盘一下", "sprint 复盘"]
-    negative_triggers: []
-    domains: []
-    rationale: "post-fragment-fix: sprint-retro case companion"
-    source: "routing_eval recalibration 2026-07-11"
+    rationale: "'模型' became a stop-bigram 2026-07-11 (generic process word in exec directives); phrase-level triggers restore Chinese reachability for the one skill that genuinely routes on it"
+    source: "Codex final-review H2 2026-07-11"
