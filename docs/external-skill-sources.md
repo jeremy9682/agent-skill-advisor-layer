@@ -4,6 +4,44 @@ This file tracks community skills that are allowed in the daily skill fleet but
 must stay review-gated. Installers can fetch them, but updates should not be
 auto-applied without reading the changed `SKILL.md`.
 
+## Supply-chain pin requirement (Tier-2 item ⑤)
+
+Every **external** skill must carry an immutable identifier so a specific
+installed version is reproducible and drift is detectable:
+
+- **Git-backed source** → a commit sha. The skill lives inside a git checkout
+  (`git_head` is populated), or its source group is registered below with a
+  "Checked main commit".
+- **Non-git source** (a stray copy, a plugin/marketplace payload) → a version
+  plus an integrity digest. A `tree_hash` alone is **not** accepted as the sole
+  identifier — it proves integrity, not provenance.
+- **First-party** (`local-manual`, authored here) → exempt.
+
+`scripts/skill_audit.py` reports this unconditionally under `pin_checks`
+(baseline). The **hard red gate** is opt-in via `--enforce-pins`, which exits
+non-zero on any unpinned external skill. Per the lightweight-first plan, keep
+the gate **off** in CI until the baseline reaches zero, then flip it on.
+
+An external skill counts as pinned only via a **fixed commit SHA** — either a
+local git checkout (`git_head`) or a registered pin below. A URL + mutable
+branch is **not** a pin. `REGISTERED_PINS` in `skill_audit.py` must match this
+list of group → SHA:
+
+| Source group | Pinned commit SHA |
+| --- | --- |
+| mattpocock-skills | `d574778f94cf620fcc8ce741584093bc650a61d3` |
+| emilkowalski-skills | `f76beceb7d3fc8c43309cefad5a095a206103a4e` |
+| huashu-skills | `35e7cf31328f6de07e5d125bfd094791f84b2352` |
+| huashu-design | `0e7ec8aca0058184c1a9e06e57697e84f68a3f0f` |
+
+**Baseline 2026-07-12:** 82 external skills, 77 pinned (via local commit or a
+registered SHA above), **5 unpinned** — all stray copies with no git checkout
+and no registered pin: `frontend-design` (agents) + 4 in the `gstack` group
+(`gstack`, `gstack-upgrade` ×2, `open-gstack-browser`). To clear them: register
+the `gstack` and `frontend-design` groups with a SHA (or re-install those copies
+from a pinned source), then `--enforce-pins` can go green and move to CI. Trust
+tiers and 30/60/90-day re-review stay deferred (maintenance cost before benefit).
+
 ## mattpocock/skills
 
 - Source: `https://github.com/mattpocock/skills`

@@ -70,6 +70,59 @@ If a gate workflow is active, do not silently bypass it. Either continue the
 gate, stop it intentionally, or tell the user that manual edits will invalidate
 the current run and require re-validation.
 
+## High-Cost Skill Enforcement on Codex (Tier-2 item ③)
+
+Claude Code gates high-cost skills with `disable-model-invocation` + the
+skill-advisor prose. Codex ignores that field and only reads `name` +
+`description`, so the only Codex-side mechanical lever is the skill's own
+injected description. Whether that lever is usable depends on each skill's
+disk topology. The table below maps the **declared** high-cost list (CLAUDE.md /
+skill-advisor / AGENTS.md) plus deploy-capable skills surfaced during review.
+It is **NOT an exhaustive census** of every state-changing skill Codex injects:
+Codex loads from `~/.codex/skills`, `~/.agents/skills`, `~/gstack/.agents/skills`,
+**and the plugin cache** (`~/.codex/plugins/cache/**`, ~222 SKILL.md files), so
+a full "which injected skill can commit/push/deploy" audit is open-ended and
+tracked as a follow-up (see below) — not claimed complete here. Map 2026-07-12:
+
+| High-cost skill | Codex-injected via | Topology | Gateable in place? |
+| --- | --- | --- | --- |
+| huashu-agent-swarm | `~/.codex/skills` | real dir, upstream-synced (`huashu-skills`) | no — editing forks upstream, blocks sync |
+| huashu-design | `~/.codex/skills` | real dir, upstream-synced (`huashu-design`) | no — same |
+| gstack-pair-agent / gstack-retro / gstack-setup-gbrain | `~/.codex/skills` | **symlink** → shared `~/gstack` worktree | no — edit leaks to gstack + every runtime symlinking it |
+| ship (as `gstack-ship`) | `~/gstack/.agents/skills` | shared gstack worktree | no — same leak |
+| **overnight-execution** | `~/.agents/skills` | **real dir, no upstream, not shared** (separate inode from the `~/.claude` copy) | **yes — safe** |
+| no-mistakes / lfg | absent from every Codex root | not injected | n/a |
+
+**Deploy-capable skills NOT on the declared list** (surfaced by review; behave
+high-cost — commit/push/PR/deploy — but not currently gated). Adding any to the
+enforced list is a policy decision that touches all three policy surfaces + the
+Tier-1 consistency lint, so these are **candidates pending the user's call**,
+not silently added; all are shared/plugin sources (Option A anyway):
+
+| Candidate | Codex-injected via | What it does |
+| --- | --- | --- |
+| land-and-deploy (`gstack-land-and-deploy`) | `~/.codex/skills` symlink → gstack worktree | merge PRs, drive a deploy |
+| yeet (`github` plugin) | `~/.codex/plugins/cache/**/github/**` | commit, push, open a PR |
+
+**Follow-up (open):** a full census of injected skills that perform
+state-changing git/deploy operations — across all roots including the 222-file
+plugin cache — is open-ended and deferred. The scalable answer is an audit
+signal that flags any injected skill whose description matches
+commit/push/deploy/PR but is not on the gated list, rather than maintaining this
+table by hand. Until then the enforced scope is the declared list; this table is
+illustrative, not a completeness guarantee.
+
+**Corrected conclusion:** most Codex-side high-cost skills are either shared
+symlinks (edit leaks) or upstream-synced copies (edit forks upstream), which
+stay on **Option A** (AGENTS.md skill-advisor prose + the Tier-1 cross-file
+consistency lint). But **`overnight-execution` is a clean, locally-owned real
+dir** — the one safe target — and it is now **gated in place**: its description
+in `~/.agents/skills/overnight-execution/SKILL.md` carries a `⚠️ HIGH-COST —
+do NOT auto-start` marker (the only enforcement lever Codex honors). That edit
+is a local skill-file change, not tracked in this repo, because the skill lives
+outside it; backup at `SKILL.md.bak-gate`. Re-evaluate the same in-place gate
+for any future high-cost skill that lands as a locally-owned real dir.
+
 ## Runtime Verification Evidence
 
 - 2026-07-11 spawn-effort-gate probe #1: the hook is registered in

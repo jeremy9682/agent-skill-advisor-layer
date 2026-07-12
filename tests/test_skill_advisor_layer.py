@@ -154,3 +154,85 @@ def test_report_usage_summary_counts_aliases_once(monkeypatch):
     assert report["usage_summary"]["actual_skill_invocation"] == 1
     assert report["usage_summary"]["gstack_timeline"] == 1
     assert [e["usage_recent_total_evidence"] for e in report["entries"]] == [2, 1]
+
+
+def _pin_entry(name, group, git_head="", is_symlink=False, runtime="codex"):
+    return {
+        "name": name,
+        "runtime": runtime,
+        "source_group": group,
+        "path": f"/fake/{runtime}/{name}",
+        "is_symlink": is_symlink,
+        "git_head": git_head,
+    }
+
+
+def test_pin_check_classifies_immutable_identifiers():
+    audit = load_audit_module()
+    entries = [
+        # first-party: exempt entirely
+        _pin_entry("my-local-skill", "local-manual"),
+        # external + local commit sha (a real 40-hex sha): pinned
+        _pin_entry("superpowers-x", "superpowers", git_head="a" * 40),
+        # external + registered pin SHA but no local commit: pinned
+        _pin_entry("huashu-agent-swarm", "huashu-skills"),
+        # external, no commit, not registered: UNPINNED violation
+        _pin_entry("stray-copy", "gstack"),
+    ]
+    result = audit.pin_check(entries)
+    assert result["external_count"] == 3  # local-manual excluded
+    assert result["unpinned_count"] == 1
+    assert {u["name"] for u in result["unpinned"]} == {"stray-copy"}
+    # huashu-skills is pinned via a fixed SHA in REGISTERED_PINS, not a mutable branch
+    assert "huashu-skills" in audit.REGISTERED_PINS
+    assert len(audit.REGISTERED_PINS["huashu-skills"]) == 40  # a real commit sha
+    assert result["by_group"]["huashu-skills"]["pinned"] == 1
+    assert result["by_group"]["gstack"]["unpinned"] == 1
+
+
+def test_pin_check_url_branch_is_not_a_pin():
+    # A source group known only by URL + mutable branch (KNOWN_REMOTES) must NOT
+    # count as pinned — only a fixed SHA (REGISTERED_PINS) or a local commit does.
+    audit = load_audit_module()
+    # a group in KNOWN_REMOTES but deliberately absent from REGISTERED_PINS
+    entries = [_pin_entry("url-only", "gstack")]  # gstack: not in REGISTERED_PINS
+    result = audit.pin_check(entries)
+    assert result["unpinned_count"] == 1
+
+
+def test_pin_check_tree_hash_is_not_sufficient_alone():
+    # An external skill with neither commit nor registered pin is a violation
+    # even though every skill carries a tree_hash (integrity != provenance).
+    audit = load_audit_module()
+    entries = [_pin_entry("frontend-design", "frontend-design")]
+    result = audit.pin_check(entries)
+    assert result["unpinned_count"] == 1
+    assert result["unpinned"][0]["reason"].startswith("external skill with no local commit")
+
+
+def test_pin_check_missing_source_group_is_unpinned_not_exempt():
+    # Fail-closed: a malformed entry with no source_group must be treated as an
+    # external, unpinned violation — never silently exempted as first-party.
+    audit = load_audit_module()
+    entry = {"name": "malformed", "runtime": "codex"}  # no source_group at all
+    result = audit.pin_check([entry])
+    assert result["external_count"] == 1
+    assert result["unpinned_count"] == 1
+    assert result["unpinned"][0]["source_group"] == "(missing)"
+
+
+def test_pin_check_rejects_non_sha_identifiers():
+    # A git_head or a REGISTERED_PINS value that is not a full 40-hex sha must
+    # NOT count as pinned — a branch name / partial / garbage fakes immutability.
+    audit = load_audit_module()
+    assert audit._is_sha("a" * 40) is True
+    assert audit._is_sha("branch-main") is False
+    assert audit._is_sha("not-a-sha") is False
+    assert audit._is_sha("abc123") is False          # too short
+    assert audit._is_sha("A" * 40) is False          # uppercase not hex-normalized
+    # a bogus git_head string must not pin the entry
+    entries = [_pin_entry("fake", "gstack", git_head="not-a-sha")]
+    result = audit.pin_check(entries)
+    assert result["unpinned_count"] == 1
+    # every real REGISTERED_PINS value must be a valid sha
+    assert all(audit._is_sha(v) for v in audit.REGISTERED_PINS.values())

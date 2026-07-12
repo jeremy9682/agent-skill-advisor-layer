@@ -780,6 +780,80 @@ def estimate_usage(entries: list[dict[str, Any]], days: int, limit: int, max_byt
     return counts
 
 
+# The ONLY first-party group: locally-authored skills, exempt from the
+# external-source immutable-identifier requirement. Any other value — including
+# a missing/blank source_group on a malformed entry — is external and must be
+# pinned (fail-closed; a governance gate must not exempt on absence).
+FIRST_PARTY_GROUP = "local-manual"
+
+# Registered upstream pins: source group → the specific commit SHA it is pinned
+# to. A URL + mutable branch (KNOWN_REMOTES) is NOT a pin — the branch moves.
+# These SHAs are the immutable identifier for skills copied from an upstream
+# without a local git checkout. Keep in sync with docs/external-skill-sources.md.
+REGISTERED_PINS = {
+    "mattpocock-skills": "d574778f94cf620fcc8ce741584093bc650a61d3",
+    "emilkowalski-skills": "f76beceb7d3fc8c43309cefad5a095a206103a4e",
+    "huashu-skills": "35e7cf31328f6de07e5d125bfd094791f84b2352",
+    "huashu-design": "0e7ec8aca0058184c1a9e06e57697e84f68a3f0f",
+}
+
+
+def _is_sha(value: str) -> bool:
+    """True only for a full 40-hex-char git commit sha — not a branch name,
+    not 'main', not a partial/garbage value. A pin must be immutable."""
+    return len(value) == 40 and all(c in "0123456789abcdef" for c in value)
+
+
+def pin_check(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Supply-chain pin check (Tier-2 item ⑤).
+
+    Every EXTERNAL skill must carry an immutable identifier so a specific
+    installed version is reproducible and drift is detectable:
+      - Git-backed source  → a commit sha (``git_head``, a local checkout); or
+      - a source group registered in ``REGISTERED_PINS`` with a fixed commit
+        SHA (recorded in docs/external-skill-sources.md).
+
+    A registered *URL + branch* (``KNOWN_REMOTES``) is NOT a pin — the branch
+    is mutable. A ``tree_hash`` is always present (content digest) but is NOT
+    accepted as the sole identifier — it proves integrity, not provenance.
+    Only the explicit first-party group is exempt; a missing source_group is
+    treated as external+unpinned (fail-closed). An external skill with neither
+    a local commit nor a registered pin SHA is an ``unpinned`` violation.
+
+    Reported unconditionally (baseline). The hard red gate is opt-in via
+    ``--enforce-pins`` until the baseline reaches zero violations.
+    """
+    external = [e for e in entries if e.get("source_group") != FIRST_PARTY_GROUP]
+    unpinned: list[dict[str, Any]] = []
+    by_group: dict[str, dict[str, int]] = {}
+    for e in external:
+        group = e.get("source_group") or "(missing)"
+        slot = by_group.setdefault(group, {"pinned": 0, "unpinned": 0})
+        # Both a local HEAD and a registered pin must be a real 40-hex sha —
+        # membership or a non-empty string is not enough (a branch name fakes it).
+        has_commit = _is_sha(e.get("git_head") or "")
+        has_registered_pin = _is_sha(REGISTERED_PINS.get(group, ""))
+        if has_commit or has_registered_pin:
+            slot["pinned"] += 1
+        else:
+            slot["unpinned"] += 1
+            unpinned.append({
+                "name": e.get("name", "?"),
+                "runtime": e.get("runtime", "?"),
+                "source_group": group,
+                "path": e.get("path", ""),
+                "is_symlink": e.get("is_symlink", False),
+                "reason": "external skill with no local commit sha and no registered pin SHA",
+            })
+    return {
+        "external_count": len(external),
+        "pinned_count": len(external) - len(unpinned),
+        "unpinned_count": len(unpinned),
+        "by_group": by_group,
+        "unpinned": sorted(unpinned, key=lambda u: (u["source_group"], u["name"], u["runtime"])),
+    }
+
+
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     previous_manifest = load_previous_manifest(MANIFEST_PATH)
     prev = previous_entries(previous_manifest)
@@ -824,6 +898,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             for kind in USAGE_KINDS
         },
         "dependency_checks": dependency_checks(),
+        "pin_checks": pin_check(entries),
         "sync_actions": sync_actions,
         "huashu_design": check_huashu_design(entries),
         "syntax_checks": {
@@ -852,6 +927,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--usage-days", type=int, default=30)
     parser.add_argument("--usage-file-limit", type=int, default=400)
     parser.add_argument("--usage-size-limit", type=int, default=3_000_000)
+    parser.add_argument(
+        "--enforce-pins",
+        action="store_true",
+        help="exit non-zero if any external skill lacks an immutable identifier "
+             "(supply-chain pin gate; keep off until the baseline is clean)",
+    )
     args = parser.parse_args(argv)
 
     report = build_report(args)
@@ -860,16 +941,30 @@ def main(argv: list[str]) -> int:
     if args.report:
         stamp = report["generated_at"].replace(":", "").replace("-", "")
         write_json(REPORTS_DIR / f"{stamp}-skill-audit.json", report)
+    pins = report["pin_checks"]
     print(json.dumps({
         "generated_at": report["generated_at"],
         "summary": report["summary"],
         "usage_summary": report["usage_summary"],
         "dependency_checks": report["dependency_checks"],
+        "pin_checks": {
+            "external_count": pins["external_count"],
+            "pinned_count": pins["pinned_count"],
+            "unpinned_count": pins["unpinned_count"],
+            "unpinned": pins["unpinned"],
+        },
         "sync_actions": report["sync_actions"][:20],
         "huashu_design": report["huashu_design"],
         "syntax_failures": report["syntax_checks"]["failures"][:20],
         "manifest": str(MANIFEST_PATH) if args.write_manifest else "",
     }, ensure_ascii=False, indent=2))
+    if args.enforce_pins and pins["unpinned_count"] > 0:
+        print(
+            f"PIN GATE FAILED: {pins['unpinned_count']} external skill(s) lack an "
+            f"immutable identifier (commit sha or registered upstream).",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

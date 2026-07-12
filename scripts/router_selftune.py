@@ -36,9 +36,91 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GOV_DIR = Path.home() / ".codex" / "skill-governance"
 LOG_PATH = GOV_DIR / "routing-log.jsonl"
+STATUS_PATH = GOV_DIR / "selftune-status.jsonl"   # machine-readable weekly status
 
 MIN_FIRES_FOR_CONFIDENCE = 25     # attractor analysis below this is low-confidence
 ATTRACTOR_DISTINCT_PROMPTS = 5    # fires in >= this many distinct prompts = suspect
+REVISIT_CLEAN_WEEKS = 4           # Tier-2 ④: N consecutive clean weeks → revisit Codex routing-hook port
+
+
+def _iso_week(date_str: str) -> str:
+    """ISO year-week bucket, e.g. '2026-W28', from an ISO date string."""
+    y, w, _ = dt.date.fromisoformat(date_str).isocalendar()
+    return f"{y:04d}-W{w:02d}"
+
+
+def revisit_tracker(today: str, green: bool, attractor_count: int, thin: bool) -> dict:
+    """Track the Tier-2 ④ revisit condition mechanically instead of by memory.
+
+    One status record per **ISO week** (running twice in one week overwrites,
+    it does not advance the streak — so N daily runs cannot fake N weeks). The
+    streak counts consecutive clean weeks that are also **calendar-adjacent**:
+    a gap week (the watchdog didn't run, or ran not-clean) breaks it. A clean
+    week = recall GREEN, zero attractors, non-thin data.
+
+    Fail-closed: a corrupt status line or a failed persist makes this run
+    report ``met=false`` with an ``error`` — a governance signal must not claim
+    the revisit condition is satisfied off data it could not read or write.
+    """
+    week = _iso_week(today)
+    clean = bool(green) and attractor_count == 0 and not thin
+    records: list[dict] = []
+    error: str | None = None
+    if STATUS_PATH.exists():
+        try:
+            existing = STATUS_PATH.read_text().splitlines()
+        except OSError:
+            # file exists but is unreadable (permissions, etc.): fail-closed —
+            # don't crash the whole weekly report, but don't trust the streak.
+            existing = []
+            error = "status file unreadable — cannot trust streak"
+        for line in existing:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                error = "corrupt status line — cannot trust streak"
+                continue
+            if not isinstance(rec, dict):    # valid JSON but not a record object
+                error = "non-object status line — cannot trust streak"
+                continue
+            if rec.get("week") != week:      # dedupe by ISO week (today's is rewritten)
+                records.append(rec)
+    records.append({"week": week, "date": today, "clean": clean, "green": bool(green),
+                    "attractors": attractor_count, "thin": thin})
+    records.sort(key=lambda r: str(r.get("week", "")))  # str-coerce: a manually-corrupted non-str week must not crash the sort
+    try:
+        GOV_DIR.mkdir(parents=True, exist_ok=True)
+        STATUS_PATH.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+    except OSError:
+        error = "failed to persist status — cannot trust streak"
+
+    # Streak: walk back from the most recent week, requiring clean AND that each
+    # step is exactly the previous ISO week (no missing weeks in between).
+    streak = 0
+    prev_week: str | None = None
+    for rec in reversed(records):
+        rw = rec.get("week", "")
+        if prev_week is not None and rw != _prev_iso_week(prev_week):
+            break  # calendar gap — streak is broken here
+        if rec.get("clean"):
+            streak += 1
+            prev_week = rw
+        else:
+            break
+    met = streak >= REVISIT_CLEAN_WEEKS and error is None
+    return {"clean": clean, "streak": streak, "met": met, "need": REVISIT_CLEAN_WEEKS,
+            "weeks_recorded": len(records), "error": error}
+
+
+def _prev_iso_week(week: str) -> str:
+    """The ISO week immediately before ``week`` ('2026-W28' → '2026-W27')."""
+    y, w = week.split("-W")
+    monday = dt.date.fromisocalendar(int(y), int(w), 1) - dt.timedelta(days=7)
+    yy, ww, _ = monday.isocalendar()
+    return f"{yy:04d}-W{ww:02d}"
 
 
 def load_routing():
@@ -116,6 +198,21 @@ def main() -> int:
         L.append(f"  → you decide a `negative_triggers` pattern for `{a['skill']}` "
                  "from what you see above.")
 
+    rv = revisit_tracker(today, green, len(log["attractors"]), log["thin"])
+    L += ["", "## Codex routing-hook revisit (Tier-2 ④)",
+          f"- clean-week streak: {rv['streak']}/{rv['need']} consecutive ISO weeks "
+          f"({'this week CLEAN' if rv['clean'] else 'this week NOT clean'}; "
+          f"{rv['weeks_recorded']} weeks recorded)"]
+    if rv["error"]:
+        L.append(f"- ⚠ {rv['error']} → streak NOT trusted this run (fail-closed).")
+    L.append(
+        "- **REVISIT CONDITION MET** — Claude-side router stable for "
+        f"{rv['need']}+ consecutive clean weeks. Re-evaluate porting the routing "
+        "hook to Codex (`user_prompt_submit` is supported, confirmed 2026-07-12)."
+        if rv["met"] else
+        "- not yet met — routing hook stays deferred on Codex (installing an "
+        "un-tuned router causes bad suggestions). Keep accumulating clean weeks.")
+
     L += ["", "## To apply a fix (your judgment, one edit)",
           "1. Read the sampled prompts; pick a `negative_triggers` substring that "
           "hits the noise but NOT real requests for that skill.",
@@ -137,8 +234,10 @@ def main() -> int:
         pass
 
     n_att = len(log["attractors"])
+    revisit_note = " ④ REVISIT MET" if rv["met"] else f" ④ {rv['streak']}/{rv['need']} clean"
     summary = (f"recall {'GREEN' if green else 'RED!'}; "
-               f"{n_att} attractor proposal(s); {log['fires']} fires logged")
+               f"{n_att} attractor proposal(s); {log['fires']} fires logged;"
+               f"{revisit_note}")
     try:
         subprocess.run(
             ["osascript", "-e",
