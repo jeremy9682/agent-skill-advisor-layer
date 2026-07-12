@@ -57,6 +57,28 @@ Other repos use the conditional triggers above. Small fixes bypass everywhere.
 Every task gets a process budget up front; when exceeded, drop extra agents
 and keep only minimal verification plus final review.
 
+## Model And Effort Matrix
+
+Model routing is a policy artifact, not a prompt hot-path router. The policy is
+recorded in intent statements and checked by offline evals; it does not run
+inside `UserPromptSubmit`.
+
+| Task shape | Risk zone | Direction seat | Landing seat | Final review | Effort | Required gates |
+| --- | --- | --- | --- | --- | --- | --- |
+| `small_fix` | low/default | Codex | Codex | None by default | `medium-fast` | focused verification |
+| `bug` | default | Codex | Codex | Codex when behavior or shared logic changed | `high` | reproduce/root cause/regression |
+| `feature` | default | Claude | planned implementation owner | Codex | `high` | intent, plan gate when 2+ modules/public API/data model |
+| `broad_refactor` | default | Claude | planned implementation owner | Codex | `high` | intent, plan gate, final diff review |
+| `code_review` | default | Reviewer | none | none | `high` | intent comparison, verification notes |
+| `release_ship` | any | Gate owner | release owner | Codex | `xhigh` | intent, green checks, final diff review, ship gate |
+| any non-mechanical task | restricted/irreversible | Claude or Fable/Opus fallback | planned implementation owner | Codex | `xhigh` | intent, plan gate, blind plan review, final diff review |
+
+Restricted-zone triggers include money movement, permissions, auth, migrations,
+DocType/schema changes, PII, irreversible data operations, production deploys,
+and public interfaces. Small mechanical edits can stay small even inside a
+restricted repo, but the moment behavior or data shape changes, use the
+restricted row.
+
 ## Scale Guardrail
 
 Do not run brainstorm, plan, simplify, review, and compound steps for work that

@@ -36,6 +36,7 @@ git clone git@github.com:jeremy9682/agent-skill-advisor-layer.git ~/Projects/age
 | 做新功能 | 「做个 Y 功能，目标是……」 | 出方案 → 你批 → 落地 → Codex 终审 |
 | 碰钱/权限/迁移/数据 | 正常说，带一句意图 | **自动升级**：Codex 盲审方案 + xhigh 终审 |
 | 技术选型/方向纠结 | 「调研一下 A vs B」 | Codex+Claude 双模型并行辩论 |
+| 想被反方质询 | 「grill me」「别顺着我，找漏洞」 | `grilling` 轻量压测观点/计划；`/grill-me` 是显式入口，不替代 review/QA/ship gate |
 | 审代码 | 「review 一下改动」 | 双 agent 审 + Fix-First |
 | 提交 | 「ship」（明确说才跑） | 测试→审→push→PR |
 

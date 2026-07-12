@@ -1,0 +1,143 @@
+# routing-policy.yaml — single machine-readable canon for agent routing policy.
+#
+# CANON STATUS: This file is the single machine source of truth for task-shape
+#   routing, effort tiers, and review-independence invariants. The prose docs
+#   (docs/task-routing.md, docs/gate-policy.md, schemas/intent.md) are
+#   commentary; where they drift from this file, this file wins.
+# ORIGIN: 2026-07-07 dual-model convergence (Codex gpt-5.6 x Claude Fable 5)
+#   collapsed ~5 drifting expression surfaces into one canon, plus the
+#   2026-07-11 user ruling D3 on ordinary-bug final-review independence.
+# DEFERRED: wiring scripts/routing_eval.py to read this canon is an explicit
+#   follow-up. Nothing consumes this file yet — it encodes policy, not runtime.
+
+version: 1
+
+# Effort is TWO independent dimensions. execution_effort may downshift by task
+# difficulty (review is the safety net); review_effort_floor may NOT follow it
+# down. execution_mode is a work posture (fast/careful), NOT a reasoning effort.
+enums:
+  execution_seat: [claude, codex]       # family that PRODUCES the diff
+  execution_model:                       # producer model tiers, keyed by family
+    claude: [sonnet, opus, fable]
+    codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
+  execution_effort: [low, medium, high, max]
+  review_effort: [high, xhigh]          # floor is `high`; never below
+  execution_mode: [fast, careful]
+  review_seat: [codex, fable]           # who may hold the final-review seat
+  review_independence: [cross_family_blind, same_family_independent]
+
+# --- Task-shape base routes -------------------------------------------------
+# execution_seat lists the families allowed to PRODUCE the diff for that shape.
+# execution_model maps each allowed family to its default model tier. Final
+# review is Codex-family (cross-family) unless final_review or an overlay says
+# otherwise. execution_effort and review_effort_floor are separate keys so they
+# cannot collapse into one number.
+task_shapes:
+  ordinary_bug_fix:                # pinpoint fix; no judgment shape, no flip trigger
+    execution_seat: [claude, codex]  # either family may land (house split: Codex owns pinpoint fixes)
+    execution_model:
+      claude: sonnet
+      codex: gpt-5.6-terra           # ordinary bug tier per the Codex spawn table
+    execution_effort: medium
+    execution_mode: fast
+    review_effort_floor: high
+  mechanical:                      # formatting / mechanical edits; no behavior change
+    execution_seat: [claude]
+    execution_model:
+      claude: sonnet               # fast-opus acceptable when sonnet underfits
+    execution_effort: low          # may downshift; base low-medium
+    execution_mode: fast
+    review_effort_floor: high
+  standard_feature:
+    execution_seat: [claude]
+    execution_model:
+      claude: opus
+    execution_effort: medium       # base medium-high; may downshift
+    execution_mode: careful
+    review_effort_floor: high
+  judgment:                        # architecture / tradeoffs / schema / 0-to-1; Claude-side direction
+    execution_seat: [claude]
+    execution_model:
+      claude: opus
+    execution_effort: high         # do not downshift below high
+    execution_mode: careful
+    review_effort_floor: high
+  restricted_zone:                 # 禁区: money/permissions/migrations/DocType/PII/irreversible
+    execution_seat: [claude]
+    execution_model:
+      claude: opus
+    execution_effort: high         # escalate toward max; do NOT downshift
+    execution_mode: careful
+    review_effort_floor: xhigh     # always inherits the risk overlay below
+  arbitration:                     # cross-family tie-break / adversarial judgment seat
+    execution_seat: [claude]
+    execution_model:
+      claude: fable
+    execution_effort: max
+    execution_mode: careful
+    review_effort_floor: high
+
+# --- Risk overlays (flip list) ----------------------------------------------
+# If a task touches ANY trigger below, apply the overlay ON TOP of its base
+# route regardless of shape. Overlays only ratchet UP, never down.
+risk_overlays:
+  triggers:
+    - money
+    - permissions
+    - migration
+    - doctype_or_schema
+    - pii
+    - irreversible_write
+  effect:
+    # Ratchet: effective floor = max(base review_effort_floor, overlay floor).
+    review_effort_floor: xhigh
+    final_review_independence: cross_family_blind   # cross-family mandatory
+
+# --- Final review invariants ------------------------------------------------
+final_review:
+  # Invariant, applies in ALL cases: the reviewing seat/session is NEVER the one
+  # that produced the diff (seat independence). Independence of MODEL FAMILY is
+  # the tunable below, and is evaluated as reviewer family vs PRODUCER family
+  # (the execution_seat that landed the diff).
+  seat_independence: required
+
+  default:
+    independence: cross_family_blind    # Codex reviews Claude-family work
+    review_effort_floor: high
+
+  # User ruling D3 (2026-07-11): an ordinary bug fix MAY be finally reviewed by
+  # an independent same-family session (an independent Codex session/pass that
+  # did NOT produce the diff). Seat independence still holds; only the
+  # cross-family requirement is relaxed. This is ALLOWED, not required.
+  ordinary_bug_fix:
+    independence: same_family_independent
+    review_effort_floor: high
+
+  # These REMAIN cross-family blind and mandatory; D3 does not relax them.
+  # References are canonical ids: task_shapes keys and the risk overlay.
+  cross_family_mandatory:
+    task_shapes: [judgment, restricted_zone, arbitration]
+    risk_overlay_triggers: all   # any flip trigger forces cross_family_blind via the overlay
+
+# --- Degradation chain ------------------------------------------------------
+# When the Codex (cross-family) reviewer is unavailable.
+degradation:
+  codex_exec_unavailable:
+    fallback_reviewer: fable               # review_seat enum; independent Claude-family pass
+    require_annotation: "cross-family review absent"
+    # Fail-safe: NEVER reuse a stale prior review in place of a fresh pass.
+    forbid_stale_review_substitution: true
+    # For cross_family_mandatory work the fallback is PROVISIONAL only: it may
+    # unblock iteration but NOT completion. Ship requires a fresh cross-family
+    # pass once Codex is available, or an explicit user waiver recorded in the
+    # intent/ledger.
+    cross_family_mandatory_items: provisional_only
+
+# --- Validation (fail-closed) -----------------------------------------------
+# For the deferred routing_eval.py wiring: unknown values and empty case sets
+# must FAIL, not silently pass as a default route or a vacuous 100% (0/0).
+validation:
+  fail_closed: true
+  unknown_enum_value: fail          # reject any value outside `enums`
+  empty_case_set: fail              # 0 cases is a failure, not 0/0 = pass
+  missing_required_key: fail

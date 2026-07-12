@@ -4,3 +4,4 @@ __pycache__/
 skills-manifest.json
 reports/*.json
 
+_knowledge_base/

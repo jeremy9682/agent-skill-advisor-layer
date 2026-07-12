@@ -10,6 +10,12 @@ guessing.
 against locally installed skill names/descriptions with a deterministic
 lexical baseline (CJK bigrams + IDF). No LLM, no network, CI-safe.
 
+The same command also checks `model_routing_cases` in `cases.yaml`. These cases
+do not score prompts or call models. They are deterministic policy regressions:
+given `task_shape`, `risk_zone`, and `repo_profile`, the runner computes the
+expected direction/landing/final-review seats, effort tier, and required gates,
+then compares them with the case expectation.
+
 Reported per run:
 
 - `recall@3` — expected skill surfaced in top-3 candidates.
@@ -28,6 +34,9 @@ Reported per run:
 - description lint — trigger-clause and confirm-language checks.
 - supply-chain evidence — root, path, SKILL.md hash, frontmatter issues for
   every skill evaluated (gate evidence for the skill layer itself).
+- `model routing policy` — deterministic seat/effort/gate checks for task
+  scale decisions. Failures mean the documented policy drifted, not that a
+  runtime model should be switched.
 
 ## What This Is Not
 
@@ -35,6 +44,10 @@ A lexical baseline cannot judge task intent. Passing means the trigger
 contract did not regress, not that routing is semantically correct. Do not
 optimize descriptions into keyword soup to game recall; lint checks
 structure, evals check regressions, humans check meaning.
+
+Model-routing evals are also not a provider router. Provider fallback, budget
+routing, rate limits, and latency-based routing belong in a model gateway such
+as LiteLLM or a platform-native gateway, not in this repository.
 
 ## Router Hook And Hints
 
@@ -51,6 +64,10 @@ basename only) to `~/.codex/skill-governance/routing-log.jsonl`.
 The hook also skips known meta-prompts such as task notifications and
 agent-to-agent review briefs. Those prompts are already instructions to another
 agent, not user intent for local skill routing.
+
+Do not add model/effort classification to this hook. Model routing is recorded
+in intent and checked offline so the prompt hot path stays no-LLM, no-network,
+advisory-only, and failure-silent.
 
 ## Growing The Case Set
 

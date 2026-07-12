@@ -49,7 +49,15 @@ def test_tokenize_handles_cjk_bigrams():
     routing = load_routing_module()
     tokens = routing.tokenize("修复 bug")
     assert "bug" in tokens
-    assert "修" in tokens and "修复" in tokens
+    assert "修复" in tokens
+    # 2026-07-11 契约变更：单字 CJK token 不再发出（零区分度碎片在
+    # 英文为主的技能池里获得虚高 IDF，实测把纯执行指令路由到 huashu-design
+    # 13.43 分）。真实中文信号由 bigram 承载。
+    assert "修" not in tokens
+    # 1-2 位纯数字同理（"codex 5.6" 的 5/6 曾命中 "5 维度评审"）；
+    # 3 位以上保留（报错码 500 是真信号）。
+    assert "5" not in routing.tokenize("codex 5.6 审核")
+    assert "500" in routing.tokenize("接口报 500 了")
 
 
 def test_eval_recall_and_gate_detection(tmp_path):
@@ -235,6 +243,65 @@ def test_known_leak_is_reported_but_not_a_violation(tmp_path):
     assert any(e["skill"] == "fixture-ship" for e in report["gate_dependency_events"])
 
 
+def test_model_route_policy_keeps_small_fix_small():
+    routing = load_routing_module()
+
+    policy = routing.model_route_policy({
+        "task_shape": "small_fix",
+        "risk_zone": "low",
+        "repo_profile": "restricted-zone-heavy",
+        "mechanical": True,
+    })
+
+    assert policy["direction_seat"] == "codex"
+    assert policy["landing_seat"] == "codex"
+    assert policy["final_review_seat"] == "none"
+    assert policy["effort"] == "medium-fast"
+    assert policy["gates"] == ["focused_verification"]
+    assert policy["hot_path"] is False
+
+
+def test_model_route_policy_escalates_restricted_feature():
+    routing = load_routing_module()
+
+    policy = routing.model_route_policy({
+        "task_shape": "feature",
+        "risk_zone": "restricted",
+        "repo_profile": "restricted-zone-heavy",
+    })
+
+    assert policy["direction_seat"] == "claude"
+    assert policy["landing_seat"] == "implementation_owner"
+    assert policy["final_review_seat"] == "codex"
+    assert policy["effort"] == "xhigh"
+    assert policy["gates"] == [
+        "intent",
+        "plan_gate",
+        "blind_plan_review",
+        "final_diff_review",
+    ]
+    assert policy["hot_path"] is False
+
+
+def test_model_routing_eval_flags_policy_mismatch():
+    routing = load_routing_module()
+
+    report = routing.run_model_routing_eval([
+        {
+            "id": "bad-small-fix",
+            "task_shape": "small_fix",
+            "risk_zone": "low",
+            "repo_profile": "default",
+            "expect_policy": {"effort": "xhigh"},
+        }
+    ])
+
+    assert report["total"] == 1
+    assert report["hits"] == 0
+    assert report["failures"][0]["id"] == "bad-small-fix"
+    assert report["failures"][0]["mismatches"]["effort"]["actual"] == "medium-fast"
+
+
 def test_supply_chain_evidence_present_in_skills_and_lint(tmp_path):
     routing = load_routing_module()
     audit = routing.load_audit_module()
@@ -276,5 +343,8 @@ def test_repo_cases_file_parses():
     routing = load_routing_module()
     data = routing.parse_cases(ROOT / "routing-evals" / "cases.yaml")
     cases = data.get("cases", [])
+    model_cases = data.get("model_routing_cases", [])
     assert len(cases) >= 15
     assert all(c.get("id") and c.get("prompt") for c in cases)
+    assert len(model_cases) >= 5
+    assert all(c.get("id") and c.get("expect_policy") for c in model_cases)

@@ -47,11 +47,16 @@ KNOWN_REMOTES = {
         "url": "https://github.com/alchaincyf/huashu-design.git",
         "branch": "master",
     },
+    "mattpocock-skills": {
+        "url": "https://github.com/mattpocock/skills.git",
+        "branch": "main",
+    },
 }
 
 LOCAL_REPO_FALLBACKS = {
     "https://github.com/alchaincyf/huashu-skills.git": GOV_ROOT / "cache" / "huashu-skills",
     "https://github.com/alchaincyf/huashu-design.git": GOV_ROOT / "cache" / "huashu-design",
+    "https://github.com/mattpocock/skills.git": GOV_ROOT / "cache" / "mattpocock-skills",
 }
 
 SKIP_DIRS = {
@@ -286,6 +291,8 @@ def git_info(path: Path) -> dict[str, Any]:
 
 def source_group(name: str, path: Path, git: dict[str, Any]) -> str:
     remote = git.get("git_remote", "")
+    if "mattpocock/skills" in remote or name in {"grill-me", "grilling"}:
+        return "mattpocock-skills"
     if name == "huashu-design" or "huashu-design" in remote:
         return "huashu-design"
     if name.startswith("huashu-"):
@@ -304,6 +311,8 @@ def source_group(name: str, path: Path, git: dict[str, Any]) -> str:
 def update_policy(name: str, group: str, git: dict[str, Any], path: Path) -> str:
     if group == "huashu-skills" and name != "huashu-design":
         return "auto-sync-if-clean"
+    if group == "mattpocock-skills":
+        return "merge-only"
     if group in {"huashu-design", "gstack", "frontend-design"}:
         return "merge-only" if git.get("git_dirty") else "git-managed"
     if path.is_symlink() or group == "symlink-source":
@@ -578,42 +587,196 @@ def dependency_checks() -> dict[str, str]:
     return result
 
 
-def estimate_usage(entries: list[dict[str, Any]], days: int, limit: int, max_bytes: int) -> dict[str, int]:
-    names = sorted({e["dir_name"] for e in entries} | {e["name"] for e in entries})
-    valid = set(names)
-    counts = {name: 0 for name in names}
-    cutoff = dt.datetime.now().timestamp() - days * 86400
-    files: list[Path] = []
-    for base in [HOME / ".codex" / "sessions", HOME / ".claude" / "projects"]:
-        if base.exists():
-            files.extend([p for p in base.rglob("*.jsonl") if p.stat().st_mtime >= cutoff])
-    files = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
-    skill_path_re = re.compile(r"/skills/([^/\s]+)/SKILL\.md")
-    dollar_re = re.compile(r"\$([A-Za-z0-9:_-]+)")
-    skill_call_re = re.compile(r"Skill\(([A-Za-z0-9:_-]+)")
-    markers = ("/skills/", "SKILL.md", "Skill(", "$")
-    for f in files:
-        try:
-            if f.stat().st_size > max_bytes:
+USAGE_KINDS = (
+    "actual_skill_invocation",
+    "skill_file_read",
+    "self_audit_read",
+    "gstack_timeline",
+    "assistant_announcement",
+)
+
+SELF_AUDIT_MARKERS = (
+    "skill_audit.py",
+    "router_selftune.py",
+    "routing_eval.py --doctor",
+    "routing_eval.py\", \"--doctor",
+    "routing_eval.py', '--doctor",
+)
+
+
+def empty_usage() -> dict[str, int]:
+    return {kind: 0 for kind in USAGE_KINDS}
+
+
+def record_usage(counts: dict[str, dict[str, int]], alias: str, kind: str, valid: set[str]) -> None:
+    if alias in valid and kind in USAGE_KINDS:
+        counts.setdefault(alias, empty_usage())[kind] += 1
+
+
+def iter_tool_uses(value: Any):
+    if isinstance(value, dict):
+        if value.get("type") == "tool_use" and value.get("name"):
+            yield value
+        for child in value.values():
+            yield from iter_tool_uses(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from iter_tool_uses(child)
+
+
+def skill_alias_from_path(path_text: str, valid: set[str]) -> str | None:
+    parts = path_text.split("/")
+    try:
+        idx = len(parts) - 1 - parts[::-1].index("skills")
+    except ValueError:
+        return None
+    if idx + 1 >= len(parts):
+        return None
+    alias = parts[idx + 1]
+    return alias if alias in valid else None
+
+
+def is_self_audit_read(text: str) -> bool:
+    """Return true when one tool call identifies itself as audit/doctor work.
+
+    Session transcripts do not preserve child PID or parent-process metadata, so
+    reads issued in a *different* tool call cannot be attributed reliably.  This
+    deliberately conservative check catches explicit and batch shell reads whose
+    command also names the audit, self-tune, or doctor entry point; ambiguous
+    standalone reads remain skill_file_read rather than being silently excluded.
+    """
+    normalized = re.sub(r"\s+", " ", text).lower()
+    return any(marker in normalized for marker in SELF_AUDIT_MARKERS)
+
+
+def record_skill_paths(text: str, counts: dict[str, dict[str, int]], valid: set[str]) -> None:
+    kind = "self_audit_read" if is_self_audit_read(text) else "skill_file_read"
+    for match in re.finditer(r"(?:~|/Users/[^\s\"']+)/[^\s\"']*/skills/[^\s\"']+/SKILL\.md", text):
+        alias = skill_alias_from_path(match.group(0), valid)
+        if alias:
+            record_usage(counts, alias, kind, valid)
+
+
+def record_gstack_commands(text: str, counts: dict[str, dict[str, int]], valid: set[str]) -> None:
+    for match in re.finditer(r"(?:^|[\s;&|()])(?:[^\s;&|()]+/)?(gstack-[a-z0-9-]+)\b", text):
+        alias = match.group(1)
+        if alias in valid:
+            record_usage(counts, alias, "actual_skill_invocation", valid)
+
+
+def record_assistant_announcements(text: str, counts: dict[str, dict[str, int]], valid: set[str]) -> None:
+    patterns = [
+        r"使用 `([^`]+)` skill",
+        r"用到 `([^`]+)`",
+        r"using (?:the )?`?([\w:-]+)`? skill",
+        r"我会用到 `([^`]+)`",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            record_usage(counts, match.group(1), "assistant_announcement", valid)
+
+
+def scan_codex_session(path: Path, counts: dict[str, dict[str, int]], valid: set[str], max_bytes: int) -> None:
+    if path.stat().st_size > max_bytes:
+        return
+    with path.open(errors="ignore") as fh:
+        for line in fh:
+            try:
+                obj = json.loads(line)
+            except ValueError:
                 continue
-            seen: set[str] = set()
-            with f.open(errors="ignore") as fh:
+            if obj.get("type") != "response_item":
+                continue
+            payload = obj.get("payload") or {}
+            if payload.get("type") == "function_call":
+                args = payload.get("arguments") or ""
+                if not isinstance(args, str):
+                    args = json.dumps(args, ensure_ascii=False)
+                record_skill_paths(args, counts, valid)
+                record_gstack_commands(args, counts, valid)
+            elif payload.get("type") == "message" and payload.get("role") == "assistant":
+                text = "\n".join(
+                    part.get("text", "")
+                    for part in payload.get("content", [])
+                    if isinstance(part, dict)
+                )
+                record_assistant_announcements(text, counts, valid)
+
+
+def scan_claude_session(path: Path, counts: dict[str, dict[str, int]], valid: set[str], max_bytes: int) -> None:
+    if path.stat().st_size > max_bytes:
+        return
+    with path.open(errors="ignore") as fh:
+        for line in fh:
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            for tool_use in iter_tool_uses(obj):
+                name = tool_use.get("name")
+                tool_input = tool_use.get("input") or {}
+                if name == "Skill" and isinstance(tool_input, dict):
+                    alias = tool_input.get("skill") or tool_input.get("name") or tool_input.get("skill_name")
+                    if isinstance(alias, str):
+                        record_usage(counts, alias, "actual_skill_invocation", valid)
+                if name in {"Read", "Bash"} and isinstance(tool_input, dict):
+                    text = json.dumps(tool_input, ensure_ascii=False)
+                    record_skill_paths(text, counts, valid)
+                    if name == "Bash":
+                        record_gstack_commands(text, counts, valid)
+            if obj.get("type") == "assistant" and isinstance(obj.get("message"), dict):
+                text = json.dumps(obj["message"].get("content", ""), ensure_ascii=False)
+                record_assistant_announcements(text, counts, valid)
+
+
+def scan_gstack_timeline(counts: dict[str, dict[str, int]], valid: set[str], cutoff: float) -> None:
+    base = HOME / ".gstack" / "projects"
+    if not base.exists():
+        return
+    for path in base.glob("*/timeline.jsonl"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+            with path.open(errors="ignore") as fh:
                 for line in fh:
-                    if not any(marker in line for marker in markers):
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
                         continue
-                    for match in skill_path_re.findall(line):
-                        if match in valid:
-                            seen.add(match)
-                    for match in dollar_re.findall(line):
-                        if match in valid:
-                            seen.add(match)
-                    for match in skill_call_re.findall(line):
-                        if match in valid:
-                            seen.add(match)
+                    alias = obj.get("skill")
+                    if isinstance(alias, str):
+                        record_usage(counts, alias, "gstack_timeline", valid)
         except Exception:
             continue
-        for name in seen:
-            counts[name] += 1
+
+
+def estimate_usage(entries: list[dict[str, Any]], days: int, limit: int, max_bytes: int) -> dict[str, dict[str, int]]:
+    names = sorted({e["dir_name"] for e in entries} | {e["name"] for e in entries})
+    valid = set(names)
+    counts = {name: empty_usage() for name in names}
+    cutoff = dt.datetime.now().timestamp() - days * 86400
+    codex_files: list[Path] = []
+    claude_files: list[Path] = []
+    if (HOME / ".codex" / "sessions").exists():
+        codex_files = [
+            p for p in (HOME / ".codex" / "sessions").rglob("*.jsonl")
+            if p.stat().st_mtime >= cutoff
+        ]
+    if (HOME / ".claude" / "projects").exists():
+        claude_files = [
+            p for p in (HOME / ".claude" / "projects").rglob("*.jsonl")
+            if p.stat().st_mtime >= cutoff
+        ]
+    files = sorted(codex_files + claude_files, key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+    for f in files:
+        try:
+            if "/.codex/sessions/" in str(f):
+                scan_codex_session(f, counts, valid, max_bytes)
+            else:
+                scan_claude_session(f, counts, valid, max_bytes)
+        except Exception:
+            continue
+    scan_gstack_timeline(counts, valid, cutoff)
     return counts
 
 
@@ -623,7 +786,19 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     entries = discover_skills()
     usage = estimate_usage(entries, args.usage_days, args.usage_file_limit, args.usage_size_limit)
     for entry in entries:
-        entry["usage_recent_file_hits"] = usage.get(entry["dir_name"], 0) + usage.get(entry["name"], 0)
+        # Entry-level evidence credits every installed copy that matches the
+        # entry's aliases. The top-level summary below stays alias-level so
+        # duplicate installs do not inflate fleet usage totals.
+        combined = empty_usage()
+        for alias in {entry["dir_name"], entry["name"]}:
+            for kind, value in usage.get(alias, empty_usage()).items():
+                combined[kind] += value
+        entry["usage_recent"] = combined
+        entry["usage_recent_file_hits"] = combined["skill_file_read"]
+        entry["self_read_excluded"] = combined["self_audit_read"]
+        entry["usage_recent_total_evidence"] = sum(
+            value for kind, value in combined.items() if kind != "self_audit_read"
+        )
 
     remotes = {name: ls_remote(meta["url"], meta["branch"]) for name, meta in KNOWN_REMOTES.items()}
     sync_actions = []
@@ -644,6 +819,10 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "merge_only_count": sum(1 for e in entries if e["update_policy"] == "merge-only"),
             "auto_sync_candidate_count": sum(1 for e in entries if e["update_policy"] == "auto-sync-if-clean"),
         },
+        "usage_summary": {
+            kind: sum(counts[kind] for counts in usage.values())
+            for kind in USAGE_KINDS
+        },
         "dependency_checks": dependency_checks(),
         "sync_actions": sync_actions,
         "huashu_design": check_huashu_design(entries),
@@ -654,6 +833,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         },
         "entries": entries,
     }
+    report["usage_summary"]["self_read_excluded"] = report["usage_summary"]["self_audit_read"]
     return report
 
 
@@ -683,6 +863,7 @@ def main(argv: list[str]) -> int:
     print(json.dumps({
         "generated_at": report["generated_at"],
         "summary": report["summary"],
+        "usage_summary": report["usage_summary"],
         "dependency_checks": report["dependency_checks"],
         "sync_actions": report["sync_actions"][:20],
         "huashu_design": report["huashu_design"],

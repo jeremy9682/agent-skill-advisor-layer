@@ -34,6 +34,10 @@ cases:
     prompt: "review 一下我当前分支的改动"
     expect: [review, devex-review]
 
+  - id: grill-me-plan
+    prompt: "grill me 这个产品判断，别顺着我，帮我找漏洞"
+    expect: [grilling]
+
   - id: site-qa
     prompt: "帮我测试一下这个网站，找找有没有 bug"
     expect: [qa, qa-only, browse]
@@ -151,6 +155,113 @@ cases:
     # "判断席/终审席" prompts must NOT be globally skipped) is asserted directly
     # against should_skip_prompt in tests/test_routing_eval.py — it lives at the
     # skip layer, which cases.yaml (fire layer) cannot distinguish from no-fire.
+
+  # CJK-fragment false positives locked in (2026-07-11, YunChouAI session):
+  # plain Chinese execution directives scored huashu-design at 13.43 (3.4x
+  # the old threshold) — single-char CJK tokens + generic process-word
+  # bigrams from its long Chinese description carry inflated IDF in a
+  # mostly-English fleet. Fixed in tokenize (no single CJK chars, no 1-2
+  # digit numbers) + CJK_STOP_BIGRAMS extension + threshold recalibration.
+  - id: exec-directive-with-review-seats
+    prompt: "好的，按照你们的建议执行，，根据任务的难度分配不同的模型和effort，给Claude还有codex，codex 5.6 和fable5用来最终审核"
+    expect: []
+
+  - id: explain-in-simple-terms
+    prompt: "这是那个是什么用简单易懂的语言讲解下"
+    expect: []
+
+  - id: prod-handoff-instruction
+    prompt: "你把具体指令或者谁handoff告诉我，我让生产环节的Claude去做"
+    expect: []
+
+# --- model routing policy cases ---
+# These are offline policy checks for task scale, not prompt routing cases.
+# They never call models and never affect the UserPromptSubmit hook.
+model_routing_cases:
+  - id: small-fix-low-risk
+    task_shape: small_fix
+    risk_zone: low
+    repo_profile: default
+    expect_policy:
+      direction_seat: codex
+      landing_seat: codex
+      final_review_seat: none
+      effort: medium-fast
+      gates: [focused_verification]
+      hot_path: false
+
+  - id: default-feature
+    task_shape: feature
+    risk_zone: default
+    repo_profile: default
+    expect_policy:
+      direction_seat: claude
+      landing_seat: implementation_owner
+      final_review_seat: codex
+      effort: high
+      gates: [intent, final_diff_review]
+      hot_path: false
+
+  - id: broad-refactor-plan-gate
+    task_shape: broad_refactor
+    risk_zone: default
+    repo_profile: default
+    expect_policy:
+      direction_seat: claude
+      landing_seat: implementation_owner
+      final_review_seat: codex
+      effort: high
+      gates: [intent, plan_gate, final_diff_review]
+      hot_path: false
+
+  - id: restricted-feature
+    task_shape: feature
+    risk_zone: restricted
+    repo_profile: restricted-zone-heavy
+    expect_policy:
+      direction_seat: claude
+      landing_seat: implementation_owner
+      final_review_seat: codex
+      effort: xhigh
+      gates: [intent, plan_gate, blind_plan_review, final_diff_review]
+      hot_path: false
+
+  - id: code-review-default
+    task_shape: code_review
+    risk_zone: default
+    repo_profile: default
+    expect_policy:
+      direction_seat: reviewer
+      landing_seat: none
+      final_review_seat: none
+      effort: high
+      gates: [intent]
+      hot_path: false
+
+  - id: release-ship
+    task_shape: release_ship
+    risk_zone: irreversible
+    repo_profile: default
+    expect_policy:
+      direction_seat: gate_owner
+      landing_seat: release_owner
+      final_review_seat: codex
+      effort: xhigh
+      gates: [intent, green_checks, final_diff_review, ship_gate]
+      hot_path: false
+
+  - id: restricted-repo-mechanical-small-fix
+    task_shape: small_fix
+    risk_zone: low
+    repo_profile: restricted-zone-heavy
+    mechanical: true
+    expect_policy:
+      direction_seat: codex
+      landing_seat: codex
+      final_review_seat: none
+      effort: medium-fast
+      gates: [focused_verification]
+      hot_path: false
 
 # --- candidate zone ---
 # Reserved for the skill-doctor loop: real routing failures observed in

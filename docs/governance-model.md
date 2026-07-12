@@ -19,6 +19,8 @@ The manifest records:
 - source group;
 - update policy;
 - call policy;
+- recent usage evidence split by source: actual skill invocation, SKILL.md
+  file read, gstack timeline, and assistant announcement;
 - script syntax checks;
 - dependency checks.
 
@@ -35,8 +37,8 @@ The manifest records:
 
 - `auto-sync-if-clean`: copied skills may sync only when the previous manifest
   proves there were no local edits.
-- `merge-only`: git-backed or locally modified skills must be reviewed and
-  merged manually.
+- `merge-only`: git-backed, locally modified, or external community skills
+  must be reviewed and merged manually.
 - `source-managed`: symlinked skills are controlled by their source tree.
 - `manual-only`: local/manual skills are never overwritten automatically.
 
@@ -56,4 +58,3 @@ Prefer project-local reduction over global `off`.
 
 Codex does not currently expose an equivalent per-skill lifecycle switch in the
 same way. Use project/global `AGENTS.md` routing rules plus the audit manifest.
-
