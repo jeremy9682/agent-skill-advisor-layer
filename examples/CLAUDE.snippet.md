@@ -27,8 +27,9 @@ Default split:
   review runs high by default, max on restricted-zone diffs, never below high.
 
 High-cost workflows such as `/no-mistakes`, `/lfg`, `ship`,
-`overnight-execution`, and multi-agent swarms require explicit approval before
-execution. Suggest first:
+`overnight-execution`, multi-agent swarms, and the pinned mattpocock workflows
+`research`, `code-review`, `improve-codebase-architecture`, and `wayfinder`
+require explicit approval before execution. Suggest first:
 
 ```text
 This looks like a candidate for <skill> because <reason>. I can run it if you approve.
@@ -42,3 +43,9 @@ asks to be grilled, challenged, red-teamed, or says "push back", "challenge my
 thinking", "拷问我", "质询我", "反方审一下", "别顺着我", or "找漏洞". `/grill-me` is
 the explicit wrapper that delegates to `/grilling`. This is not a high-cost
 workflow and must not replace code review, QA, security review, or ship gates.
+
+For the published `mattpocock/skills` bundle, local routing policy, seat
+independence, checkpoint ledger, risk overlays, final review, and ship gate
+override upstream flow prose. Honor `disable-model-invocation` wrappers as
+explicit-only. Optional spawn/parallel branches still require current-session
+authority; `/implement` is not release authority.

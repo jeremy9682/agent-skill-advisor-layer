@@ -136,3 +136,30 @@ def test_revisit_non_dict_json_line_fails_closed(tmp_path, monkeypatch):
     r = m.revisit_tracker("2026-07-06", green=True, attractor_count=0, thin=False)  # must not raise
     assert r["error"] is not None
     assert r["met"] is False
+
+
+def test_main_exit_code_reflects_pin_gate(tmp_path, monkeypatch):
+    m = load_selftune()
+    monkeypatch.setattr(m, "GOV_DIR", tmp_path)
+    monkeypatch.setattr(m, "load_routing", lambda: object())
+    monkeypatch.setattr(m, "recall_is_green", lambda: (True, "recall green"))
+    monkeypatch.setattr(m, "analyze_log", lambda _routing: {
+        "emissions": 0, "fires": 0, "attractors": [], "thin": True,
+    })
+    monkeypatch.setattr(m, "revisit_tracker", lambda *_args: {
+        "streak": 0, "need": 4, "clean": False, "weeks_recorded": 0, "error": None,
+        "met": False,
+    })
+    monkeypatch.setattr(m.subprocess, "run", lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(m, "pin_gate", lambda _routing: {
+        "ok": False, "external": 1, "unpinned_count": 1,
+        "unpinned": [], "error": None,
+    })
+    assert m.main() == 1
+
+    monkeypatch.setattr(m, "pin_gate", lambda _routing: {
+        "ok": True, "external": 1, "unpinned_count": 0,
+        "unpinned": [], "error": None,
+    })
+    assert m.main() == 0

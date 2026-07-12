@@ -171,6 +171,21 @@ def analyze_log(routing) -> dict:
             "attractors": attractors, "thin": fires < MIN_FIRES_FOR_CONFIDENCE}
 
 
+def pin_gate(routing) -> dict:
+    """Weekly supply-chain pin gate (Tier-2 ⑤): every external skill must hold
+    an immutable identifier. Fail-closed: any error running the check reports
+    not-ok rather than silently green."""
+    try:
+        audit = routing.load_audit_module()
+        pins = audit.pin_check(audit.discover_skills())
+        return {"ok": pins["unpinned_count"] == 0,
+                "unpinned": pins["unpinned"], "unpinned_count": pins["unpinned_count"],
+                "external": pins["external_count"], "error": None}
+    except Exception as exc:  # noqa: BLE001 — governance signal must not crash the report
+        return {"ok": False, "unpinned": [], "unpinned_count": -1,
+                "external": -1, "error": str(exc)[:160]}
+
+
 def main() -> int:
     routing = load_routing()
     today = dt.date.today().isoformat()
@@ -197,6 +212,15 @@ def main() -> int:
             L.append(f"  - \"{h}\"")
         L.append(f"  → you decide a `negative_triggers` pattern for `{a['skill']}` "
                  "from what you see above.")
+
+    pg = pin_gate(routing)
+    L += ["", "## Supply-chain pin gate (Tier-2 \u2464)",
+          (f"- PASS \u2014 all {pg['external']} external skills pinned"
+           if pg["ok"] else
+           f"- **FAIL** \u2014 {pg['unpinned_count']} unpinned external skill(s)"
+           + (f" (check error: {pg['error']})" if pg["error"] else ""))]
+    for u in (pg["unpinned"] or [])[:5]:
+        L.append(f"  - {u['runtime']}/{u['name']}: {u['reason']} ({u['path']})")
 
     rv = revisit_tracker(today, green, len(log["attractors"]), log["thin"])
     L += ["", "## Codex routing-hook revisit (Tier-2 ④)",
@@ -235,9 +259,10 @@ def main() -> int:
 
     n_att = len(log["attractors"])
     revisit_note = " ④ REVISIT MET" if rv["met"] else f" ④ {rv['streak']}/{rv['need']} clean"
+    pin_note = " pins OK" if pg["ok"] else f" PINS FAIL({pg['unpinned_count']})"
     summary = (f"recall {'GREEN' if green else 'RED!'}; "
                f"{n_att} attractor proposal(s); {log['fires']} fires logged;"
-               f"{revisit_note}")
+               f"{revisit_note};{pin_note}")
     try:
         subprocess.run(
             ["osascript", "-e",
@@ -248,7 +273,7 @@ def main() -> int:
 
     print(report)
     print(f"[report saved: {out}]")
-    return 0 if green else 1
+    return 0 if green and pg["ok"] else 1
 
 
 if __name__ == "__main__":

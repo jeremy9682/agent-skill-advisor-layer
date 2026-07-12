@@ -50,9 +50,11 @@ shrinks review scope, never review depth.
 
 ## Autonomous Pipeline Approval
 
-Workflows such as `/no-mistakes`, `/lfg`, `ship`, `overnight-execution`, and
-multi-agent swarms can create commits, push, open PRs, or watch CI. They are
-high-cost workflows.
+Workflows such as `/no-mistakes`, `/lfg`, `ship`, `overnight-execution`,
+multi-agent swarms, and the pinned mattpocock workflows `research`,
+`code-review`, `improve-codebase-architecture`, and `wayfinder` can consume
+background/sub-agent capacity, create durable issue maps or reports, create
+commits, push, open PRs, or watch CI. They are high-cost workflows.
 
 Do not start them from a broad outcome request like "ship this" or "finish the
 feature". Use:
@@ -92,6 +94,7 @@ tracked as a follow-up (see below) — not claimed complete here. Map 2026-07-12
 | ship (as `gstack-ship`) | `~/gstack/.agents/skills` | shared gstack worktree | no — same leak |
 | **overnight-execution** | `~/.agents/skills` | **real dir, no upstream, not shared** (separate inode from the `~/.claude` copy) | **yes — safe** |
 | no-mistakes / lfg | absent from every Codex root | not injected | n/a |
+| research / code-review / improve-codebase-architecture / wayfinder | `~/.codex/skills` | real dirs, pinned copied source (`mattpocock-skills`) | no — editing forks the registered upstream snapshot |
 
 **Deploy-capable skills NOT on the declared list** (surfaced by review; behave
 high-cost — commit/push/PR/deploy — but not currently gated). Adding any to the
@@ -99,10 +102,10 @@ enforced list is a policy decision that touches all three policy surfaces + the
 Tier-1 consistency lint, so these are **candidates pending the user's call**,
 not silently added; all are shared/plugin sources (Option A anyway):
 
-| Candidate | Codex-injected via | What it does |
-| --- | --- | --- |
-| land-and-deploy (`gstack-land-and-deploy`) | `~/.codex/skills` symlink → gstack worktree | merge PRs, drive a deploy |
-| yeet (`github` plugin) | `~/.codex/plugins/cache/**/github/**` | commit, push, open a PR |
+| Candidate | Codex-injected via | What it does | Status |
+| --- | --- | --- | --- |
+| land-and-deploy (`gstack-land-and-deploy`) | `~/.codex/skills` symlink → gstack worktree | merge PRs, drive a deploy | **user ruled 2026-07-12: NOT added** (frequently used; prose + review gates suffice) |
+| yeet (`github` plugin) | `~/.codex/plugins/cache/**/github/**` | commit, push, open a PR | pending user decision |
 
 **Follow-up (open):** a full census of injected skills that perform
 state-changing git/deploy operations — across all roots including the 222-file
@@ -122,6 +125,14 @@ do NOT auto-start` marker (the only enforcement lever Codex honors). That edit
 is a local skill-file change, not tracked in this repo, because the skill lives
 outside it; backup at `SKILL.md.bak-gate`. Re-evaluate the same in-place gate
 for any future high-cost skill that lands as a locally-owned real dir.
+
+For the mattpocock group, Option A is reinforced by three machine-visible
+surfaces: `SUGGEST_CONFIRM_SKILLS` classifies the four workflows as
+`suggest-confirm`, routing cases allow them only in explicit high-cost cases,
+and the source group stays commit-pinned. Claude's upstream
+`disable-model-invocation` additionally covers `improve-codebase-architecture`
+and `wayfinder`; the local overlay deliberately upgrades model-invoked
+`research` and `code-review` to suggest-confirm on both runtimes.
 
 ## Runtime Verification Evidence
 

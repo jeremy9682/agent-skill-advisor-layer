@@ -53,6 +53,33 @@ KNOWN_REMOTES = {
     },
 }
 
+# Published bundle from mattpocock/skills .claude-plugin/plugin.json at the
+# registered pin below. These are copied installs (no per-skill .git metadata),
+# so name membership is the provenance bridge used by the local audit.
+MATTPOCOCK_SKILLS = {
+    "ask-matt",
+    "code-review",
+    "codebase-design",
+    "diagnosing-bugs",
+    "domain-modeling",
+    "grill-with-docs",
+    "grill-me",
+    "grilling",
+    "handoff",
+    "implement",
+    "improve-codebase-architecture",
+    "prototype",
+    "research",
+    "setup-matt-pocock-skills",
+    "tdd",
+    "teach",
+    "to-spec",
+    "to-tickets",
+    "triage",
+    "wayfinder",
+    "writing-great-skills",
+}
+
 LOCAL_REPO_FALLBACKS = {
     "https://github.com/alchaincyf/huashu-skills.git": GOV_ROOT / "cache" / "huashu-skills",
     "https://github.com/alchaincyf/huashu-design.git": GOV_ROOT / "cache" / "huashu-design",
@@ -93,6 +120,7 @@ ROUTER_HINTS = (
 )
 
 SUGGEST_CONFIRM_SKILLS = {
+    "code-review",
     "huashu-agent-swarm",
     "gstack-pair-agent",
     "pair-agent",
@@ -106,6 +134,9 @@ SUGGEST_CONFIRM_SKILLS = {
     "gstack-ship",
     "land-and-deploy",
     "overnight-execution",
+    "improve-codebase-architecture",
+    "research",
+    "wayfinder",
 }
 
 SUGGEST_CONFIRM_HINTS = (
@@ -229,11 +260,24 @@ def parse_frontmatter(path: Path) -> tuple[dict[str, Any], list[str]]:
 
 
 def iter_files_for_hash(root: Path) -> list[Path]:
+    """All files under root, FOLLOWING directory symlinks (a link-farm skill
+    may point whole subdirs elsewhere, e.g. bin → ~/gstack/bin — their content
+    must participate in the digest or drift there is invisible). A realpath
+    visited-set guards against symlink cycles."""
     files: list[Path] = []
     if root.is_file():
         return [root]
-    for current, dirs, filenames in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".cache")]
+    visited: set[str] = set()
+    for current, dirs, filenames in os.walk(root, followlinks=True):
+        real = os.path.realpath(current)
+        if real in visited:
+            dirs[:] = []
+            continue
+        visited.add(real)
+        # Sort in place so traversal order (hence which alias of a
+        # same-realpath dir is visited first) is deterministic across runs and
+        # filesystems — the digest must not depend on readdir order.
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith(".cache"))
         current_path = Path(current)
         for filename in filenames:
             if filename in SKIP_DIRS:
@@ -245,20 +289,27 @@ def iter_files_for_hash(root: Path) -> list[Path]:
 
 
 def tree_hash(root: Path) -> str:
+    """Content digest of a skill dir. Symlink-farm aware: the relative name is
+    taken from the WALK path (always under ``root``), never from ``resolve()``
+    — a symlinked file resolves outside the root and ``relative_to`` raised,
+    which the old code swallowed, silently yielding the empty-input sha256 for
+    every link-farm skill (no drift detection at all). Content reads follow
+    symlinks, so the digest covers the real bytes the runtime sees."""
     h = hashlib.sha256()
     if not root.exists():
         return ""
-    resolved_root = root.resolve()
     for p in iter_files_for_hash(root):
         try:
-            rp = p.resolve()
-            rel = str(rp.relative_to(resolved_root))
-            h.update(rel.encode("utf-8", "surrogateescape"))
-            h.update(b"\0")
-            h.update(rp.read_bytes())
-            h.update(b"\0")
-        except Exception:
-            continue
+            rel = str(p.relative_to(root))
+        except ValueError:
+            rel = p.name
+        h.update(rel.encode("utf-8", "surrogateescape"))
+        h.update(b"\0")
+        try:
+            h.update(p.read_bytes())
+        except OSError:
+            h.update(b"<unreadable>")
+        h.update(b"\0")
     return h.hexdigest()
 
 
@@ -291,7 +342,14 @@ def git_info(path: Path) -> dict[str, Any]:
 
 def source_group(name: str, path: Path, git: dict[str, Any]) -> str:
     remote = git.get("git_remote", "")
-    if "mattpocock/skills" in remote or name in {"grill-me", "grilling"}:
+    matt_copy_roots = {
+        root for key in ("codex", "claude")
+        if (root := SKILL_ROOTS.get(key)) is not None
+    }
+    if (
+        "mattpocock/skills" in remote
+        or (name in MATTPOCOCK_SKILLS and path.parent in matt_copy_roots)
+    ):
         return "mattpocock-skills"
     if name == "huashu-design" or "huashu-design" in remote:
         return "huashu-design"
@@ -322,12 +380,16 @@ def update_policy(name: str, group: str, git: dict[str, Any], path: Path) -> str
 
 def call_policy(name: str, description: str, frontmatter: dict[str, Any]) -> str:
     joined = f"{name} {description}".lower()
-    if str(frontmatter.get("disable-model-invocation", "")).lower() == "true":
-        return "explicit-only"
     if name == "skill-advisor":
         return "router"
+    # Local safety overlays outrank an upstream invocation hint. In particular,
+    # an upstream explicit wrapper can still be costly enough that natural-
+    # language routing must suggest and wait; an exact user invocation is the
+    # approval event that releases the gate.
     if name in SUGGEST_CONFIRM_SKILLS or any(h in joined for h in SUGGEST_CONFIRM_HINTS):
         return "suggest-confirm"
+    if str(frontmatter.get("disable-model-invocation", "")).lower() == "true":
+        return "explicit-only"
     if any(h in joined for h in ROUTER_HINTS):
         return "router"
     if any(h in joined for h in MANUAL_CONFIRM_HINTS):
@@ -355,6 +417,29 @@ def discover_skills() -> list[dict[str, Any]]:
             name = fm.get("name") or skill_dir.name
             desc = fm.get("description") or ""
             git = git_info(skill_dir)
+            if not git:
+                # Link-farm provenance: the dir itself is outside any checkout,
+                # but its SKILL.md may be a symlink INTO one (~/.codex/skills/
+                # gstack → ~/gstack). The resolved file's home is the honest
+                # provenance ONLY if the file is actually TRACKED there — a
+                # checkout dir can .gitignore the target (~/gstack ignores
+                # .agents/), and HEAD cannot reproduce untracked bytes, so
+                # granting git_head for those would be a fake pin.
+                resolved_md = skill_md.resolve()
+                if resolved_md.parent != skill_dir.resolve():
+                    candidate = git_info(resolved_md.parent)
+                    if candidate:
+                        repo_root = Path(candidate["git_root"])
+                        try:
+                            rel = str(resolved_md.relative_to(repo_root))
+                        except ValueError:
+                            rel = ""
+                        code, _, _ = run(
+                            ["git", "-C", str(repo_root), "ls-files",
+                             "--error-unmatch", rel],
+                            timeout=10) if rel else (1, "", "")
+                        if code == 0:
+                            git = candidate
             group = source_group(name, skill_dir, git)
             lcount = line_count(skill_md)
             entry = {
@@ -791,10 +876,31 @@ FIRST_PARTY_GROUP = "local-manual"
 # These SHAs are the immutable identifier for skills copied from an upstream
 # without a local git checkout. Keep in sync with docs/external-skill-sources.md.
 REGISTERED_PINS = {
-    "mattpocock-skills": "d574778f94cf620fcc8ce741584093bc650a61d3",
+    "mattpocock-skills": "391a2701dd948f94f56a39f7533f8eea9a859c87",
     "emilkowalski-skills": "f76beceb7d3fc8c43309cefad5a095a206103a4e",
     "huashu-skills": "35e7cf31328f6de07e5d125bfd094791f84b2352",
     "huashu-design": "0e7ec8aca0058184c1a9e06e57697e84f68a3f0f",
+}
+
+# Frozen legacy copies: real-file copies whose upstream snapshot provenance is
+# lost (nothing to re-derive a commit from). Keyed by ABSOLUTE PATH (names
+# collide across dirs) → the tree_hash the copy is frozen at. A matching hash
+# counts as pinned-by-exception; ANY drift makes it an unpinned violation, so
+# the gate's drift-detection purpose is preserved. Documented in
+# docs/external-skill-sources.md; upgrading/removing these is a separate,
+# user-approved decision — never a silent side effect of this gate.
+FROZEN_LEGACY = {
+    # copied from claude-plugins-official frontend-design plugin, drifted from
+    # the plugin-cache version, original snapshot unknown; frozen 2026-07-12
+    str(HOME / ".agents" / "skills" / "frontend-design"):
+        "25b18e6ac9b6c0953b013f0795665af958a08eb40b40cc23df27c3f377168575",
+    # Link-farm into ~/gstack/.agents, which is intentionally gitignored and
+    # therefore cannot inherit the checkout HEAD as reproducible provenance.
+    # Freeze the exact installed trees; any regeneration/drift reopens the gate.
+    str(HOME / ".codex" / "skills" / "gstack"):
+        "55ef5be33c64aab291e168cde00431e34509540d23a6dfda5b5f75ca579be521",
+    str(HOME / ".codex" / "skills" / "gstack" / "gstack-upgrade"):
+        "0bd74f7c577c1e0ff87dd14ced9ce40e56d586de1fc7913d0cc5384ffef143bb",
 }
 
 
@@ -833,6 +939,24 @@ def pin_check(entries: list[dict[str, Any]]) -> dict[str, Any]:
         # membership or a non-empty string is not enough (a branch name fakes it).
         has_commit = _is_sha(e.get("git_head") or "")
         has_registered_pin = _is_sha(REGISTERED_PINS.get(group, ""))
+        frozen_hash = FROZEN_LEGACY.get(e.get("path", ""))
+        # Frozen paths are checked FIRST and EXCLUSIVELY: if this exact copy is
+        # frozen, only its hash matters — a git_head or a later group
+        # registration must not mask drift of the frozen bytes.
+        if frozen_hash is not None:
+            if e.get("tree_hash") == frozen_hash:
+                slot["pinned"] += 1
+            else:
+                slot["unpinned"] += 1
+                unpinned.append({
+                    "name": e.get("name", "?"),
+                    "runtime": e.get("runtime", "?"),
+                    "source_group": group,
+                    "path": e.get("path", ""),
+                    "is_symlink": e.get("is_symlink", False),
+                    "reason": "frozen legacy copy DRIFTED from its frozen tree_hash",
+                })
+            continue
         if has_commit or has_registered_pin:
             slot["pinned"] += 1
         else:

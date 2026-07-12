@@ -38,6 +38,58 @@ cases:
     prompt: "grill me 这个产品判断，别顺着我，帮我找漏洞"
     expect: [grilling]
 
+  - id: matt-hard-bug-loop
+    prompt: "这个性能回归很难复现，先建立 red-capable feedback loop，缩到最小复现再修"
+    expect: [diagnosing-bugs, investigate]
+
+  - id: matt-grill-with-docs
+    prompt: "在代码库里 grill 我，边拷问边把统一术语写进 CONTEXT.md，把关键取舍记录成 ADR"
+    expect: [grill-with-docs, domain-modeling]
+
+  - id: matt-issue-triage
+    prompt: "用 /triage 分诊这些 GitHub issues 和外部 PR，整理到 ready-for-agent"
+    expect: [triage]
+
+  - id: matt-tdd
+    prompt: "这段行为按测试驱动开发做，先写失败测试，再走 red green refactor"
+    expect: [tdd]
+
+  - id: matt-to-spec
+    prompt: "用 /to-spec 把我们当前对话整理并发布成实施规格"
+    expect: [to-spec]
+
+  - id: matt-to-tickets
+    prompt: "用 /to-tickets 把这个 spec 拆成带阻塞关系的 tracer bullet tickets"
+    expect: [to-tickets]
+
+  - id: matt-implement
+    prompt: "明确运行 /implement，按已有 spec 和 tickets 逐个实现"
+    expect: [implement]
+
+  - id: matt-throwaway-prototype
+    prompt: "做一个抛弃式可运行原型，用来回答状态模型是否合理，不是生产实现"
+    expect: [prototype]
+
+  - id: matt-domain-modeling
+    prompt: "做领域模型压力测试，统一领域术语并维护 CONTEXT.md glossary"
+    expect: [domain-modeling]
+
+  - id: matt-codebase-design
+    prompt: "用 deep module 和 seam 的方法重新思考这个模块接口深度"
+    expect: [codebase-design]
+
+  - id: matt-handoff
+    prompt: "用 /handoff 生成跨会话交接文档，让新会话接手"
+    expect: [handoff, context-save]
+
+  - id: matt-teach
+    prompt: "用 /teach 建立一个多会话教学 workspace，持续记录 lessons 和学习进度"
+    expect: [teach]
+
+  - id: matt-writing-great-skills
+    prompt: "用 /writing-great-skills 教我怎么写好 SKILL.md 的信息层级和 leading words"
+    expect: [writing-great-skills, skill-creator]
+
   - id: site-qa
     prompt: "帮我测试一下这个网站，找找有没有 bug"
     expect: [qa, qa-only, browse]
@@ -118,6 +170,26 @@ cases:
     expect: [pair-agent]
     high_cost_ok: [pair-agent]
 
+  - id: matt-background-research
+    prompt: "运行 /research，派后台 agent 查一手资料并生成有引用的 Markdown 调研文件"
+    expect: [research]
+    high_cost_ok: [research]
+
+  - id: matt-two-axis-code-review
+    prompt: "运行 /code-review，从固定提交开始做 Standards + Spec 双轴并行审查"
+    expect: [code-review]
+    high_cost_ok: [code-review]
+
+  - id: matt-architecture-health-scan
+    prompt: "运行 /improve-codebase-architecture，用 Explore agent 做一次全库架构健康扫描"
+    expect: [improve-codebase-architecture]
+    high_cost_ok: [improve-codebase-architecture]
+
+  - id: matt-wayfinder
+    prompt: "运行 /wayfinder，为这个巨大模糊的跨会话项目建立 fog-of-war issue map"
+    expect: [wayfinder]
+    high_cost_ok: [wayfinder]
+
   # --- negative cases: no skill should be needed;
   #     assert only that no high-cost skill surfaces ---
   - id: plain-question
@@ -169,6 +241,14 @@ cases:
   - id: explain-in-simple-terms
     prompt: "这是那个是什么用简单易懂的语言讲解下"
     expect: []
+
+  - id: ordinary-question-not-teach-workspace
+    prompt: "简单解释一下 Python 装饰器是什么，不要建立课程或写文件"
+    expect: []
+
+  - id: ordinary-review-not-matt-parallel
+    prompt: "普通 review 一下当前分支的改动，不要派 agent"
+    expect: [review]
 
   - id: prod-handoff-instruction
     prompt: "你把具体指令或者谁handoff告诉我，我让生产环节的Claude去做"

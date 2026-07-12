@@ -29,38 +29,112 @@ list of group → SHA:
 
 | Source group | Pinned commit SHA |
 | --- | --- |
-| mattpocock-skills | `d574778f94cf620fcc8ce741584093bc650a61d3` |
+| mattpocock-skills | `391a2701dd948f94f56a39f7533f8eea9a859c87` |
 | emilkowalski-skills | `f76beceb7d3fc8c43309cefad5a095a206103a4e` |
 | huashu-skills | `35e7cf31328f6de07e5d125bfd094791f84b2352` |
 | huashu-design | `0e7ec8aca0058184c1a9e06e57697e84f68a3f0f` |
 
-**Baseline 2026-07-12:** 82 external skills, 77 pinned (via local commit or a
-registered SHA above), **5 unpinned** — all stray copies with no git checkout
-and no registered pin: `frontend-design` (agents) + 4 in the `gstack` group
-(`gstack`, `gstack-upgrade` ×2, `open-gstack-browser`). To clear them: register
-the `gstack` and `frontend-design` groups with a SHA (or re-install those copies
-from a pinned source), then `--enforce-pins` can go green and move to CI. Trust
-tiers and 30/60/90-day re-review stay deferred (maintenance cost before benefit).
+**GATE GREEN 2026-07-12:** 120 external skill entries, 120 pinned, 0 unpinned —
+`--enforce-pins` exits 0. Getting here surfaced and fixed **two audit bugs**
+rather than freezing five copies:
+
+1. **`tree_hash` was blind to link-farms** — a dir whose files are symlinks
+   pointing outside it hashed as the empty-input sha256 (every file's
+   `resolve().relative_to(root)` raised and was swallowed) → no drift
+   detection at all for those skills. Fixed: relative names come from the walk
+   path; content reads follow symlinks.
+2. **Provenance ignored resolved symlinks** — `git_info(dir)` failed for
+   wrapper dirs whose `SKILL.md` symlinks INTO a git checkout
+   (`~/.codex/skills/gstack` → `~/gstack`). Fixed: when the dir has no git
+   identity, the resolved `SKILL.md`'s parent is consulted. Four of the five
+   "stray copies" turned out to be link-farms into real checkouts and now
+   carry honest `git_head` pins.
+
+The one true stray copy is **frozen-legacy** (immutable-by-exception, keyed by
+absolute path → tree_hash; ANY drift = violation, so drift detection is
+preserved; upgrading/removing it is a separate user decision):
+
+| Frozen path | Frozen tree_hash | Provenance note |
+| --- | --- | --- |
+| `~/.agents/skills/frontend-design` | `25b18e6a…8575` | copied from the claude-plugins-official frontend-design plugin, drifted, original snapshot unknown |
+| `~/.codex/skills/gstack` | `55ef5be3…e521` | link-farm into gitignored `~/gstack/.agents/skills/gstack`; checkout HEAD cannot reproduce ignored generated targets |
+| `~/.codex/skills/gstack/gstack-upgrade` | `0bd74f7c…43bb` | nested link-farm into gitignored `~/gstack/.agents/skills/gstack-upgrade`; exact tree frozen, any regeneration reopens gate |
+
+**Enforcement points** (all local — GitHub CI is NOT one: the runner's home
+has no skills, so `--enforce-pins` there would be vacuously green):
+- weekly `router_selftune.py` report + notification now includes the pin gate
+  (fail-closed on errors);
+- launchd fallback `com.zihan.skill-router-selftune` guarantees the weekly run
+  (`RunAtLoad` + Monday noon, idempotent by ISO week);
+- the documented audit command in CLAUDE.md carries `--enforce-pins`.
+
+Trust tiers and 30/60/90-day re-review stay deferred (maintenance cost before
+benefit).
 
 ## mattpocock/skills
 
 - Source: `https://github.com/mattpocock/skills`
 - Branch: `main`
-- Checked main commit: `d574778f94cf620fcc8ce741584093bc650a61d3`
+- Checked main commit: `391a2701dd948f94f56a39f7533f8eea9a859c87`
 - Installed on this host: Codex `~/.codex/skills`, Claude `~/.claude/skills`
-- Install command:
+- Published set: the 21 paths declared in `.claude-plugin/plugin.json` at the
+  pinned commit. Directories under `deprecated/`, `in-progress/`, `misc/`, and
+  `personal/` are repository content, not members of the published plugin.
+- Installed skills:
+
+  - User-invoked upstream: `ask-matt`, `grill-with-docs`, `triage`,
+    `improve-codebase-architecture`, `setup-matt-pocock-skills`, `to-spec`,
+    `to-tickets`, `implement`, `wayfinder`, `grill-me`, `handoff`, `teach`,
+    `writing-great-skills`.
+  - Model-invoked upstream: `diagnosing-bugs`, `prototype`, `research`, `tdd`,
+    `domain-modeling`, `codebase-design`, `code-review`, `grilling`.
+- Install shape: reviewed copy pinned to the commit above. The two previously
+  installed productivity skills were byte-identical and retained; the other
+  19 were copied from the audited checkout into each runtime without
+  overwriting existing directories.
+- Reproduction outline (run against an empty destination or filter existing
+  names; the installer refuses overwrite):
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo mattpocock/skills \
-  --path skills/productivity/grill-me skills/productivity/grilling \
+  --ref 391a2701dd948f94f56a39f7533f8eea9a859c87 \
+  --path <paths-from-.claude-plugin/plugin.json> \
   --dest ~/.codex/skills
 
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo mattpocock/skills \
-  --path skills/productivity/grill-me skills/productivity/grilling \
+  --ref 391a2701dd948f94f56a39f7533f8eea9a859c87 \
+  --path <paths-from-.claude-plugin/plugin.json> \
   --dest ~/.claude/skills
 ```
+
+Host note (2026-07-12): the helper's Python download path failed local CA
+verification and its Git fallback required a newer sparse-checkout-capable Git.
+The actual installation therefore used the already reviewed pinned checkout;
+post-copy `diff -qr` verified all 21 trees in both runtimes exactly.
+
+### Runtime and routing integration
+
+- Claude honors `disable-model-invocation: true` for the 13 user-invoked
+  wrappers. Codex only consumes `name` and `description`; on Codex,
+  `explicit-only` is therefore a governance convention reinforced by
+  `AGENTS.md` and routing hints, not a runtime-enforced bit.
+- The machine routing canon (`routing-policy.yaml`) wins over upstream flow
+  prose. In particular, upstream `/implement` or `/code-review` never waives
+  the local judgment/landing/final-review seat split, checkpoint ledger, risk
+  overlays, or ship gate.
+- `research` describes a background-agent workflow. It may be selected only
+  when the active runtime permits delegation; otherwise run the same research
+  discipline in the current session.
+- `ask-matt` is an explicit router for this upstream bundle. The local
+  `skill-advisor` remains authoritative for high-cost approval policy.
+- `grill-with-docs` is the codebase/documented variant: it composes `grilling`
+  with `domain-modeling` and may update `CONTEXT.md`/ADRs. Plain non-code
+  pressure tests continue to route to `grilling` via `/grill-me`.
+- Source group is `mattpocock-skills`; update policy is `merge-only`. Updates
+  require reading changed skill files, advancing the registered SHA, rebuilding
+  the manifest, and rerunning routing and pin checks.
 
 ### grill-me / grilling
 
@@ -79,7 +153,10 @@ Review notes:
 - Good fit: pre-implementation planning, product/architecture/design pressure
   tests, unclear plans that need decision-tree questioning.
 - Not a substitute for: code review, QA, security audit, or ship/release gates.
-- Operational risk: low. It has no scripts, tools, or assets.
+- Operational risk for the original pair is low. The complete bundle includes
+  one inert HITL shell template and workflows capable of writing repo docs,
+  issues, PR labels, code, tests, or commits when explicitly invoked; normal
+  task authorization and local gates still apply.
 - Policy: `grill-me` is `explicit-only`; `grilling` is `auto-eligible`;
   source group is `mattpocock-skills`; update policy is `merge-only`.
 

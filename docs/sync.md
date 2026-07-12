@@ -32,7 +32,7 @@ At the start of a new machine or team setup:
 ```bash
 git -C ~/Projects/agent-skill-advisor-layer pull --ff-only
 python3 ~/Projects/agent-skill-advisor-layer/scripts/skill_audit.py \
-  --write-manifest --report --syntax-check --dry-run-sync
+  --write-manifest --report --syntax-check --dry-run-sync --enforce-pins
 ```
 
 If local `AGENTS.md` or `CLAUDE.md` contains long copied versions of these
