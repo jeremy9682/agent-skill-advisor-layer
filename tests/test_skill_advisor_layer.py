@@ -41,8 +41,36 @@ def test_high_cost_skill_names_are_suggest_confirm():
         "lfg",
         "ship",
         "overnight-execution",
+        "research",
+        "code-review",
+        "improve-codebase-architecture",
+        "wayfinder",
     ]:
         assert audit.call_policy(name, "", {}) == "suggest-confirm"
+
+    # Local high-cost policy must override an upstream explicit-only hint.
+    assert audit.call_policy(
+        "wayfinder", "", {"disable-model-invocation": True}
+    ) == "suggest-confirm"
+
+
+def test_mattpocock_published_bundle_is_fully_registered_and_pinned():
+    audit = load_audit_module()
+    expected = {
+        "ask-matt", "code-review", "codebase-design", "diagnosing-bugs",
+        "domain-modeling", "grill-with-docs", "grill-me", "grilling",
+        "handoff", "implement", "improve-codebase-architecture", "prototype",
+        "research", "setup-matt-pocock-skills", "tdd", "teach", "to-spec",
+        "to-tickets", "triage", "wayfinder", "writing-great-skills",
+    }
+
+    assert audit.MATTPOCOCK_SKILLS == expected
+    assert audit.REGISTERED_PINS["mattpocock-skills"] == (
+        "391a2701dd948f94f56a39f7533f8eea9a859c87"
+    )
+    for name in expected:
+        path = audit.SKILL_ROOTS["codex"] / name
+        assert audit.source_group(name, path, {}) == "mattpocock-skills"
 
 
 def test_regular_skill_is_auto_eligible():
@@ -236,3 +264,103 @@ def test_pin_check_rejects_non_sha_identifiers():
     assert result["unpinned_count"] == 1
     # every real REGISTERED_PINS value must be a valid sha
     assert all(audit._is_sha(v) for v in audit.REGISTERED_PINS.values())
+
+
+def test_tree_hash_covers_symlinked_files(tmp_path):
+    # BUG FIX: a skill dir whose files are symlinks pointing OUTSIDE the dir
+    # (a link-farm) used to hash as the empty-input sha256 — no drift detection.
+    audit = load_audit_module()
+    target = tmp_path / "checkout" / "SKILL.md"
+    target.parent.mkdir()
+    target.write_text("v1")
+    farm = tmp_path / "farm"
+    farm.mkdir()
+    (farm / "SKILL.md").symlink_to(target)
+
+    empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    h1 = audit.tree_hash(farm)
+    assert h1 != empty and h1
+    target.write_text("v2")            # drift at the symlink TARGET
+    assert audit.tree_hash(farm) != h1  # must be detected
+
+
+def test_discover_skills_resolves_linkfarm_provenance(tmp_path, monkeypatch):
+    # BUG FIX: a wrapper dir outside any checkout, whose SKILL.md symlinks into
+    # a git checkout, must inherit that checkout's git identity (git_head).
+    import subprocess
+    audit = load_audit_module()
+    repo = tmp_path / "repo"
+    (repo / "skills" / "myskill").mkdir(parents=True)
+    (repo / "skills" / "myskill" / "SKILL.md").write_text(
+        "---\nname: myskill\ndescription: test skill for provenance\n---\nbody\n")
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+        subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+
+    root = tmp_path / "skillroot"
+    wrapper = root / "myskill"
+    wrapper.mkdir(parents=True)
+    (wrapper / "SKILL.md").symlink_to(repo / "skills" / "myskill" / "SKILL.md")
+
+    monkeypatch.setattr(audit, "SKILL_ROOTS", {"testrt": root})
+    entries = audit.discover_skills()
+    assert len(entries) == 1
+    assert audit._is_sha(entries[0].get("git_head") or "")  # inherited from the checkout
+
+
+def test_pin_check_frozen_legacy_match_and_drift():
+    audit = load_audit_module()
+    path = "/fake/frozen/skill"
+    audit_frozen_backup = dict(audit.FROZEN_LEGACY)
+    try:
+        audit.FROZEN_LEGACY.clear()
+        audit.FROZEN_LEGACY[path] = "f" * 64
+        base = {"name": "frozen-skill", "runtime": "agents", "source_group": "frontend-design",
+                "path": path, "is_symlink": False, "git_head": ""}
+        # hash matches the frozen value → pinned by exception
+        ok = audit.pin_check([dict(base, tree_hash="f" * 64)])
+        assert ok["unpinned_count"] == 0
+        # hash drifted → violation with the drift reason
+        bad = audit.pin_check([dict(base, tree_hash="0" * 64)])
+        assert bad["unpinned_count"] == 1
+        assert "DRIFTED" in bad["unpinned"][0]["reason"]
+        # EXCLUSIVE PRIORITY (sol review): a frozen entry that ALSO carries a
+        # valid git_head OR a registered pin must STILL fail on drift — the
+        # frozen hash is checked first and exclusively, no other pin masks it.
+        masked = audit.pin_check([dict(base, tree_hash="0" * 64, git_head="a" * 40)])
+        assert masked["unpinned_count"] == 1  # git_head does not rescue drifted frozen bytes
+        audit.REGISTERED_PINS_backup = dict(audit.REGISTERED_PINS)
+        try:
+            audit.REGISTERED_PINS["frontend-design"] = "b" * 40
+            masked2 = audit.pin_check([dict(base, tree_hash="0" * 64)])
+            assert masked2["unpinned_count"] == 1  # registered pin does not rescue it either
+        finally:
+            audit.REGISTERED_PINS.clear()
+            audit.REGISTERED_PINS.update(audit.REGISTERED_PINS_backup)
+    finally:
+        audit.FROZEN_LEGACY.clear()
+        audit.FROZEN_LEGACY.update(audit_frozen_backup)
+
+
+def test_tree_hash_follows_directory_symlinks(tmp_path):
+    # SOL REVIEW: tree_hash must descend INTO a subdir that is itself a symlink
+    # pointing outside the skill dir (a link-farm's `bin → ~/gstack/bin`), or
+    # drift inside that subtree is invisible. Also asserts cycle safety.
+    audit = load_audit_module()
+    external = tmp_path / "external"
+    (external / "sub").mkdir(parents=True)
+    (external / "sub" / "tool.sh").write_text("v1")
+    farm = tmp_path / "farm"
+    farm.mkdir()
+    (farm / "SKILL.md").write_text("skill")
+    (farm / "bin").symlink_to(external / "sub")   # a DIRECTORY symlink out of farm
+
+    h1 = audit.tree_hash(farm)
+    empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    assert h1 and h1 != empty
+    (external / "sub" / "tool.sh").write_text("v2")   # drift INSIDE the symlinked dir
+    assert audit.tree_hash(farm) != h1                # must be detected
+
+    # cycle: a symlink pointing back at its own ancestor must not hang
+    (farm / "loop").symlink_to(farm)
+    assert audit.tree_hash(farm)  # returns (does not infinite-loop)

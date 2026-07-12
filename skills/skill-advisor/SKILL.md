@@ -1,6 +1,6 @@
 ---
 name: skill-advisor
-description: "Suggest high-cost or permissioned skills without executing them. Use this advisor for proactive suggestions: huashu-agent-swarm for large multi-module parallel work; gstack-pair-agent for sharing browser/page context; gstack-retro after large repair/deploy; gstack-setup-gbrain for persistent project brain; no-mistakes, lfg, ship, or overnight-execution for gated or autonomous shipping; Claude Code's native Agent Teams feature for experimental multi-teammate execution. Never execute these from a mere outcome request; ask for explicit approval first."
+description: "Suggest high-cost or permissioned skills without executing them. Use this advisor for proactive suggestions: huashu-agent-swarm for large multi-module parallel work; gstack-pair-agent for sharing browser/page context; gstack-retro after large repair/deploy; gstack-setup-gbrain for persistent project brain; mattpocock research, code-review, improve-codebase-architecture, or wayfinder when their background/sub-agent or multi-session workflows are specifically useful; no-mistakes, lfg, ship, or overnight-execution for gated or autonomous shipping; Claude Code's native Agent Teams feature for experimental multi-teammate execution. Never execute these from a mere outcome request; ask for explicit approval first."
 ---
 
 # Skill Advisor
@@ -39,6 +39,10 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 | `lfg` | User explicitly wants a hands-off plan-to-PR implementation pipeline. | Requirements are unclear, task is small, or the user has not approved autonomous execution. |
 | `huashu-design` (candidate) | MP4/GIF export or 60fps frame-interpolation rendering is requested (GPU-heavy). | Plain HTML prototype/design work without video export. |
 | `ship` / `overnight-execution` | Production-facing or long-running autonomous execution would be useful. | User has not explicitly approved the specific production or long-running workflow. |
+| `research` | A cited primary-source research artifact is needed and delegating it to a background agent is specifically useful. | Research can be completed cheaply in the current session, or delegation is not permitted. |
+| `code-review` | The user wants Matt Pocock's two-axis Standards + Spec review with independent parallel sub-agents. | A normal local review or final-review seat can handle the diff without spawning agents. |
+| `improve-codebase-architecture` | A broad architecture-health scan with an Explore sub-agent and report is worth the cost. | The target issue is already known, the task is a scoped refactor, or the user only wants read-only advice. |
+| `wayfinder` | A foggy multi-session effort needs an issue-map investigation workflow before a spec can exist. | The work fits one session or can move directly to grilling/spec/implementation. |
 | `agent-teams` (native feature, not a skill) | Task could use Claude Code's experimental multi-teammate execution mode. | User has not explicitly approved launching Agent Teams; feature is experimental with significant token multiplier and compaction/duplicate-teammate/architecture-drift risk. |
 
 ## Common Routing Pitfalls
@@ -56,6 +60,9 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
   once; choose the one that matches the user's explicit wording.
 - Release gates need an intent statement. Intent is the user's goal and
   constraints, not a diff summary.
+- Matt Pocock's `/implement` is not a release authority: it remains subordinate
+  to the local seat split, checkpoint ledger, risk overlays, final review, and
+  ship gate.
 
 ## Operating Notes
 

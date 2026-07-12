@@ -37,6 +37,9 @@ git clone git@github.com:jeremy9682/agent-skill-advisor-layer.git ~/Projects/age
 | 碰钱/权限/迁移/数据 | 正常说，带一句意图 | **自动升级**：Codex 盲审方案 + xhigh 终审 |
 | 技术选型/方向纠结 | 「调研一下 A vs B」 | Codex+Claude 双模型并行辩论 |
 | 想被反方质询 | 「grill me」「别顺着我，找漏洞」 | `grilling` 轻量压测观点/计划；`/grill-me` 是显式入口，不替代 review/QA/ship gate |
+| 代码库里边拷问边沉淀术语/ADR | 明确说「运行 `/grill-with-docs`」 | `grilling` + `domain-modeling`，更新 `CONTEXT.md` / ADR |
+| 难 bug 要严密反馈环 | 「先做 red-capable feedback loop 和最小复现」 | `diagnosing-bugs`；普通定点 bug 仍走 `investigate` |
+| Matt 完整开发流 | 明确点名 `/to-spec`、`/to-tickets`、`/implement` 等 | 上游流程服从本地三席、ledger、风险 overlay、终审和 ship gate |
 | 审代码 | 「review 一下改动」 | 双 agent 审 + Fix-First |
 | 提交 | 「ship」（明确说才跑） | 测试→审→push→PR |
 
@@ -72,7 +75,8 @@ git clone git@github.com:jeremy9682/agent-skill-advisor-layer.git ~/Projects/age
 cd ~/Projects/agent-skill-advisor-layer
 python3 scripts/routing_eval.py --check      # 路由回归门（recall@3 应 100%）
 python3 scripts/routing_eval.py --doctor     # 从真实日志出「误报/漏报」候选，人工筛选后补进 cases.yaml
-python3 scripts/skill_audit.py --report      # skill 供应链审计（provenance/hash/license）
+python3 scripts/skill_audit.py --write-manifest --report --syntax-check --dry-run-sync --enforce-pins
+                                             # skill 供应链、语法、同步 dry-run 与 immutable pin 门
 ```
 
 **工具管理员会自动记账**：每次推荐对不对都写进 `~/.codex/skill-governance/routing-log.jsonl`，

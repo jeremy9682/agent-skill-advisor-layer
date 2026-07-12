@@ -44,6 +44,103 @@ hints:
     negative_triggers: ["review", "当前分支", "代码审查", "审 diff", "测试网站", "安全", "安全审计", "安全漏洞", "权限问题", "repo", "ship 上线", "发布到 production"]
     rationale: "upstream mattpocock/skills uses grill-me as an explicit wrapper and grilling as model-invoked logic; surface grilling for natural-language pressure-test requests without replacing review/qa/security/ship gates"
     source: "mattpocock grill-me/grilling install 2026-07-09"
+
+  # --- mattpocock/skills published bundle (21 skills, pinned 2026-07-12) ---
+  - skill: ask-matt
+    extra_triggers: ["matt skills 怎么走", "mattpocock workflow", "/ask-matt"]
+    negative_triggers: ["该用哪个普通 skill", "high-cost workflow 建议"]
+    rationale: "explicit router for the Matt bundle; local skill-advisor remains authoritative for global/high-cost routing"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: diagnosing-bugs
+    extra_triggers: ["难复现 bug", "性能回归排查", "red-capable feedback loop", "先做最小复现再修"]
+    negative_triggers: ["普通小修", "根因已经确定", "只审 diff"]
+    rationale: "reserve the strict feedback-loop workflow for hard bugs; ordinary bug routing stays with investigate"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: grill-with-docs
+    extra_triggers: ["代码库里 grill", "边拷问边写 ADR", "沉淀 CONTEXT.md 和术语表", "/grill-with-docs"]
+    negative_triggers: ["没有代码库", "纯产品想法", "不写文档"]
+    rationale: "documented codebase grilling composes grilling with domain-modeling; plain pressure tests stay on grilling"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: triage
+    extra_triggers: ["issue 分诊", "PR 分诊", "needs-triage", "ready-for-agent", "/triage"]
+    negative_triggers: ["邮箱分拣", "收件箱"]
+    rationale: "scope Matt triage to repository issues and PRs, avoiding mailbox-triage collisions"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: improve-codebase-architecture
+    extra_triggers: ["架构健康扫描", "deepening opportunity", "全库架构扫描", "/improve-codebase-architecture"]
+    negative_triggers: ["已知具体模块", "单文件重构"]
+    rationale: "broad Explore-agent scan is suggest-confirm; scoped refactors should not pay this cost"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: setup-matt-pocock-skills
+    extra_triggers: ["配置 mattpocock skills", "设置 issue tracker 和 triage 标签", "/setup-matt-pocock-skills"]
+    negative_triggers: []
+    rationale: "explicit per-repo setup entrypoint for the installed bundle"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: tdd
+    extra_triggers: ["测试驱动开发", "先写失败测试", "红绿重构", "red green refactor"]
+    negative_triggers: ["只补测试", "不改实现"]
+    rationale: "make the upstream red-green-refactor discipline reachable from Chinese prompts"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: to-spec
+    extra_triggers: ["把当前对话转成 spec", "发布实施规格", "/to-spec"]
+    negative_triggers: ["只要解释", "不要写文件"]
+    rationale: "explicit conversation-to-spec publication step"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: to-tickets
+    extra_triggers: ["把 spec 拆成 tracer bullet tickets", "拆阻塞关系工单", "/to-tickets"]
+    negative_triggers: ["不要建工单", "只要大纲"]
+    rationale: "explicit spec-to-blocking-ticket decomposition step"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: wayfinder
+    extra_triggers: ["巨大模糊项目建地图", "fog of war 调研地图", "跨会话 investigation tickets", "/wayfinder"]
+    negative_triggers: ["单会话完成", "小功能", "路径已经明确"]
+    rationale: "multi-session issue-map workflow is high-cost and should surface only for genuine fog-of-war work"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: implement
+    extra_triggers: ["按已有 spec 实现", "按 tickets 逐个实现", "/implement"]
+    negative_triggers: ["只做方案", "只审查", "不要改代码"]
+    rationale: "explicit implementation orchestrator; local seats, ledger, review, and ship gates still dominate"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: prototype
+    extra_triggers: ["抛弃式可运行原型", "用原型回答状态模型问题", "多个 UI 变体切换"]
+    negative_triggers: ["直接做生产实现", "高保真视觉交付", "直接上线"]
+    rationale: "distinguish throwaway question-answering prototypes from production UI/design workflows"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: research
+    extra_triggers: ["后台 agent 调研一手资料并存 Markdown", "生成有引用的调研文件", "/research"]
+    negative_triggers: ["当前会话直接查", "不要派 agent", "不要写文件"]
+    rationale: "background-agent research is suggest-confirm and must not replace lightweight in-session research"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: domain-modeling
+    extra_triggers: ["统一领域术语", "维护 CONTEXT.md glossary", "记录 ADR", "领域模型压力测试"]
+    negative_triggers: ["数据库 ORM 模型", "机器学习模型"]
+    rationale: "scope domain-modeling to ubiquitous language and durable decisions"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: codebase-design
+    extra_triggers: ["设计深模块", "接口深度", "模块 seam", "design it twice"]
+    negative_triggers: ["UI 设计", "视觉设计", "设计系统"]
+    rationale: "scope codebase-design to deep modules and seams, not visual design"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: code-review
+    extra_triggers: ["Standards + Spec 双轴审查", "从固定提交开始审", "parallel standards spec review", "/code-review"]
+    negative_triggers: ["普通 review", "终审席", "安全审计", "不要派 agent", "单 agent"]
+    rationale: "parallel two-axis workflow is suggest-confirm; ordinary diff/final review stays on the existing review route"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: handoff
+    extra_triggers: ["生成跨会话 handoff 文档", "新会话接手", "/handoff"]
+    negative_triggers: ["直接继续当前会话", "不要写文件"]
+    rationale: "explicit temporary handoff artifact, distinct from continuing or compacting the same session"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: teach
+    extra_triggers: ["建立长期学习 workspace", "多会话教学计划", "学习记录和 lessons", "/teach"]
+    negative_triggers: ["简单解释", "是什么", "一句话讲解", "临时答疑"]
+    rationale: "prevent the stateful multi-session teaching workspace from attracting ordinary questions"
+    source: "mattpocock full-bundle integration 2026-07-12"
+  - skill: writing-great-skills
+    extra_triggers: ["写好 SKILL.md 的方法", "skill 信息层级", "leading words skill", "/writing-great-skills"]
+    negative_triggers: ["安装 skill", "运行 skill"]
+    rationale: "route skill-authoring methodology without colliding with installation or invocation"
+    source: "mattpocock full-bundle integration 2026-07-12"
   - skill: qa
     extra_triggers: ["测试网站", "找 bug", "试一下这个站", "质检", "点一遍"]
     negative_triggers: []
