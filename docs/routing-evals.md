@@ -49,6 +49,21 @@ Model-routing evals are also not a provider router. Provider fallback, budget
 routing, rate limits, and latency-based routing belong in a model gateway such
 as LiteLLM or a platform-native gateway, not in this repository.
 
+## Codex Routing-Hook Revisit (Tier-2 item ④)
+
+The prompt-time routing hook lives only on the Claude side. Porting it to
+Codex is **deferred by design**: installing an un-tuned router causes bad
+suggestions, so the Claude-side router must prove stable first. The revisit
+condition is now **machine-tracked**, not remembered — `router_selftune.py`
+appends a weekly status record to `~/.codex/skill-governance/selftune-status.jsonl`
+and computes the streak of consecutive *clean* weeks (recall GREEN, zero
+attractors, non-thin data). After `REVISIT_CLEAN_WEEKS` (4) clean weeks the
+weekly report surfaces **REVISIT CONDITION MET**, at which point re-evaluate the
+port (Codex supports the `user_prompt_submit` hook event, confirmed 2026-07-12,
+so injection is technically feasible). Until the streak is met the hook stays
+deferred. As of 2026-07-12 the streak is 0 (the router is currently over-firing
+on ~14 attractors), which is exactly why porting now would be premature.
+
 ## Router Hook And Hints
 
 `scripts/skill_router_hook.py` (UserPromptSubmit) suggests up to three
