@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import pytest
 
@@ -20,7 +21,16 @@ def _open_page(browser, **context_options):
 
 
 def test_design_shadow_interactions_and_mobile_layout():
-    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        if os.environ.get("CI") or os.environ.get("DESIGN_BROWSER_REQUIRED") == "1":
+            pytest.fail("Playwright is required for the design browser gate")
+        pytest.skip("Playwright is optional outside CI; set DESIGN_BROWSER_REQUIRED=1 to enforce")
+
+    source = (ROOT / "examples" / "design-domain-shadow" / "apple-cjk-ab.html").read_text()
+    assert "@keyframes" not in source
+    assert "animation:" not in source
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context, page, errors = _open_page(

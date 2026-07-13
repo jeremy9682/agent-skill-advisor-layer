@@ -1264,8 +1264,7 @@
           skipLink.inert = false;
           (previousFocus || trigger).focus();
         };
-        if (reducedMotion.matches) finish();
-        else closeTimer = window.setTimeout(finish, 220);
+        closeTimer = window.setTimeout(finish, reducedMotion.matches ? 160 : 220);
       }
 
       trigger.addEventListener('click', openSheet);

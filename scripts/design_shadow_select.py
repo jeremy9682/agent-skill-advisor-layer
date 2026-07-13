@@ -9,6 +9,7 @@ network request, hook prompt submission, or invoke any skill.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -24,6 +25,18 @@ SCHEMA_REF = "schemas/design-selection-record.md"
 VALID_EVIDENCE_KINDS = ("read", "invocation")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def _valid_utc_timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or not UTC_TIMESTAMP_RE.fullmatch(value):
+        return False
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return False
+    return parsed <= datetime.now(timezone.utc) + timedelta(minutes=5)
 
 
 def load_mapping(path: Path) -> dict[str, Any]:
@@ -131,8 +144,7 @@ def _usage_claim(
             or skill not in selected
             or evidence_task != task_id
             or evidence_deliverable != deliverable_id
-            or not isinstance(occurred_at, str)
-            or not UTC_TIMESTAMP_RE.fullmatch(occurred_at)
+            or not _valid_utc_timestamp(occurred_at)
             or not isinstance(declared_sha, str)
             or not SHA256_RE.fullmatch(declared_sha)
             or not isinstance(path_text, str)

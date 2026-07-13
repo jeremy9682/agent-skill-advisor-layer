@@ -188,7 +188,7 @@ cases:
           surface: product-ui
     expect: {status: selected, usage_claim_permitted: false}
 
-  - id: usage-claim-permitted-with-read-evidence
+  - id: usage-claim-blocked-by-unbound-read
     task:
       id: usage-claim-permitted-with-read-evidence
       usage_claim: true
@@ -208,7 +208,7 @@ cases:
           surface: product-ui
     expect: {status: selected, usage_claim_permitted: false}
 
-  - id: usage-evidence-dedupes-kinds
+  - id: usage-claim-blocked-by-legacy-unbound-items
     task:
       id: usage-evidence-dedupes-kinds
       usage_claim: true

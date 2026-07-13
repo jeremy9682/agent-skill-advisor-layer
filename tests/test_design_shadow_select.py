@@ -136,7 +136,7 @@ def test_unbound_or_fabricated_usage_evidence_fails_closed():
     selector = load_selector()
     fabricated = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-claim-blocked-with-fabricated-path"), catalog())["records"][0]
     assert fabricated["usage_claim"]["permitted"] is False
-    unbound = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-evidence-dedupes-kinds"), catalog())["records"][0]
+    unbound = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-claim-blocked-by-legacy-unbound-items"), catalog())["records"][0]
     assert unbound["usage_claim"]["permitted"] is False
     assert unbound["usage_claim"]["accepted_evidence"] == []
 
@@ -176,6 +176,8 @@ def test_hash_bound_read_evidence_is_skill_and_deliverable_scoped(tmp_path):
         {"sha256": "0" * 64},
         {"deliverable_id": "other"},
         {"skill": "apple-design"},
+        {"occurred_at": "2026-02-30T11:30:00Z"},
+        {"occurred_at": "2999-01-01T00:00:00Z"},
     ):
         bad_task = {**task, "evidence": [{**evidence, **changed}]}
         assert selector.select(bad_task, local_catalog)["records"][0]["usage_claim"]["permitted"] is False

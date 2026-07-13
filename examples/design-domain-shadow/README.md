@@ -25,8 +25,11 @@ The repository regression suite also runs this page in headless Chromium when
 Playwright is installed:
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q
+DESIGN_BROWSER_REQUIRED=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q
 ```
+
+CI and `DESIGN_BROWSER_REQUIRED=1` fail if Playwright is unavailable; an
+ordinary local run may skip only this browser-specific test.
 
 ## What to test
 
