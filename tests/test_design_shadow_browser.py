@@ -61,9 +61,16 @@ def test_design_shadow_interactions_and_mobile_layout():
         contrast_ratios = page.evaluate(
             """
             () => {
-              const channels = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
-              const luminance = value => {
-                const linear = channels(value).map(channel => {
+              const channels = value => {
+                const parts = value.match(/[\\d.]+/g).map(Number);
+                return [parts[0], parts[1], parts[2], parts.length > 3 ? parts[3] : 1];
+              };
+              const overWhite = value => {
+                const [red, green, blue, alpha] = channels(value);
+                return [red, green, blue].map(channel => channel * alpha + 255 * (1 - alpha));
+              };
+              const luminance = channels => {
+                const linear = channels.map(channel => {
                   const normalized = channel / 255;
                   return normalized <= 0.04045
                     ? normalized / 12.92
@@ -72,24 +79,28 @@ def test_design_shadow_interactions_and_mobile_layout():
                 return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
               };
               const ratio = (foreground, background) => {
-                const a = luminance(foreground);
-                const b = luminance(background);
+                const a = luminance(overWhite(foreground));
+                const b = luminance(overWhite(background));
                 return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
               };
               return [
-                ['.apple-brand', true],
-                ['.apple-action', true],
-                ['.eyebrow', false],
-                ['.primary-metric small', false],
-                ['.metric-note', false],
-                ['.section-head span', false],
-                ['.activity-copy span', false],
-                ['.activity time', false],
-                ['.pulse-row span', false],
-                ['.sheet-list span', false],
-              ].map(([selector, ownBackground]) => {
+                ['.apple-brand', '.apple-brand'],
+                ['.apple-action', '.apple-action'],
+                ['.eyebrow', null],
+                ['.segment button:not([aria-selected="true"])', '.segment'],
+                ['.primary-metric small', null],
+                ['.metric-note', null],
+                ['.section-head span', null],
+                ['.activity-copy span', null],
+                ['.activity time', null],
+                ['.pulse-row span', null],
+                ['.sheet p', '.sheet'],
+                ['.sheet-list span', '.sheet'],
+              ].map(([selector, backgroundSelector]) => {
                 const style = getComputedStyle(document.querySelector(selector));
-                const background = ownBackground ? style.backgroundColor : 'rgb(255, 255, 255)';
+                const background = backgroundSelector
+                  ? getComputedStyle(document.querySelector(backgroundSelector)).backgroundColor
+                  : 'rgb(255, 255, 255)';
                 return [selector, ratio(style.color, background)];
               });
             }
