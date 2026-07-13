@@ -38,45 +38,64 @@ def die(msg):
     sys.exit(1)
 
 
-# Seat vocabulary: producing/receiving seats are {family}-{role} or a bare
-# principal. Catches the real drill failures (e.g. "judgment-claude" — wrong
-# order, "codex-review" is fine). Family-first so role can vary.
-SEAT_RE = re.compile(r"^(claude|codex|fable|opus|sonnet|human|founder)(-[a-z][a-z-]*)?$")
-# A frozen-intent path is a single repo-relative path (optional #anchor), no
-# whitespace and no "+" — a narrative string like
-# "docs/a.md §M2 + docs/b.md（@ SHA）" is not a contract pointer.
-INTENT_RE = re.compile(r"^[^\s+]+(#[^\s]+)?$")
+# Seat vocabulary: {family}-{role} or a bare principal. Catches the real drill
+# failures (e.g. "judgment-claude" — wrong order; "codex-final-review" is fine).
+SEAT_RE = re.compile(r"^(?:claude|codex|fable|opus|sonnet|human|founder)"
+                     r"(?:-[a-z]+(?:-[a-z]+)*)?$")
+# A frozen-intent path is ONE repo-relative path (+optional non-empty #anchor):
+# not absolute, not `..`-escaping, no whitespace / '+' / bare-anchor / empty or
+# doubled anchor. A narrative string like "docs/a.md §M2 + docs/b.md（@ SHA）" is
+# not a contract pointer.
+INTENT_RE = re.compile(
+    r"^(?![\\/])"                        # not absolute (POSIX)
+    r"(?![A-Za-z]:[\\/])"               # not absolute (Windows drive)
+    r"(?!\.{1,2}(?:[\\/]|#|$))"         # not a leading ./ ../ . ..
+    r"(?!.*[\\/]\.{1,2}(?:[\\/]|#|$))"  # no /../ or /./ segment
+    r"[^#\s+\\/]+(?:[\\/][^#\s+\\/]+)*"  # path segments, no whitespace/+/#
+    r"(?:#[^#\s+]+)?$"                   # optional single non-empty anchor
+)
+
+
+def _validate_seat(key, val):
+    """A transition's seat is caller-supplied input, so claim/close validate it
+    too (not just open) — otherwise a bad seat is written by a normal command
+    and owner/closure provenance is corrupted (Codex PR#5 review)."""
+    if not SEAT_RE.fullmatch(val or ""):
+        die(f"{key} {val!r} not in seat vocabulary "
+            f"({{claude,codex,fable,opus,sonnet,human,founder}}[-role]); "
+            f"e.g. claude-direction / codex-final-review / human")
 
 
 def _validate_open(ev):
     """Mechanical schema gate on `open` (2026-07-13): the CLI, not prose
     discipline, must reject events that a cold-start receiver cannot act on.
-    Escape hatch AGENT_LEDGER_SKIP_VALIDATION=1 for genuine emergencies only."""
+    Returns False (and the caller records a persistent marker) when the escape
+    hatch AGENT_LEDGER_SKIP_VALIDATION=1 is set — genuine emergencies only."""
     if os.environ.get("AGENT_LEDGER_SKIP_VALIDATION") == "1":
         print("agent-ledger: warning: field validation SKIPPED "
               "(AGENT_LEDGER_SKIP_VALIDATION=1)", file=sys.stderr)
-        return
+        return False
     for key in ("from_seat", "to_seat"):
-        val = ev.get(key) or ""
-        if not SEAT_RE.fullmatch(val):
-            die(f"{key} {val!r} not in seat vocabulary "
-                f"({{claude,codex,fable,opus,sonnet,human,founder}}[-role]); "
-                f"e.g. claude-direction / codex-final-review / human")
+        _validate_seat(key, ev.get(key))
     ir = ev.get("intent_ref") or ""
-    if not ir or not INTENT_RE.fullmatch(ir):
+    if not INTENT_RE.fullmatch(ir):
         die(f"intent_ref {ir!r} must be ONE repo-relative path (+optional "
-            f"#anchor), no whitespace/'+': it is the fold grouping key and the "
-            f"frozen contract, never a narrative string")
+            f"non-empty #anchor), no whitespace/'+', not absolute/`..`-escaping: "
+            f"it is the fold grouping key and the frozen contract, not a "
+            f"narrative string")
     wt = ev.get("worktree") or ""
-    if wt.count(" @ ") < 2:
-        die(f"worktree {wt!r} must be 'path @ branch @ commit' (git is the fact "
-            f"source); for cross-seat prefer 'origin/<branch> @ <branch> @ "
-            f"<40-char-SHA>' + fresh worktree, never a shared mutable checkout")
+    parts = wt.split(" @ ")
+    if len(parts) != 3 or any(not p.strip() for p in parts):
+        die(f"worktree {wt!r} must be exactly 'path @ branch @ commit' (3 "
+            f"non-empty fields); for cross-seat prefer 'origin/<branch> @ "
+            f"<branch> @ <40-char-SHA>' + fresh worktree, never a shared mutable "
+            f"checkout")
     na = ev.get("next_action") or ""
     if re.search(r"或| or |、然后|; then ", na):
         print(f"agent-ledger: warning: next_action looks like MULTIPLE actions "
               f"({na[:60]!r}...); schema wants THE single first step",
               file=sys.stderr)
+    return True
 
 
 def ledger_path(slug):
@@ -224,11 +243,15 @@ def _cmd_open_locked(a):
     }
     if ev["next_action"] == "none":
         die('a pending event needs a real next_action (use claim/close for transitions)')
-    _validate_open(ev)
+    if not _validate_open(ev):
+        # escape hatch used — leave a persistent, auditable marker in the record
+        ev["decided_rejected_open"]["decided"].append(
+            "validation-skipped: AGENT_LEDGER_SKIP_VALIDATION=1")
     append(a.slug, ev)
 
 
 def cmd_claim(a):
+    _validate_seat("seat", a.seat)  # transition writes a NEW seat → gate it too
     with ledger_lock(a.slug):
         _cmd_claim_locked(a)
 
@@ -254,6 +277,7 @@ def _cmd_claim_locked(a):
 
 
 def cmd_close(a):
+    _validate_seat("seat", a.seat)  # transition writes a NEW seat → gate it too
     with ledger_lock(a.slug):
         _cmd_close_locked(a)
 
