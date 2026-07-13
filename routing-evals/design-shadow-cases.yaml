@@ -190,7 +190,7 @@ cases:
 
   - id: usage-claim-blocked-by-unbound-read
     task:
-      id: usage-claim-permitted-with-read-evidence
+      id: usage-claim-blocked-by-unbound-read
       usage_claim: true
       evidence: [{kind: read, path: design-skill-catalog.yaml}]
       deliverables:
@@ -210,7 +210,7 @@ cases:
 
   - id: usage-claim-blocked-by-legacy-unbound-items
     task:
-      id: usage-evidence-dedupes-kinds
+      id: usage-claim-blocked-by-legacy-unbound-items
       usage_claim: true
       evidence:
         - {kind: read, path: design-skill-catalog.yaml}

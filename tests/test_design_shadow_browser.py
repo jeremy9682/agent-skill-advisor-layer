@@ -10,6 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGE = (ROOT / "examples" / "design-domain-shadow" / "apple-cjk-ab.html").as_uri()
 
 
+def _browser_required() -> bool:
+    ci = os.environ.get("CI", "").strip().lower()
+    return os.environ.get("DESIGN_BROWSER_REQUIRED") == "1" or ci not in {
+        "",
+        "0",
+        "false",
+        "no",
+    }
+
+
 def _open_page(browser, **context_options):
     context = browser.new_context(**context_options)
     page = context.new_page()
@@ -20,17 +30,19 @@ def _open_page(browser, **context_options):
     return context, page, errors
 
 
+def test_design_shadow_has_no_keyframe_animation():
+    source = (ROOT / "examples" / "design-domain-shadow" / "apple-cjk-ab.html").read_text()
+    assert "@keyframes" not in source
+    assert "animation:" not in source
+
+
 def test_design_shadow_interactions_and_mobile_layout():
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        if os.environ.get("CI") or os.environ.get("DESIGN_BROWSER_REQUIRED") == "1":
+        if _browser_required():
             pytest.fail("Playwright is required for the design browser gate")
         pytest.skip("Playwright is optional outside CI; set DESIGN_BROWSER_REQUIRED=1 to enforce")
-
-    source = (ROOT / "examples" / "design-domain-shadow" / "apple-cjk-ab.html").read_text()
-    assert "@keyframes" not in source
-    assert "animation:" not in source
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context, page, errors = _open_page(
@@ -101,6 +113,11 @@ def test_design_shadow_interactions_and_mobile_layout():
         assert reduced_page.locator("#daily-sheet").evaluate(
             "element => getComputedStyle(element).transform"
         ) == "none"
+        reduced_page.locator("#sheet-close").click()
+        reduced_page.wait_for_timeout(80)
+        assert reduced_page.locator("#daily-sheet").is_visible()
+        reduced_page.wait_for_timeout(100)
+        assert reduced_page.locator("#daily-sheet").is_hidden()
         assert reduced_errors == []
         reduced_context.close()
         browser.close()

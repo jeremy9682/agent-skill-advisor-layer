@@ -156,7 +156,7 @@ def test_hash_bound_read_evidence_is_skill_and_deliverable_scoped(tmp_path):
         "skill": "frontend-design",
         "task_id": "bound-read",
         "deliverable_id": "page",
-        "occurred_at": "2026-07-13T11:30:00Z",
+        "occurred_at": "2020-01-01T11:30:00Z",
         "path": str(skill_file),
         "sha256": digest,
     }
@@ -191,7 +191,7 @@ def test_hash_bound_invocation_receipt_must_match_event(tmp_path):
         "skill": "frontend-design",
         "task_id": "bound-invocation",
         "deliverable_id": "page",
-        "occurred_at": "2026-07-13T11:31:00Z",
+        "occurred_at": "2020-01-01T11:31:00Z",
     }
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(receipt))
