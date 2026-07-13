@@ -1143,7 +1143,7 @@
         panel.setAttribute('aria-labelledby', tab.id);
       }
 
-      function selectTab(tab) {
+      function selectTab(tab, { skipMotion = false } = {}) {
         if (tab.getAttribute('aria-selected') === 'true') return;
         tabs.forEach((item) => {
           const selected = item === tab;
@@ -1152,7 +1152,7 @@
         });
 
         window.clearTimeout(switchTimer);
-        if (reducedMotion.matches) {
+        if (skipMotion || reducedMotion.matches) {
           renderView(tab);
           return;
         }
@@ -1176,7 +1176,7 @@
           if (event.key === 'Home') target = 0;
           if (event.key === 'End') target = tabs.length - 1;
           tabs[target].focus();
-          selectTab(tabs[target]);
+          selectTab(tabs[target], { skipMotion: true });
         });
       });
 
