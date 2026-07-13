@@ -66,6 +66,22 @@ def test_negative_prompts_stay_silent():
         assert out == "{}", f"hook fired on negative prompt: {prompt}"
 
 
+def test_grilling_top_level_explicit_only_not_auto_surfaced():
+    # grilling is in DEFAULT_HOT_ROUTE_EXCLUDE (top-level explicit-only policy):
+    # a generic adversarial request must NOT auto-surface it, even though it ranks
+    # ~2.5+ lexically. The user reaches grilling by explicitly naming /grill-me,
+    # /grilling, or the grilling workflow (a non-lexical decision-table path the
+    # hot-route shrink does not touch), and pinned Matt workflows may call it
+    # internally.
+    for prompt in [
+        "stress-test this plan before building",
+        "grill me 这个产品判断，别顺着我，帮我找漏洞",
+        "push back on my plan and find holes",
+    ]:
+        out = run_hook(json.dumps({"prompt": prompt}))
+        assert "grilling" not in out, f"grilling auto-surfaced on generic prompt: {prompt}"
+
+
 def test_vercel_style_false_triggers_stay_silent():
     # The three real 2026-07-06 false-trigger incidents as negative cases:
     # path-pattern lexical matches without domain context must not fire.

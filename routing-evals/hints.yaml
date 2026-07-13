@@ -42,8 +42,8 @@ hints:
   - skill: grilling
     extra_triggers: ["grill me", "push back", "challenge my thinking", "red-team this", "拷问我", "质询我", "挑战我", "反方审一下", "别顺着我", "找漏洞", "压测观点", "压测计划"]
     negative_triggers: ["review", "当前分支", "代码审查", "审 diff", "测试网站", "安全", "安全审计", "安全漏洞", "权限问题", "repo", "ship 上线", "发布到 production"]
-    rationale: "upstream mattpocock/skills uses grill-me as an explicit wrapper and grilling as model-invoked logic; surface grilling for natural-language pressure-test requests without replacing review/qa/security/ship gates"
-    source: "mattpocock grill-me/grilling install 2026-07-09"
+    rationale: "grilling is top-level explicit-only (hot-route-excluded from lexical auto-suggest); extra_triggers keep it lexically recallable for index-layer eval, but production does not auto-surface it — the user reaches it by explicitly naming /grill-me, /grilling, or the grilling workflow, and pinned Matt workflows may call it internally"
+    source: "grilling explicit-only policy 2026-07-13 (see DEFAULT_HOT_ROUTE_EXCLUDE)"
 
   # --- mattpocock/skills published bundle (21 skills, pinned 2026-07-12) ---
   - skill: ask-matt
@@ -59,7 +59,7 @@ hints:
   - skill: grill-with-docs
     extra_triggers: ["代码库里 grill", "边拷问边写 ADR", "沉淀 CONTEXT.md 和术语表", "/grill-with-docs"]
     negative_triggers: ["没有代码库", "纯产品想法", "不写文档"]
-    rationale: "documented codebase grilling composes grilling with domain-modeling; plain pressure tests stay on grilling"
+    rationale: "documented codebase grilling composes grilling with domain-modeling; plain pressure tests are answered directly unless grilling is explicitly invoked"
     source: "mattpocock full-bundle integration 2026-07-12"
   - skill: triage
     extra_triggers: ["issue 分诊", "PR 分诊", "needs-triage", "ready-for-agent", "/triage"]

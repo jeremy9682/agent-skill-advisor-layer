@@ -396,6 +396,9 @@ def test_hot_route_exclude_default_and_filter(monkeypatch, tmp_path):
     monkeypatch.setattr(hook, "GOV_DIR", tmp_path)  # no override file → default set
     excl = hook.load_hot_route_exclude()
     assert "huashu-design" in excl and "social-monitor" in excl
+    # grilling: top-level explicit-only (fleet-independent membership assertion so
+    # this cannot pass vacuously on a bare CI runner with no live skill fleet)
+    assert "grilling" in excl
     # a genuine engineering skill is NOT excluded
     assert "investigate" not in excl and "dev-workflow" not in excl
     # filtering semantics: excluded names drop, others survive, order preserved
