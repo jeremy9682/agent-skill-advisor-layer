@@ -40,6 +40,8 @@ STATUS_PATH = GOV_DIR / "selftune-status.jsonl"   # machine-readable weekly stat
 
 MIN_FIRES_FOR_CONFIDENCE = 25     # attractor analysis below this is low-confidence
 ATTRACTOR_DISTINCT_PROMPTS = 5    # fires in >= this many distinct prompts = suspect
+ATTRACTOR_WINDOW_DAYS = 7         # stale router noise must not block a clean-week streak
+ATTRACTOR_FALLBACK_LINES = 500    # use recent records when legacy logs have no timestamp
 REVISIT_CLEAN_WEEKS = 4           # Tier-2 ④: N consecutive clean weeks → revisit Codex routing-hook port
 
 
@@ -139,19 +141,140 @@ def recall_is_green() -> tuple[bool, str]:
     return r.returncode == 0, line.strip()
 
 
+def _record_time(rec: dict) -> dt.datetime | None:
+    """Normalize the router log's timestamp fields to UTC.
+
+    ``write_log`` stamps ``ts`` with a *naive local* ``datetime.now()`` (no
+    tzinfo), so a naive value must be read as local wall-clock and converted —
+    treating it as UTC (the earlier behavior) skewed the window by the local
+    UTC offset. Epoch numbers and explicitly-offset strings are already
+    absolute and only need converting.
+    """
+    value = next((rec[key] for key in ("ts", "t", "timestamp") if rec.get(key) is not None), None)
+    try:
+        if isinstance(value, (int, float)):
+            return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc)
+        if isinstance(value, str):
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            # astimezone() reads a naive datetime as local time, then converts;
+            # an already-aware value just gets normalized to UTC.
+            return parsed.astimezone(dt.timezone.utc)
+    except (OverflowError, ValueError):
+        pass
+    return None
+
+
+def _usage_sources_present(days: int) -> bool:
+    """Liveness proxy: True if any transcript source holds a file recent enough
+    to fall inside the window. It mirrors the source roots ``estimate_usage``
+    scans (see skill_audit.py) so ``_adoption`` can tell a genuine zero from
+    absent sources. Returns on the first recent file (rglob is lazy); a window
+    with only stale files still walks both roots once."""
+    cutoff = dt.datetime.now().timestamp() - days * 86400
+    home = Path.home()
+    for root in (home / ".codex" / "sessions", home / ".claude" / "projects"):
+        if not root.exists():
+            continue
+        for p in root.rglob("*.jsonl"):
+            try:
+                if p.stat().st_mtime >= cutoff:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _adoption(audit, fires: int) -> dict:
+    """Same-window adoption context: transcript-backed skill invocations vs the
+    number of prompts the router fired on, both over ATTRACTOR_WINDOW_DAYS.
+
+    IMPORTANT — this is a *non-causal period ratio*, NOT a conversion rate. The
+    invocation count is every skill used in the window, including ones reached
+    via the CLAUDE.md decision table or explicit calls that the router never
+    suggested, and it is not linked per-prompt/session to any fire. It can
+    therefore exceed 1.0 and must never be read as "fraction of fires that
+    converted"; a true fire→invoke rate needs session-level attribution (future
+    work). ``available`` is False when usage evidence could not be gathered —
+    kept distinct from a genuine zero so the report never prints a bare "0".
+    """
+    try:
+        usage = audit.estimate_usage(
+            audit.discover_skills(), ATTRACTOR_WINDOW_DAYS, 400, 3_000_000)
+        invocations = sum(counts.get("actual_skill_invocation", 0) for counts in usage.values())
+    except Exception:  # usage evidence must never make the watchdog unavailable
+        return {"available": False, "fires": fires, "invocations": None, "ratio": None}
+    # estimate_usage swallows per-file scan errors and always returns a populated
+    # all-skills dict, so a bare 0 could be a real zero OR a total scan failure. A
+    # zero is only trustworthy when the transcript sources actually hold recent
+    # files; otherwise downgrade to unavailable rather than assert an observed 0.
+    # Residual: sources present but every scan throwing still reads as 0 — the
+    # airtight fix is to expose scan-health from estimate_usage (skill_audit.py:889),
+    # tracked as a separate follow-up in that module.
+    if invocations == 0 and not _usage_sources_present(ATTRACTOR_WINDOW_DAYS):
+        return {"available": False, "fires": fires, "invocations": None, "ratio": None}
+    ratio = invocations / fires if fires else None
+    return {"available": True, "fires": fires, "invocations": invocations, "ratio": ratio}
+
+
+def _window_label(window: dict) -> str:
+    if window.get("kind") == "last_lines":
+        return f"last {window['lines']} log lines (no timestamps)"
+    return f"last {window.get('days', ATTRACTOR_WINDOW_DAYS)} days"
+
+
+def _adoption_label(adoption: dict) -> str:
+    """Render the same-window adoption line. Never prints a bare '0' when usage
+    evidence was simply unavailable (that is not an observed zero)."""
+    fires = adoption["fires"]
+    if not adoption.get("available", True):
+        return f"usage evidence unavailable ({fires} router-fires this window)"
+    invocations = adoption.get("invocations")
+    ratio = adoption.get("ratio")
+    if not fires:
+        return f"{invocations} skill-invocations, 0 router-fires this window"
+    return (f"{invocations} skill-invocations vs {fires} router-fires this window "
+            f"— non-causal ratio {ratio:.2f} (not per-prompt attributed)")
+
+
 def analyze_log(routing) -> dict:
     if not LOG_PATH.is_file():
-        return {"emissions": 0, "fires": 0, "attractors": [], "thin": True}
+        return {"emissions": 0, "fires": 0, "attractors": [], "thin": True,
+                "window": {"kind": "last_days", "days": ATTRACTOR_WINDOW_DAYS},
+                # No routing log yet: usage was never scanned, so report
+                # unavailable rather than assert an observed "0 skill-invocations".
+                "adoption": {"available": False, "fires": 0, "invocations": None, "ratio": None}}
     audit = routing.load_audit_module()
     policy = {s["name"]: s["policy"] for s in routing.collect_skills(audit, None)}
-    emissions = fires = 0
-    per_skill: dict[str, set] = {}
-    heads: dict[str, list] = {}
-    for line in LOG_PATH.read_text(errors="ignore").splitlines():
+    lines = LOG_PATH.read_text(errors="ignore").splitlines()
+    records: list[dict] = []
+    for line in lines:
         try:
             rec = json.loads(line)
         except ValueError:
             continue
+        if isinstance(rec, dict):
+            records.append(rec)
+
+    dated = [(rec, _record_time(rec)) for rec in records]
+    if any(timestamp is not None for _, timestamp in dated):
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=ATTRACTOR_WINDOW_DAYS)
+        records = [rec for rec, timestamp in dated if timestamp is not None and timestamp >= cutoff]
+        window = {"kind": "last_days", "days": ATTRACTOR_WINDOW_DAYS}
+    else:
+        records = []
+        for line in lines[-ATTRACTOR_FALLBACK_LINES:]:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                records.append(rec)
+        window = {"kind": "last_lines", "lines": ATTRACTOR_FALLBACK_LINES}
+
+    emissions = fires = 0
+    per_skill: dict[str, set] = {}
+    heads: dict[str, list] = {}
+    for rec in records:
         emissions += 1
         if not rec.get("fired"):
             continue
@@ -168,7 +291,8 @@ def analyze_log(routing) -> dict:
     ]
     attractors.sort(key=lambda x: -x["distinct_prompts"])
     return {"emissions": emissions, "fires": fires,
-            "attractors": attractors, "thin": fires < MIN_FIRES_FOR_CONFIDENCE}
+            "attractors": attractors, "thin": fires < MIN_FIRES_FOR_CONFIDENCE,
+            "window": window, "adoption": _adoption(audit, fires)}
 
 
 def pin_gate(routing) -> dict:
@@ -191,11 +315,14 @@ def main() -> int:
     today = dt.date.today().isoformat()
     green, recall_line = recall_is_green()
     log = analyze_log(routing)
+    window = log.get("window", {"kind": "last_days", "days": ATTRACTOR_WINDOW_DAYS})
+    adoption = log.get("adoption", {"available": False, "fires": log["fires"], "invocations": None, "ratio": None})
 
     L = [f"# Router self-tune report — {today}", "",
          "## Health",
          f"- recall gate: {'GREEN' if green else 'RED — REGRESSION, investigate'} ({recall_line})",
-         f"- log: {log['emissions']} emissions, {log['fires']} fired", ""]
+         f"- log: {log['emissions']} emissions, {log['fires']} fired ({_window_label(window)})",
+         f"- adoption (same window, non-causal): {_adoption_label(adoption)}", ""]
 
     L += ["## Attractors (over-firing on unrelated prompts)"]
     if log["thin"]:

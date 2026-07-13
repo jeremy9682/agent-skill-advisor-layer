@@ -223,6 +223,35 @@ def test_seat_brief_skips_but_genuine_seat_word_does_not():
         assert routing.should_skip_prompt(prompt) == "", prompt
 
 
+def test_system_injection_prefixes_skip_routing():
+    """Harness/system text injected as a user turn must bypass routing — it was
+    the biggest measured noise source (task-notifications scored dense workflow
+    language into `huashu-design` etc.). The `<task-notification>` tag sits past
+    AGENT_TO_AGENT_PATTERN_WINDOW behind the "[SYSTEM NOTIFICATION…]" preamble,
+    so anchoring on the opening prefix is what actually catches it.
+    """
+    routing = load_routing_module()
+    injections = [
+        "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nNo human input has been received since the last genuine user message.\n<task-notification>\n<task-id>x</task-id>",
+        "<system-reminder>\nAs you answer, you can use the following context:",
+        "<local-command-caveat>Caveat: generated while running local commands.</local-command-caveat>\n<command-name>/model</command-name>",
+        "[skill-router] 本条任务可能匹配以下已安装 skill：\n- huashu-design\n- social-monitor",
+        "<task-notification>\n<task-id>y</task-id>\n<status>completed</status>",
+        "=== OPENCLAW PREAMBLE ===\nTIMESTAMP=2026-07-13T10:00:00Z\nGIT_REPO=false",
+    ]
+    for prompt in injections:
+        assert routing.should_skip_prompt(prompt) == "system_injection", prompt[:40]
+
+    # Must NOT swallow a genuine prompt that merely mentions these words.
+    genuine = [
+        "把这个系统通知的格式改成 JSON",
+        "解释一下 command-name 这个字段是干嘛的",
+        "帮我给 skill-router 写段文档",
+    ]
+    for prompt in genuine:
+        assert routing.should_skip_prompt(prompt) == "", prompt
+
+
 def test_known_leak_is_reported_but_not_a_violation(tmp_path):
     routing = load_routing_module()
     audit = routing.load_audit_module()
@@ -348,3 +377,39 @@ def test_repo_cases_file_parses():
     assert all(c.get("id") and c.get("prompt") for c in cases)
     assert len(model_cases) >= 5
     assert all(c.get("id") and c.get("expect_policy") for c in model_cases)
+
+
+def _load_hook_module():
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "scripts" / "skill_router_hook.py"
+    spec = importlib.util.spec_from_file_location("skill_router_hook", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_hot_route_exclude_default_and_filter(monkeypatch, tmp_path):
+    # #2 (2026-07-13): content-creation attractors are excluded from the hot
+    # auto-suggest surface; the exclude only removes, never adds.
+    hook = _load_hook_module()
+    monkeypatch.setattr(hook, "GOV_DIR", tmp_path)  # no override file → default set
+    excl = hook.load_hot_route_exclude()
+    assert "huashu-design" in excl and "social-monitor" in excl
+    # a genuine engineering skill is NOT excluded
+    assert "investigate" not in excl and "dev-workflow" not in excl
+    # filtering semantics: excluded names drop, others survive, order preserved
+    chosen = [("huashu-design", 9.0), ("investigate", 5.0), ("social-monitor", 4.5)]
+    kept = [(n, s) for n, s in chosen if n not in excl]
+    assert kept == [("investigate", 5.0)]
+
+
+def test_hot_route_exclude_config_override(monkeypatch, tmp_path):
+    hook = _load_hook_module()
+    monkeypatch.setattr(hook, "GOV_DIR", tmp_path)
+    (tmp_path / "hot-route-exclude.json").write_text('["only-this"]')
+    excl = hook.load_hot_route_exclude()
+    assert excl == {"only-this"}
+    # an empty list restores pre-shrink behavior (nothing excluded)
+    (tmp_path / "hot-route-exclude.json").write_text('[]')
+    assert hook.load_hot_route_exclude() == set()
