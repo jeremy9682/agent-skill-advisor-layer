@@ -42,7 +42,7 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 | `research` | A cited primary-source research artifact is needed and delegating it to a background agent is specifically useful. | Research can be completed cheaply in the current session, or delegation is not permitted. |
 | `code-review` | The user wants Matt Pocock's two-axis Standards + Spec review with independent parallel sub-agents. | A normal local review or final-review seat can handle the diff without spawning agents. |
 | `improve-codebase-architecture` | A broad architecture-health scan with an Explore sub-agent and report is worth the cost. | The target issue is already known, the task is a scoped refactor, or the user only wants read-only advice. |
-| `wayfinder` | A foggy multi-session effort needs an issue-map investigation workflow before a spec can exist. | The work fits one session or can move directly to grilling/spec/implementation. |
+| `wayfinder` | A foggy multi-session effort needs an issue-map investigation workflow before a spec can exist. | The work fits one session or the user can be asked whether to explicitly run grilling/spec/implementation. |
 | `agent-teams` (native feature, not a skill) | Task could use Claude Code's experimental multi-teammate execution mode. | User has not explicitly approved launching Agent Teams; feature is experimental with significant token multiplier and compaction/duplicate-teammate/architecture-drift risk. |
 
 ## Common Routing Pitfalls
@@ -68,6 +68,10 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 
 - Suggestion is not invocation.
 - Ask for approval before executing any high-cost skill.
+- `grilling` is not a high-cost advisor target, but its top-level entry is
+  explicit-only. Do not start it from a generic request to push back or find
+  flaws; the user must name `/grill-me`, `/grilling`, or the grilling workflow.
+  Internal calls from pinned Matt workflows remain allowed.
 - If multiple target skills match, choose the one that removes the biggest
   current bottleneck.
 - If no target skill strongly matches, stay silent and proceed normally.
