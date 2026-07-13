@@ -63,6 +63,29 @@ GOV_DIR = Path.home() / ".codex" / "skill-governance"
 CACHE_PATH = GOV_DIR / "router-index.json"
 LOG_PATH = GOV_DIR / "routing-log.jsonl"
 
+# Hot-route shrink (2026-07-13 三席评估): keep the auto-suggest surface small.
+# Content-creation skills are the measured attractors (huashu-design fired on
+# 100+ unrelated prompts) with ~zero real invocation via the router — they are
+# reached through the CLAUDE.md design decision table + design-trigger hook, or
+# explicitly, NOT lexically. Excluding them from lexical auto-suggestion can
+# only REMOVE noise (never adds a suggestion) and does not touch the decision
+# table. Overridable per host via GOV_DIR/hot-route-exclude.json (a JSON list);
+# an empty list restores the pre-shrink behavior.
+DEFAULT_HOT_ROUTE_EXCLUDE = {
+    "huashu-design", "social-monitor", "huashu-data-pro", "huashu-research",
+    "huashu-article-edit",
+}
+
+
+def load_hot_route_exclude() -> set[str]:
+    try:
+        v = json.loads((GOV_DIR / "hot-route-exclude.json").read_text())
+        if isinstance(v, list):
+            return {str(x) for x in v}
+    except (OSError, ValueError):
+        pass
+    return set(DEFAULT_HOT_ROUTE_EXCLUDE)
+
 
 def noop() -> None:
     sys.stdout.write("{}")
@@ -284,6 +307,11 @@ def main() -> int:
 
         # Single-source display rule shared with the eval (finding 2).
         chosen = routing.chosen_candidates(top, fire_threshold=fire)
+        # Hot-route shrink: drop excluded content-creation skills from the
+        # auto-suggest surface (they stay reachable via decision table/explicit).
+        exclude = load_hot_route_exclude()
+        if exclude:
+            chosen = [(n, s) for n, s in chosen if n not in exclude]
         if not chosen:
             write_log(prompt, cwd, [
                 {"skill": n, "score": round(s, 2)} for n, s in top[:1]

@@ -132,16 +132,47 @@ def chosen_candidates(
     return [(n, s) for n, s in ranked if s >= bar]
 
 
+# Harness/system text injected as a user turn — NOT a user intent. These
+# always begin the turn, so an exact startswith is precise and cannot swallow a
+# genuine prompt (no real request opens with these markers). The
+# `<task-notification>` case previously slipped through: it is preceded by the
+# "[SYSTEM NOTIFICATION - NOT USER INPUT]" preamble, which pushed the tag past
+# AGENT_TO_AGENT_PATTERN_WINDOW. Anchoring on the preamble prefix fixes it and
+# was the single biggest source of routing noise (2026-07-13 三席评估).
+# Harness-reserved opening markers. These are namespaced sequences the harness
+# itself emits at position 0 of an injected turn; treating them as reserved is
+# deliberate. The residual edge (a user who literally pastes content STARTING
+# with one of these tokens gets skipped) is an accepted trade — the alternative,
+# scoring these dense workflow strings, produced measured false positives. A
+# genuine prompt that merely *mentions* a marker mid-text is unaffected (it only
+# matches at the start), and that case is covered by tests.
+SYSTEM_INJECTION_PREFIXES = (
+    "[SYSTEM NOTIFICATION",
+    "<system-reminder",
+    "<local-command",
+    "<command-name>",
+    "<command-message>",
+    "[skill-router]",
+    "<task-notification>",
+    "=== OPENCLAW PREAMBLE ===",
+)
+
+
 def should_skip_prompt(prompt: str) -> str:
     """Return a guard reason when a prompt should bypass routing entirely.
 
-    Router hints are for user intent. Agent-to-agent review briefs and task
-    notifications are already meta-prompts; scoring their dense workflow
-    language caused measured false positives such as `huashu-design`.
+    Router hints are for user intent. Harness/system injections, agent-to-agent
+    review briefs and task notifications are already meta-prompts; scoring their
+    dense workflow language caused measured false positives such as
+    `huashu-design` (fired on 100+ unrelated turns before this guard).
     """
-    # Agent review/task briefs put the role instruction first; the window keeps
-    # this guard from swallowing ordinary user prompts that mention model names.
     stripped = prompt.lstrip()
+    # 1) Harness/system injections open the turn with a reserved marker (see the
+    # SYSTEM_INJECTION_PREFIXES note for the accepted position-0 trade-off).
+    if stripped.startswith(SYSTEM_INJECTION_PREFIXES):
+        return "system_injection"
+    # 2) Agent review/task briefs put the role instruction first; the window keeps
+    # this guard from swallowing ordinary user prompts that mention model names.
     window = stripped[:AGENT_TO_AGENT_PATTERN_WINDOW]
     for pattern in AGENT_TO_AGENT_PATTERNS:
         if pattern in window:

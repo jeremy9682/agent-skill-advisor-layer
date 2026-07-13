@@ -64,6 +64,66 @@ so injection is technically feasible). Until the streak is met the hook stays
 deferred. As of 2026-07-12 the streak is 0 (the router is currently over-firing
 on ~14 attractors), which is exactly why porting now would be premature.
 
+## Adoption Pivot & 30-Day Stop-Loss (2026-07-13 三席评估)
+
+A three-seat assessment (Claude + Fable 5 + gpt-5.6-sol) found the governance
+machinery is solid but the router's actual goal — the right skill getting
+**used** — is not met: 294 skills installed, ~4 real invocations, and the
+router **suggests a different set of skills than the ones actually used**
+(it fires `huashu-design`/`social-monitor`; the used skills — `dev-workflow`,
+`superpowers:*`, `codex` — are reached via the CLAUDE.md decision table, not
+lexically). Verdict: **freeze governance-layer building**, pivot to adoption.
+Three cheap changes landed (not a rebuild):
+
+1. **Pre-filter** — `should_skip_prompt` now skips harness/system injections
+   (`[SYSTEM NOTIFICATION`, `<system-reminder`, `<task-notification>`, etc.).
+   These were the biggest noise source: a task-notification's dense text
+   scored into `huashu-design`, and the `<task-notification>` tag sat past the
+   agent-pattern window behind the preamble.
+2. **Hot-route shrink** — `skill_router_hook.py` drops the confirmed
+   non-converting content-creation attractors from the auto-suggest surface
+   (`DEFAULT_HOT_ROUTE_EXCLUDE`, overridable via
+   `GOV_DIR/hot-route-exclude.json`; an empty list restores prior behavior).
+   Only removes suggestions, never adds; excluded skills stay reachable via the
+   decision table / explicit invocation.
+3. **Honest measurement** — `router_selftune.py` now windows attractor
+   analysis to the last `ATTRACTOR_WINDOW_DAYS` (stale noise no longer blocks
+   the clean-week streak forever) and reports a same-window **adoption** line:
+   transcript-backed skill-invocations vs router-fires. This is a **non-causal
+   period ratio, NOT a conversion rate** — the invocation count includes skills
+   reached via the decision table / explicit calls that the router never
+   suggested, and it is not linked per-prompt to any fire, so it can exceed 1.0.
+   A true fire→invoke rate needs session-level attribution (future work); until
+   that exists, do not read the ratio as "fraction of fires that converted".
+
+**Stop-loss (hard):** for **30 days from 2026-07-13**, watch two signals.
+
+- **Primary (causal-agnostic):** the absolute count of real, transcript-backed
+  skill invocations. This does not depend on attribution — if the whole system
+  drives only single-digit invocations, adoption has failed regardless of which
+  layer gets the credit.
+- **Secondary (context only):** the non-causal adoption ratio above and the
+  attractor list. These *describe* noise; they must not be the sole basis of the
+  decision (a near-zero ratio with no per-prompt linkage cannot by itself prove
+  the router is useless — the absolute count does that).
+
+If real invocations stay single-digit at day 30, the lexical auto-router has
+failed its core hypothesis: **downgrade it to experimental / off**, and scope
+the system down to what demonstrably creates value — the CLAUDE.md decision
+table + the supply-chain audit (pin gate, ledger). Do NOT respond to still-low
+adoption by adding more governance machinery. If you later want a real
+conversion metric, build the per-prompt fire→invoke linkage first, then judge.
+
+**Blocking follow-up before the day-30 decision (raised in final review, sol):**
+`estimate_usage` (skill_audit.py) swallows per-file scan errors and returns an
+all-zero dict, so "sources present but every scan throws" reads as an observed
+zero. `_adoption`'s `_usage_sources_present` proxy only catches *missing*
+sources, not this case. Before day 30, expose scan-health from
+`estimate_usage` (e.g. a scanned/failed file count) so a total scan failure is
+reported as unavailable — otherwise the primary stop-loss signal (absolute
+invocation count) cannot be trusted as a real zero. This lives in a currently
+do-not-touch file, so it is intentionally out of the adoption-pivot PR.
+
 ## Router Hook And Hints
 
 `scripts/skill_router_hook.py` (UserPromptSubmit) suggests up to three
