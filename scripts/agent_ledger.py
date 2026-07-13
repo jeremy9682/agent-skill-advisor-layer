@@ -11,8 +11,9 @@ Rules enforced (2026-07-11 dual-model convergence, Fable 5 x gpt-5.6-sol):
   - exactly the 10 schema fields, no more, no fewer
   - exactly ONE transition marker (claimed:/closed:) per record
   - transition records carry next_action "none" and are never themselves open
-  - close rejects: missing target, already-closed target, cross-intent target,
-    and (without --instant) closing with no prior claim by the same seat
+  - close rejects: missing target, already-closed target, and (without --instant)
+    closing with no prior claim by the same seat; a stray closed: marker under
+    another intent_ref is ignored by fold, not error-rejected
   - --instant is for immediate read/verify/consume work only: closed: implies claim
   - append is flock-locked; malformed input exits nonzero
 
@@ -87,9 +88,9 @@ def _validate_open(ev):
     parts = wt.split(" @ ")
     if len(parts) != 3 or any(not p.strip() for p in parts):
         die(f"worktree {wt!r} must be exactly 'path @ branch @ commit' (3 "
-            f"non-empty fields); for cross-seat prefer 'origin/<branch> @ "
-            f"<branch> @ <40-char-SHA>' + fresh worktree, never a shared mutable "
-            f"checkout")
+            f"non-empty fields); for cross-seat prefer "
+            f"'<fresh-worktree-absolute-path> @ <branch> @ <40-char-SHA>' created "
+            f"from origin/<branch>, never a shared mutable checkout")
     na = ev.get("next_action") or ""
     if re.search(r"或| or |、然后|; then ", na):
         print(f"agent-ledger: warning: next_action looks like MULTIPLE actions "
