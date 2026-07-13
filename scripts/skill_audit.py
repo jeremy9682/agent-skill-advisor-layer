@@ -80,6 +80,15 @@ MATTPOCOCK_SKILLS = {
     "writing-great-skills",
 }
 
+# Local entry-routing overlays. These do not edit the pinned upstream skill and
+# do not block skill-to-skill composition: Matt workflows may still invoke
+# /grilling internally. The overlay only says that a top-level user request
+# must explicitly name /grill-me, /grilling, or the grilling workflow before
+# the runtime should enter the interview loop.
+LOCAL_EXPLICIT_ONLY_SKILLS = {
+    "grilling",
+}
+
 LOCAL_REPO_FALLBACKS = {
     "https://github.com/alchaincyf/huashu-skills.git": GOV_ROOT / "cache" / "huashu-skills",
     "https://github.com/alchaincyf/huashu-design.git": GOV_ROOT / "cache" / "huashu-design",
@@ -388,6 +397,8 @@ def call_policy(name: str, description: str, frontmatter: dict[str, Any]) -> str
     # approval event that releases the gate.
     if name in SUGGEST_CONFIRM_SKILLS or any(h in joined for h in SUGGEST_CONFIRM_HINTS):
         return "suggest-confirm"
+    if name in LOCAL_EXPLICIT_ONLY_SKILLS:
+        return "explicit-only"
     if str(frontmatter.get("disable-model-invocation", "")).lower() == "true":
         return "explicit-only"
     if any(h in joined for h in ROUTER_HINTS):

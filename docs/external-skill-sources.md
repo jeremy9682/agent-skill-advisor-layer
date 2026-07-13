@@ -131,7 +131,8 @@ post-copy `diff -qr` verified all 21 trees in both runtimes exactly.
   `skill-advisor` remains authoritative for high-cost approval policy.
 - `grill-with-docs` is the codebase/documented variant: it composes `grilling`
   with `domain-modeling` and may update `CONTEXT.md`/ADRs. Plain non-code
-  pressure tests continue to route to `grilling` via `/grill-me`.
+  pressure tests use the model directly unless the user explicitly enters
+  `/grill-me`, `/grilling`, or the grilling workflow.
 - Source group is `mattpocock-skills`; update policy is `merge-only`. Updates
   require reading changed skill files, advancing the registered SHA, rebuilding
   the manifest, and rerunning routing and pin checks.
@@ -139,14 +140,17 @@ post-copy `diff -qr` verified all 21 trees in both runtimes exactly.
 ### grill-me / grilling
 
 `grill-me` is an explicit wrapper with `disable-model-invocation: true`; it only
-delegates to `/grilling`. `grilling` contains the actual model-invoked workflow:
+delegates to `/grilling`. `grilling` contains the actual interview workflow:
 relentlessly interview the user about a plan or design, one question at a time,
 look up codebase facts instead of asking for them, and do not enact the plan
 until the user confirms shared understanding.
 
-Daily routing should therefore surface `grilling` for natural-language prompts
-such as "grill me", "push back", "别顺着我", and "反方审一下". Keep `/grill-me`
-available as the explicit user entrypoint.
+Daily routing must not surface `grilling` for generic adversarial requests such
+as "push back", "别顺着我", "找漏洞", or "反方审一下"; answer those directly.
+Enter the interview loop only when the user names `/grill-me`, `/grilling`, or
+explicitly asks to run the grilling workflow. Skill-to-skill calls from the
+pinned Matt workflows remain allowed; this policy only constrains top-level
+entry routing.
 
 Review notes:
 
@@ -157,8 +161,12 @@ Review notes:
   one inert HITL shell template and workflows capable of writing repo docs,
   issues, PR labels, code, tests, or commits when explicitly invoked; normal
   task authorization and local gates still apply.
-- Policy: `grill-me` is `explicit-only`; `grilling` is `auto-eligible`;
+- Policy: `grill-me` and `grilling` are `explicit-only` at the top-level entry;
   source group is `mattpocock-skills`; update policy is `merge-only`.
+- Codex does not mechanically enforce upstream `disable-model-invocation`.
+  This is a local policy-enforced overlay (global instructions and manifest
+  classification; the router-hints refinement is a separate follow-up), not
+  file-level isolation.
 
 ## emilkowalski/skills
 

@@ -36,8 +36,12 @@ link here instead of copying long, drifting workflow text.
   adopt the plan artifact quality bar, `docs/solutions/` learning loop,
   simplify-before-review step, and report-only review contract. Do not default
   to `/lfg`.
-- Superpowers and gstack: keep the engineering discipline, systematic debugging,
-  verification, QA, review, and retro practices, routed by task size.
+- Superpowers plugin: disabled by default after its useful discipline was
+  distilled into the local canon. Keep root-cause-first debugging, fresh
+  verification, QA, review, and retro practices, routed by task size; do not
+  restore an always-on harness without evidence from the retirement experiment.
+  gstack is not part of this retirement — its engineering-discipline practices
+  stay in effect.
 
 ## Standard Artifacts
 

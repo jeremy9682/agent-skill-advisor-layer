@@ -38,11 +38,12 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 For reviews and release gates, require an intent statement that captures the
 user's goal and constraints, not just the diff summary.
 
-Use `grilling` as a lightweight daily adversarial pressure-test when the user
-asks to be grilled, challenged, red-teamed, or says "push back", "challenge my
-thinking", "拷问我", "质询我", "反方审一下", "别顺着我", or "找漏洞". `/grill-me` is
-the explicit wrapper that delegates to `/grilling`. This is not a high-cost
-workflow and must not replace code review, QA, security review, or ship gates.
+Answer generic adversarial requests such as "push back", "反方审一下", "别顺着我",
+or "找漏洞" directly without loading a skill. Start the one-question-at-a-time
+`grilling` loop only when the user names `/grill-me`, `/grilling`, or explicitly
+asks to run the grilling workflow. This top-level explicit-only rule does not
+block internal calls from pinned Matt workflows. It is not a substitute for
+code review, QA, security review, or ship gates.
 
 For the published `mattpocock/skills` bundle, local routing policy, seat
 independence, checkpoint ledger, risk overlays, final review, and ship gate

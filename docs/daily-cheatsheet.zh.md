@@ -36,7 +36,7 @@ git clone git@github.com:jeremy9682/agent-skill-advisor-layer.git ~/Projects/age
 | 做新功能 | 「做个 Y 功能，目标是……」 | 出方案 → 你批 → 落地 → Codex 终审 |
 | 碰钱/权限/迁移/数据 | 正常说，带一句意图 | **自动升级**：Codex 盲审方案 + xhigh 终审 |
 | 技术选型/方向纠结 | 「调研一下 A vs B」 | Codex+Claude 双模型并行辩论 |
-| 想被反方质询 | 「grill me」「别顺着我，找漏洞」 | `grilling` 轻量压测观点/计划；`/grill-me` 是显式入口，不替代 review/QA/ship gate |
+| 想被反方质询 | 「别顺着我，找漏洞」 | 模型直接反方回答，不自动加载 skill；要一次一个问题的访谈时明确说「运行 `/grill-me`」或「运行 `grilling` workflow」 |
 | 代码库里边拷问边沉淀术语/ADR | 明确说「运行 `/grill-with-docs`」 | `grilling` + `domain-modeling`，更新 `CONTEXT.md` / ADR |
 | 难 bug 要严密反馈环 | 「先做 red-capable feedback loop 和最小复现」 | `diagnosing-bugs`；普通定点 bug 仍走 `investigate` |
 | Matt 完整开发流 | 明确点名 `/to-spec`、`/to-tickets`、`/implement` 等 | 上游流程服从本地三席、ledger、风险 overlay、终审和 ship gate |

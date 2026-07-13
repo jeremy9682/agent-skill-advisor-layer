@@ -79,6 +79,17 @@ def test_regular_skill_is_auto_eligible():
     assert audit.call_policy("format-json", "Format JSON files safely.", {}) == "auto-eligible"
 
 
+def test_grilling_local_entry_override_preserves_upstream_sync_policy():
+    audit = load_audit_module()
+
+    assert audit.call_policy(
+        "grilling", "Grill the user about a plan.", {}
+    ) == "explicit-only"
+    assert audit.update_policy(
+        "grilling", "mattpocock-skills", {}, Path("/fake/grilling")
+    ) == "merge-only"
+
+
 def test_usage_estimate_ignores_injected_skill_lists(tmp_path):
     audit = load_audit_module()
     old_home = audit.HOME
