@@ -1,0 +1,41 @@
+version: 1
+mode: manual-shadow
+task_id: apple-cjk-ab-prototype
+records:
+- deliverable_id: apple-cjk-ab-prototype
+  status: selected
+  visual_author: frontend-design
+  baselines:
+  - skill: design-systems
+    active_facets:
+    - cjk-typography
+    - cjk-spacing
+    suppressed_facets:
+    - erp-structure
+    precedence_note: CJK baseline controls typography and forbids negative letter-spacing.
+  overlays:
+  - skill: apple-design
+    active_facets:
+    - motion-physics
+    - gesture
+    - transient-material
+    - typography-micro
+    suppressed_facets: []
+    precedence_note: CJK baseline outranks typography-micro for CJK letter-spacing.
+  gates:
+  - design-review
+  usage_claim:
+    requested: true
+    permitted: true
+    accepted_evidence_kinds:
+    - read
+    - read
+    - read
+    - read
+    - artifact
+    reason: null
+  provenance:
+    catalog: design-skill-catalog.yaml
+    schema: schemas/design-selection-record.md
+    mode: manual-shadow
+    task_id: apple-cjk-ab-prototype

@@ -401,6 +401,24 @@ def validate_policy(policy: dict[str, Any], catalog: dict[str, Any]) -> list[str
             )
     if design_domain.get("invariants") != catalog.get("invariants"):
         errors.append("routing policy and catalog design invariants must match exactly")
+    shadow_mode = design_domain.get("shadow_mode")
+    expected_shadow = {
+        "status": "phase1_5_manual",
+        "selector": "scripts/design_shadow_select.py",
+        "selection_record_schema": "schemas/design-selection-record.md",
+        "evals": "routing-evals/design-shadow-cases.yaml",
+        "runtime_consumer": "none",
+    }
+    if shadow_mode != expected_shadow:
+        errors.append(
+            f"routing policy design_domain.shadow_mode={shadow_mode!r}, expected {expected_shadow!r}"
+        )
+    else:
+        for key in ("selector", "selection_record_schema", "evals"):
+            if not (ROOT / shadow_mode[key]).is_file():
+                errors.append(
+                    f"routing policy design_domain.shadow_mode.{key} target does not exist: {shadow_mode[key]}"
+                )
     return errors
 
 

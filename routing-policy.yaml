@@ -34,6 +34,12 @@ design_domain:
   catalog: design-skill-catalog.yaml
   selection_evals: routing-evals/design-cases.yaml
   runtime_consumer: none
+  shadow_mode:
+    status: phase1_5_manual
+    selector: scripts/design_shadow_select.py
+    selection_record_schema: schemas/design-selection-record.md
+    evals: routing-evals/design-shadow-cases.yaml
+    runtime_consumer: none
   invariants:
     max_visual_authors_per_deliverable: 1
     baseline_precedes_style_overlay: true

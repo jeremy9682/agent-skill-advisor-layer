@@ -1,0 +1,149 @@
+# Phase-1.5 deterministic shadow-selector contracts.  These cases exercise an
+# explicit task schema; prompt text is deliberately absent and no runtime hook
+# consumes this file.
+version: 1
+contract_kind: manual-shadow-selector
+catalog: ../design-skill-catalog.yaml
+cases:
+  - id: apple-cjk-product-ui
+    task:
+      id: apple-cjk-product-ui
+      deliverables:
+        - id: inventory
+          surface: product-ui
+          language: cjk
+          visual_direction: apple
+          erp: true
+    expect:
+      status: selected
+      visual_author: frontend-design
+      baseline_active_facets: [cjk-typography, cjk-spacing]
+      baseline_suppressed_facets: [erp-structure]
+      overlays: [apple-design]
+
+  - id: cjk-erp-table
+    task:
+      id: cjk-erp-table
+      deliverables:
+        - id: table
+          surface: table
+          language: cjk
+          erp: true
+    expect:
+      status: selected
+      visual_author: frontend-design
+      baseline_active_facets: [cjk-typography, cjk-spacing, erp-structure]
+
+  - id: latin-product-ui
+    task:
+      id: latin-product-ui
+      deliverables:
+        - id: settings
+          surface: product-ui
+          language: latin
+    expect: {status: selected, visual_author: frontend-design}
+
+  - id: apple-latin-mobile
+    task:
+      id: apple-latin-mobile
+      deliverables:
+        - id: mobile
+          surface: mobile-ui
+          language: latin
+          visual_direction: apple
+    expect:
+      status: selected
+      visual_author: frontend-design
+      overlays: [apple-design]
+      overlay_precedence_note: No CJK baseline; typography-micro applies unconstrained.
+
+  - id: magazine-deck
+    task:
+      id: magazine-deck
+      deliverables:
+        - id: launch
+          surface: deck
+          language: cjk
+          deck_mode: magazine
+    expect: {status: selected, visual_author: guizang-ppt-skill, gates: [plan-design-review, design-review]}
+
+  - id: template-deck
+    task:
+      id: template-deck
+      deliverables:
+        - id: training
+          surface: deck
+          language: cjk
+          deck_mode: template
+    expect: {status: selected, visual_author: html-ppt}
+
+  - id: branded-deck
+    task:
+      id: branded-deck
+      deliverables:
+        - id: brand
+          surface: deck
+          language: latin
+          deck_mode: branded
+    expect: {status: selected, visual_author: huashu-design}
+
+  - id: video-export
+    task:
+      id: video-export
+      deliverables:
+        - id: hero-video
+          surface: video
+          media_export: true
+    expect: {status: selected, visual_author: huashu-design}
+
+  - id: ambiguous-deck
+    task:
+      id: ambiguous-deck
+      deliverables:
+        - id: unknown
+          surface: deck
+    expect: {status: needs_direction}
+
+  - id: explicit-needs-direction
+    task:
+      id: explicit-needs-direction
+      deliverables:
+        - id: landing
+          surface: marketing-web
+          needs_direction: true
+    expect: {status: needs_direction}
+
+  - id: two-deliverables-separate-records
+    task:
+      id: two-deliverables-separate-records
+      deliverables:
+        - id: dashboard
+          surface: dashboard
+          language: cjk
+          erp: true
+        - id: report
+          surface: deck
+          language: cjk
+          deck_mode: template
+    expect:
+      record_count: 2
+      visual_authors: [frontend-design, html-ppt]
+
+  - id: usage-claim-blocked-without-evidence
+    task:
+      id: usage-claim-blocked-without-evidence
+      usage_claim: true
+      deliverables:
+        - id: page
+          surface: product-ui
+    expect: {status: selected, usage_claim_permitted: false}
+
+  - id: usage-claim-permitted-with-read-evidence
+    task:
+      id: usage-claim-permitted-with-read-evidence
+      usage_claim: true
+      evidence: [{kind: read, path: /Users/zihan/.claude/skills/design-systems/SKILL.md}]
+      deliverables:
+        - id: page
+          surface: product-ui
+    expect: {status: selected, usage_claim_permitted: true}

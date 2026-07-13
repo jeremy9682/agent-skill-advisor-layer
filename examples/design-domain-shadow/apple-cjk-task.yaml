@@ -1,0 +1,20 @@
+task:
+  id: apple-cjk-ab-prototype
+  usage_claim: true
+  evidence:
+    - kind: read
+      path: /Users/zihan/.agents/skills/frontend-design/SKILL.md
+    - kind: read
+      path: /Users/zihan/.claude/skills/design-systems/SKILL.md
+    - kind: read
+      path: /Users/zihan/.claude/skills/design-systems/CJK.md
+    - kind: read
+      path: /Users/zihan/Projects/external-skills/emilkowalski-skills/skills/apple-design/SKILL.md
+    - kind: artifact
+      path: examples/design-domain-shadow/apple-cjk-ab.html
+  deliverables:
+    - id: apple-cjk-ab-prototype
+      surface: product-ui
+      language: cjk
+      visual_direction: apple
+      erp: true
