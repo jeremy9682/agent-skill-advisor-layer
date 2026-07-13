@@ -89,7 +89,7 @@ def test_worktree_without_shape_rejected():
 
 
 def test_worktree_shape_accepted():
-    AL._validate_open(_ev(worktree="origin/main @ main @ 1395037bd8b2 (note)"))
+    AL._validate_open(_ev(worktree="/private/tmp/wt-x @ main @ 1395037bd8b2 (note)"))
 
 
 # --- next_action ambiguity warns (does not block) -------------------------- #
