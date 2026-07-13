@@ -67,13 +67,19 @@ LOG_PATH = GOV_DIR / "routing-log.jsonl"
 # Content-creation skills are the measured attractors (huashu-design fired on
 # 100+ unrelated prompts) with ~zero real invocation via the router — they are
 # reached through the CLAUDE.md design decision table + design-trigger hook, or
-# explicitly, NOT lexically. Excluding them from lexical auto-suggestion can
-# only REMOVE noise (never adds a suggestion) and does not touch the decision
-# table. Overridable per host via GOV_DIR/hot-route-exclude.json (a JSON list);
-# an empty list restores the pre-shrink behavior.
+# explicitly, NOT lexically. `grilling` is here for a different reason: it is
+# top-level explicit-only policy. A generic "push back / 找漏洞 / stress-test this
+# plan" request must NOT auto-surface it (it fires at ~2.5+ on those); the user
+# reaches it by explicitly naming /grill-me, /grilling, or the grilling workflow,
+# and pinned Matt workflows may still call it internally. Excluding a skill from
+# lexical auto-suggestion can only REMOVE noise (never adds a suggestion) and
+# does not touch the decision table. Overridable per host via
+# GOV_DIR/hot-route-exclude.json (a JSON list); an empty list restores the
+# pre-shrink behavior.
 DEFAULT_HOT_ROUTE_EXCLUDE = {
     "huashu-design", "social-monitor", "huashu-data-pro", "huashu-research",
     "huashu-article-edit",
+    "grilling",  # top-level explicit-only: reached by explicit name, not lexically
 }
 
 
