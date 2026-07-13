@@ -40,7 +40,13 @@ def fixture_entry(name: str, role: str, tree_hash: str, path: Path) -> dict:
             "update_policy": "git-managed",
         },
         "installations": [
-            {"runtime": "codex", "path": str(path), "tree_hash": tree_hash}
+            {
+                "runtime": "codex",
+                "path": str(path),
+                "tree_hash": tree_hash,
+                "source_group": "fixture-source",
+                "update_policy": "git-managed",
+            }
         ],
         "role": role,
         "surface": ["product-ui"],
@@ -118,6 +124,8 @@ def build_fixture(tmp_path: Path) -> tuple[dict, dict, str, dict]:
                 "path": entry["installations"][0]["path"],
                 "tree_hash": entry["installations"][0]["tree_hash"],
                 "call_policy": entry["call_policy"],
+                "source_group": entry["installations"][0]["source_group"],
+                "update_policy": entry["installations"][0]["update_policy"],
             }
             for entry in entries
         ]
@@ -178,6 +186,22 @@ def test_tree_hash_and_multi_author_drift_fail(tmp_path):
 
     assert any("tree_hash drift" in error for error in errors)
     assert any("visual_author must be a scalar" in error for error in errors)
+
+
+def test_installation_provenance_drift_fails_closed(tmp_path):
+    audit = load_audit_module()
+    catalog, manifest, claude_md, _ = build_fixture(tmp_path)
+    entry = catalog["design_skills"][0]
+    row = manifest["entries"][0]
+
+    row["source_group"] = "wrong-source"
+    errors, _ = audit.validate_catalog(catalog, manifest, claude_md)
+    assert any("source_group drift" in error for error in errors)
+
+    row["source_group"] = entry["installations"][0]["source_group"]
+    row["update_policy"] = "wrong-update"
+    errors, _ = audit.validate_catalog(catalog, manifest, claude_md)
+    assert any("update_policy drift" in error for error in errors)
 
 
 def test_claude_design_table_drift_fails(tmp_path):
@@ -321,6 +345,8 @@ def synthetic_manifest(catalog: dict) -> dict:
                 "path": str(Path(installation["path"]).expanduser()),
                 "tree_hash": installation["tree_hash"],
                 "call_policy": entry.get("manifest_call_policy", entry["call_policy"]),
+                "source_group": installation["source_group"],
+                "update_policy": installation["update_policy"],
             }
             if source.get("installed_commit"):
                 row["git_head"] = source["installed_commit"]

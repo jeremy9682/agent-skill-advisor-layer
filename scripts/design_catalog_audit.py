@@ -299,6 +299,16 @@ def _validate_entry(
             errors.append(f"{label}: installation {runtime}:{expanded} needs a 64-char tree_hash")
         elif tree_hash != row.get("tree_hash"):
             errors.append(f"{label}: installation tree_hash drift at {runtime}:{expanded}")
+        source_group = installation.get("source_group")
+        if not isinstance(source_group, str) or not source_group:
+            errors.append(f"{label}: installation {runtime}:{expanded} needs source_group")
+        elif source_group != row.get("source_group"):
+            errors.append(f"{label}: installation source_group drift at {runtime}:{expanded}")
+        installation_update_policy = installation.get("update_policy")
+        if not isinstance(installation_update_policy, str) or not installation_update_policy:
+            errors.append(f"{label}: installation {runtime}:{expanded} needs update_policy")
+        elif installation_update_policy != row.get("update_policy"):
+            errors.append(f"{label}: installation update_policy drift at {runtime}:{expanded}")
         manifest_policy = row.get("call_policy")
         catalog_policy = entry.get("call_policy")
         declared_from = entry.get("manifest_call_policy")

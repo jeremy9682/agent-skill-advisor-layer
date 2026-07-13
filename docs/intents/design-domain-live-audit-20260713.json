@@ -1,6 +1,6 @@
 {
   "kind": "point-in-time-live-audit-evidence",
-  "captured_at": "2026-07-13T11:39:15Z",
+  "captured_at": "2026-07-13T12:13:00Z",
   "command": "python3 scripts/design_catalog_audit.py --json",
   "inputs": {
     "manifest": {
@@ -13,7 +13,7 @@
     },
     "catalog": {
       "path": "design-skill-catalog.yaml",
-      "sha256": "53f0d1cf0d8d1a54c05004a94dc4eadb981952bffbc619d4ebdcacadac0a390d"
+      "sha256": "ecd98c1ecc6a2b846d04bbd116a987f2e5662ab2d6f846f63ef0ffd20afca8ec"
     },
     "evals": {
       "path": "routing-evals/design-cases.yaml",

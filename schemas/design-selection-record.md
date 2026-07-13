@@ -22,14 +22,24 @@ task:
       erp: true
 ```
 
-Required per deliverable: `id`, `surface`.  `visual_direction` is required
-when an author cannot be selected safely (for example, an unqualified
-`deck`).  Valid surfaces are the catalog surfaces.  Recognised explicit
+`task.id` is required and must be a non-empty string. `usage_claim`, when
+supplied, must be a boolean; `evidence`, when supplied, must be a list.
+Required per deliverable: `id`, `surface`. `surface` must be one of the
+catalogued surfaces. `visual_direction` is required when an author cannot be
+selected safely (for example, an unqualified `deck`). Recognised explicit
 attributes are `language` (`cjk` or `latin`), `visual_direction` (`apple`,
-`magazine`, `template`, `branded`), `erp`, `media_export`, and `deck_mode`.
-`motion_source: html-interface` explicitly permits the `review-animations`
-gate before an HTML/interface animation is exported to video; it is not
-inferred for arbitrary editorial video.
+`magazine`, `template`, `branded`), `deck_mode` (`magazine`, `template`,
+`branded`), and `motion_source` (`html-interface`). `erp`, `media_export`,
+and `needs_direction` must be booleans when supplied. `motion_source:
+html-interface` explicitly permits the `review-animations` gate before an
+HTML/interface animation is exported to video; it is not inferred for
+arbitrary editorial video.
+
+This contract is **fail-closed**: a misspelled enum, an unrecognised surface,
+or a string such as `"false"` in a boolean field yields an `invalid` record;
+a malformed top-level task ID, usage claim, or evidence container is rejected
+as an input error. The selector never coerces structured values or silently
+drops a malformed field.
 The selector intentionally does not infer any of these from a natural-language
 prompt.
 

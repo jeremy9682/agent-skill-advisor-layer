@@ -13,7 +13,9 @@
       --ink: #142033;
       --line: rgba(20, 32, 51, 0.11);
       --apple-blue: #0a84ff;
-      --apple-blue-pressed: #0071e3;
+      --apple-blue-action: #0071e3;
+      --apple-blue-pressed: #005bb5;
+      --muted-readable: #5f6b7b;
       --focus: #006edb;
       --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
     }
@@ -383,7 +385,7 @@
       margin: 0 auto 22px;
       border-radius: 12px;
       color: white;
-      background: var(--apple-blue);
+      background: var(--apple-blue-action);
       box-shadow: 0 7px 18px rgba(10, 132, 255, 0.22);
       font-size: 14px;
       font-weight: 600;
@@ -501,7 +503,7 @@
       border: 0;
       border-radius: 12px;
       color: white;
-      background: var(--apple-blue);
+      background: var(--apple-blue-action);
       box-shadow: 0 7px 18px rgba(10, 132, 255, 0.2);
       font-size: 13px;
       font-weight: 500;
@@ -526,7 +528,7 @@
 
     .eyebrow {
       margin: 0 0 5px;
-      color: #718096;
+      color: var(--muted-readable);
       font-size: 13px;
       font-weight: 500;
     }
@@ -601,7 +603,7 @@
     .secondary-metric small {
       display: block;
       margin-bottom: 6px;
-      color: #7a8798;
+      color: var(--muted-readable);
       font-size: 12px;
     }
 
@@ -618,7 +620,7 @@
       align-items: center;
       gap: 5px;
       margin-top: 9px;
-      color: #248a3d;
+      color: #176b2c;
       font-size: 12px;
       font-weight: 500;
       font-variant-numeric: tabular-nums;
@@ -654,7 +656,7 @@
     }
 
     .section-head span {
-      color: #8390a2;
+      color: var(--muted-readable);
       font-size: 12px;
     }
 
@@ -703,7 +705,7 @@
 
     .activity-copy span,
     .activity time {
-      color: #7a8798;
+      color: var(--muted-readable);
       font-size: 12px;
       font-variant-numeric: tabular-nums;
       font-feature-settings: "tnum";
@@ -722,7 +724,7 @@
 
     .pulse-row span {
       display: block;
-      color: #7a8798;
+      color: var(--muted-readable);
       font-size: 12px;
     }
 
@@ -792,6 +794,11 @@
       transform: translateY(0) scale(1);
     }
 
+    .apple.no-sheet-motion .sheet,
+    .apple.no-sheet-motion .sheet-backdrop {
+      transition: none !important;
+    }
+
     .sheet-head {
       display: flex;
       align-items: start;
@@ -858,7 +865,7 @@
       font-feature-settings: "tnum";
     }
     .sheet-list span {
-      color: #748196;
+      color: var(--muted-readable);
       font-variant-numeric: tabular-nums;
       font-feature-settings: "tnum";
     }
@@ -1233,11 +1240,16 @@
         });
       });
 
-      function openSheet() {
+      function endInstantSheetChange() {
+        window.requestAnimationFrame(() => apple.classList.remove('no-sheet-motion'));
+      }
+
+      function openSheet({ skipMotion = false } = {}) {
         window.clearTimeout(closeTimer);
         if (!sheetActive) {
           previousFocus = document.activeElement === document.body ? trigger : document.activeElement;
         }
+        if (skipMotion) apple.classList.add('no-sheet-motion');
         sheet.hidden = false;
         void sheet.offsetWidth;
         sheetActive = true;
@@ -1248,11 +1260,13 @@
         skipLink.inert = true;
         trigger.setAttribute('aria-expanded', 'true');
         close.focus();
+        if (skipMotion) endInstantSheetChange();
       }
 
-      function closeSheet() {
+      function closeSheet({ skipMotion = false } = {}) {
         if (!sheetActive) return;
         window.clearTimeout(closeTimer);
+        if (skipMotion) apple.classList.add('no-sheet-motion');
         apple.classList.remove('sheet-open');
         trigger.setAttribute('aria-expanded', 'false');
         const finish = () => {
@@ -1264,18 +1278,23 @@
           skipLink.inert = false;
           (previousFocus || trigger).focus();
         };
-        closeTimer = window.setTimeout(finish, reducedMotion.matches ? 160 : 220);
+        if (skipMotion) {
+          finish();
+          endInstantSheetChange();
+        } else {
+          closeTimer = window.setTimeout(finish, reducedMotion.matches ? 160 : 220);
+        }
       }
 
-      trigger.addEventListener('click', openSheet);
-      close.addEventListener('click', closeSheet);
-      backdrop.addEventListener('click', closeSheet);
+      trigger.addEventListener('click', (event) => openSheet({ skipMotion: event.detail === 0 }));
+      close.addEventListener('click', (event) => closeSheet({ skipMotion: event.detail === 0 }));
+      backdrop.addEventListener('click', () => closeSheet());
 
       document.addEventListener('keydown', (event) => {
         if (!sheetActive) return;
         if (event.key === 'Escape') {
           event.preventDefault();
-          closeSheet();
+          closeSheet({ skipMotion: true });
           return;
         }
         if (event.key !== 'Tab') return;

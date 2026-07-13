@@ -97,12 +97,71 @@ def test_invalid_contracts_fail_or_stay_invalid():
     else:
         raise AssertionError("empty deliverables must fail")
 
+    try:
+        selector.select({"id": 42, "deliverables": [{"id": "x", "surface": "product-ui"}]}, catalog())
+    except ValueError as error:
+        assert "task.id" in str(error)
+    else:
+        raise AssertionError("non-string task id must fail")
+
+    try:
+        selector.select({"id": "   ", "deliverables": [{"id": "x", "surface": "product-ui"}]}, catalog())
+    except ValueError as error:
+        assert "task.id" in str(error)
+    else:
+        raise AssertionError("whitespace-only task id must fail")
+
     result = selector.select({"id": "bad", "deliverables": [{"id": "x"}]}, catalog())
     record = result["records"][0]
     assert record["status"] == "invalid"
     assert record["visual_author"] is None
     assert record["usage_claim"]["requested"] is False
     assert record["provenance"]["task_id"] == "bad"
+
+
+def test_structured_input_enums_and_booleans_fail_closed():
+    selector = load_selector()
+
+    def invalid_record(field, value):
+        task = {
+            "id": f"invalid-{field}",
+            "deliverables": [{"id": "page", "surface": "product-ui", field: value}],
+        }
+        return selector.select(task, catalog())["records"][0]
+
+    probes = [
+        ("language", "CJK"),
+        ("visual_direction", "appple"),
+        ("deck_mode", "templte"),
+        ("erp", "false"),
+        ("media_export", "true"),
+        ("needs_direction", "false"),
+        ("motion_source", "video"),
+    ]
+    for field, value in probes:
+        record = invalid_record(field, value)
+        assert record["status"] == "invalid", (field, value)
+        assert record["visual_author"] is None
+        assert field in record["reason"]
+
+    for task in (
+        {
+            "id": "bad-usage",
+            "usage_claim": "false",
+            "deliverables": [{"id": "page", "surface": "product-ui"}],
+        },
+        {
+            "id": "bad-evidence",
+            "evidence": {"kind": "read"},
+            "deliverables": [{"id": "page", "surface": "product-ui"}],
+        },
+    ):
+        try:
+            selector.select(task, catalog())
+        except ValueError as error:
+            assert "task." in str(error)
+        else:
+            raise AssertionError("malformed top-level structured input must fail")
 
 
 def test_duplicate_catalog_names_fail_closed():

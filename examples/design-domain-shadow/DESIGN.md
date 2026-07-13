@@ -45,7 +45,9 @@ overlay and is never credited as the page author.
 
 ## Apple-inspired contract
 
-- Use platform blue (`#0a84ff`) as the single action accent.
+- Use platform blue (`#0a84ff`) for non-text accent marks. Controls carrying
+  white text use the darker platform-adjacent action blue (`#0071e3`) so the
+  default state clears WCAG AA contrast; pressed state is darker again.
 - Use translucent material only for functional floating layers: navigation,
   toolbar, and segmented control. The sheet uses a near-opaque elevated
   material so headless Chromium and GPU-constrained browsers do not leak a
@@ -54,9 +56,10 @@ overlay and is never credited as the page author.
   stack on top of other translucent materials.
 - Corners follow a restrained 12 / 18 / 24px hierarchy rather than applying
   pills everywhere.
-- Motion is brief and causal: press feedback, segment content replacement, and
-  a source-anchored sheet. Animations affect only `transform` and `opacity`, last
-  at most 240ms, and use a strong ease-out curve.
+- Motion is brief and causal: pointer press feedback, segment content
+  replacement, and a source-anchored sheet. Animations affect only `transform`
+  and `opacity`, last at most 240ms, and use a strong ease-out curve. Keyboard
+  activation and Escape complete the sheet state change immediately.
 - The interface remains usable with reduced motion, reduced transparency,
   reduced contrast, forced colors, and keyboard-only navigation.
 

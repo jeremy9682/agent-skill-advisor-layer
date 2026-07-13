@@ -58,6 +58,45 @@ def test_design_shadow_interactions_and_mobile_layout():
         assert page.locator("[aria-live]").count() == 0
         assert page.locator(".apple-nav button").count() == 0
 
+        contrast_ratios = page.evaluate(
+            """
+            () => {
+              const channels = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
+              const luminance = value => {
+                const linear = channels(value).map(channel => {
+                  const normalized = channel / 255;
+                  return normalized <= 0.04045
+                    ? normalized / 12.92
+                    : Math.pow((normalized + 0.055) / 1.055, 2.4);
+                });
+                return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+              };
+              const ratio = (foreground, background) => {
+                const a = luminance(foreground);
+                const b = luminance(background);
+                return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+              };
+              return [
+                ['.apple-brand', true],
+                ['.apple-action', true],
+                ['.eyebrow', false],
+                ['.primary-metric small', false],
+                ['.metric-note', false],
+                ['.section-head span', false],
+                ['.activity-copy span', false],
+                ['.activity time', false],
+                ['.pulse-row span', false],
+                ['.sheet-list span', false],
+              ].map(([selector, ownBackground]) => {
+                const style = getComputedStyle(document.querySelector(selector));
+                const background = ownBackground ? style.backgroundColor : 'rgb(255, 255, 255)';
+                return [selector, ratio(style.color, background)];
+              });
+            }
+            """
+        )
+        assert all(ratio >= 4.5 for _, ratio in contrast_ratios), contrast_ratios
+
         todo = page.locator("#todo-tab")
         overview = page.locator("#overview-tab")
         panel = page.locator("#apple-panel")
@@ -83,6 +122,30 @@ def test_design_shadow_interactions_and_mobile_layout():
         page.wait_for_timeout(260)
         assert page.locator("#daily-sheet").is_hidden()
         assert trigger.evaluate("element => document.activeElement === element") is True
+
+        page.evaluate(
+            """
+            () => {
+              window.__keyboardSheetTransitions = 0;
+              for (const element of document.querySelectorAll('#daily-sheet, .sheet-backdrop')) {
+                element.addEventListener('transitionrun', () => window.__keyboardSheetTransitions += 1);
+              }
+            }
+            """
+        )
+        trigger.press("Enter")
+        assert close.evaluate("element => document.activeElement === element") is True
+        page.keyboard.press("Escape")
+        assert page.locator("#daily-sheet").is_hidden()
+        assert page.locator(".apple-shell").evaluate("element => element.inert") is False
+        assert trigger.evaluate("element => document.activeElement === element") is True
+
+        trigger.press("Enter")
+        close.press("Enter")
+        assert page.locator("#daily-sheet").is_hidden()
+        assert trigger.evaluate("element => document.activeElement === element") is True
+        page.wait_for_timeout(40)
+        assert page.evaluate("window.__keyboardSheetTransitions") == 0
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.reload(wait_until="load")

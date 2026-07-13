@@ -23,6 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = ROOT / "design-skill-catalog.yaml"
 SCHEMA_REF = "schemas/design-selection-record.md"
 VALID_EVIDENCE_KINDS = ("read", "invocation")
+VALID_LANGUAGES = ("cjk", "latin")
+VALID_VISUAL_DIRECTIONS = ("apple", "magazine", "template", "branded")
+VALID_DECK_MODES = ("magazine", "template", "branded")
+VALID_MOTION_SOURCES = ("html-interface",)
+BOOLEAN_DELIVERABLE_FIELDS = ("erp", "media_export", "needs_direction")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
@@ -380,13 +385,63 @@ def _gates_for(
     ]
 
 
+def _allowed_surfaces(entries: dict[str, dict[str, Any]]) -> set[str]:
+    """Return the finite surface vocabulary declared by the catalog."""
+    allowed: set[str] = set()
+    for entry in entries.values():
+        surfaces = entry.get("surface")
+        if isinstance(surfaces, list):
+            allowed.update(surface for surface in surfaces if isinstance(surface, str))
+    return allowed
+
+
+def _invalid_deliverable_contract(
+    raw: dict[str, Any], entries: dict[str, dict[str, Any]]
+) -> str | None:
+    """Reject malformed structured fields before they can alter selection."""
+    surface = raw.get("surface")
+    if not isinstance(surface, str) or not surface:
+        return "surface is required"
+    if surface not in _allowed_surfaces(entries):
+        return f"surface must be a catalogued value, got {surface!r}"
+
+    language = raw.get("language", "latin")
+    if language not in VALID_LANGUAGES:
+        return "language must be one of: cjk, latin"
+
+    if "visual_direction" in raw and raw["visual_direction"] not in VALID_VISUAL_DIRECTIONS:
+        return "visual_direction must be one of: apple, magazine, template, branded"
+    if "deck_mode" in raw and raw["deck_mode"] not in VALID_DECK_MODES:
+        return "deck_mode must be one of: magazine, template, branded"
+    if "motion_source" in raw and raw["motion_source"] not in VALID_MOTION_SOURCES:
+        return "motion_source must be html-interface when supplied"
+    for field in BOOLEAN_DELIVERABLE_FIELDS:
+        if field in raw and not isinstance(raw[field], bool):
+            return f"{field} must be a boolean"
+    return None
+
+
+def _validate_task_contract(task: dict[str, Any]) -> str:
+    """Validate top-level inputs that apply to every record, fail closed."""
+    task_id = task.get("id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("task.id must be a non-empty string")
+    if "usage_claim" in task and not isinstance(task["usage_claim"], bool):
+        raise ValueError("task.usage_claim must be a boolean")
+    if "evidence" in task and not isinstance(task["evidence"], list):
+        raise ValueError("task.evidence must be a list")
+    return task_id
+
+
 def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
     """Return deterministic records for an explicit contract; never invokes skills."""
+    if not isinstance(task, dict):
+        raise ValueError("task must be a mapping")
     entries = catalog_entries(catalog)
+    task_id = _validate_task_contract(task)
     deliverables = task.get("deliverables")
     if not isinstance(deliverables, list) or not deliverables:
         raise ValueError("task.deliverables must be a non-empty list")
-    task_id = task.get("id", "unnamed-task")
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, raw in enumerate(deliverables):
@@ -403,7 +458,11 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         deliverable_id = raw.get("id")
-        if not isinstance(deliverable_id, str) or not deliverable_id or deliverable_id in seen:
+        if (
+            not isinstance(deliverable_id, str)
+            or not deliverable_id.strip()
+            or deliverable_id in seen
+        ):
             invalid_id = str(deliverable_id or f"invalid-{index}")
             records.append(
                 _record(
@@ -416,18 +475,19 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         seen.add(deliverable_id)
-        surface = raw.get("surface")
-        if not isinstance(surface, str) or not surface:
+        invalid_contract = _invalid_deliverable_contract(raw, entries)
+        if invalid_contract:
             records.append(
                 _record(
                     deliverable_id,
                     "invalid",
-                    "surface is required",
+                    invalid_contract,
                     task_id,
                     _usage_claim(task, deliverable_id, [], entries),
                 )
             )
             continue
+        surface = raw["surface"]
         if raw.get("needs_direction") is True:
             records.append(
                 _record(
