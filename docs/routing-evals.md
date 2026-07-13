@@ -114,15 +114,15 @@ table + the supply-chain audit (pin gate, ledger). Do NOT respond to still-low
 adoption by adding more governance machinery. If you later want a real
 conversion metric, build the per-prompt fire→invoke linkage first, then judge.
 
-**Blocking follow-up before the day-30 decision (raised in final review, sol):**
+**Scan-health follow-up (raised in final review by sol) — RESOLVED.**
 `estimate_usage` (skill_audit.py) swallows per-file scan errors and returns an
-all-zero dict, so "sources present but every scan throws" reads as an observed
-zero. `_adoption`'s `_usage_sources_present` proxy only catches *missing*
-sources, not this case. Before day 30, expose scan-health from
-`estimate_usage` (e.g. a scanned/failed file count) so a total scan failure is
-reported as unavailable — otherwise the primary stop-loss signal (absolute
-invocation count) cannot be trusted as a real zero. This lives in a currently
-do-not-touch file, so it is intentionally out of the adoption-pivot PR.
+all-zero dict, so "sources present but every scan throws" used to read as an
+observed zero. It now accepts an optional `health` dict and reports
+`files_found` / `files_scanned`; `_adoption` treats a zero with
+`files_scanned == 0` (no recent files, or every scan threw) as unavailable, not
+an observed zero — so the primary stop-loss signal (absolute invocation count)
+can be trusted. This replaces the weaker `_usage_sources_present` liveness proxy
+from the adoption-pivot PR, which only caught *missing* sources.
 
 ## Router Hook And Hints
 
