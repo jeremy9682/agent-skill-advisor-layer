@@ -85,7 +85,19 @@ cases:
           surface: deck
           language: latin
           deck_mode: branded
-    expect: {status: selected, visual_author: huashu-design}
+    expect: {status: selected, visual_author: huashu-design, gates: [design-review]}
+
+  - id: cjk-marketing-web
+    task:
+      id: cjk-marketing-web
+      deliverables:
+        - id: launch-page
+          surface: marketing-web
+          language: cjk
+    expect:
+      status: selected
+      visual_author: frontend-design
+      baseline_active_facets: [cjk-typography, cjk-spacing]
 
   - id: video-export
     task:
@@ -94,7 +106,7 @@ cases:
         - id: hero-video
           surface: video
           media_export: true
-    expect: {status: selected, visual_author: huashu-design}
+    expect: {status: selected, visual_author: huashu-design, gates: [design-review]}
 
   - id: ambiguous-deck
     task:

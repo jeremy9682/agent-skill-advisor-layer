@@ -31,7 +31,7 @@ def cases():
 def test_shadow_cases_match_contracts():
     selector = load_selector()
     loaded = cases()
-    assert len(loaded) == 16
+    assert len(loaded) == 17
     for case in loaded:
         result = selector.select(case["task"], catalog())
         expected = case["expect"]
@@ -153,7 +153,29 @@ def test_cli_writes_yaml_record(tmp_path):
     assert completed.stdout == ""
     record = yaml.safe_load(output.read_text())
     assert record["mode"] == "manual-shadow"
+    assert record["records"][0]["reason"] is None
     assert record["records"][0]["visual_author"] == "frontend-design"
+
+
+def test_cli_reports_malformed_input_without_traceback(tmp_path):
+    source = tmp_path / "broken.yaml"
+    source.write_text("task: [unterminated")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "design_shadow_select.py"),
+            "--input",
+            str(source),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "error:" in completed.stderr
+    assert "Traceback" not in completed.stderr
 
 
 def test_checked_in_apple_cjk_record_is_generated_by_selector():

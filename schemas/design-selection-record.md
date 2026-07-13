@@ -45,11 +45,12 @@ Each `records[]` item has these fields:
 | `usage_claim` | Whether a public skill-use claim was requested and whether supplied evidence permits it. |
 | `provenance` | Catalog/schema/version references for auditability. |
 
-All statuses have the same record shape.  A `selected` record has one
-non-null `visual_author` and may contain baselines, overlays, and gates.  An
-`invalid` or `needs_direction` record has `visual_author: null`, empty
-`baselines`/`overlays`/`gates`, and a non-empty `reason`; it still carries
-`usage_claim` and `provenance.task_id` so a rejected decision is auditable.
+All statuses have the same record shape.  A `selected` record has
+`reason: null`, one non-null `visual_author`, and may contain baselines,
+overlays, and gates.  An `invalid` or `needs_direction` record has
+`visual_author: null`, empty `baselines`/`overlays`/`gates`, and a non-empty
+`reason`; it still carries `usage_claim` and `provenance.task_id` so a rejected
+decision is auditable.
 
 ### Facet precedence
 

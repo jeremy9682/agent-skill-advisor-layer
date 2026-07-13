@@ -4,6 +4,7 @@ task_id: apple-cjk-ab-prototype
 records:
 - deliverable_id: apple-cjk-ab-prototype
   status: selected
+  reason: null
   visual_author: frontend-design
   baselines:
   - skill: design-systems

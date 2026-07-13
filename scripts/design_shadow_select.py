@@ -332,6 +332,7 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
             {
                 "deliverable_id": deliverable_id,
                 "status": "selected",
+                "reason": None,
                 "visual_author": author,
                 "baselines": baselines,
                 "overlays": overlays,
@@ -354,11 +355,14 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="Write YAML record instead of stdout")
     parser.add_argument("--catalog", type=Path, default=CATALOG_PATH)
     args = parser.parse_args()
-    source = load_mapping(args.input)
-    task = source.get("task", source)
-    if not isinstance(task, dict):
-        raise SystemExit("input task must be a mapping")
-    record = select(task, load_mapping(args.catalog))
+    try:
+        source = load_mapping(args.input)
+        task = source.get("task", source)
+        if not isinstance(task, dict):
+            raise ValueError("input task must be a mapping")
+        record = select(task, load_mapping(args.catalog))
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        parser.error(str(error))
     rendered = yaml.safe_dump(record, allow_unicode=True, sort_keys=False)
     if args.output:
         args.output.write_text(rendered)

@@ -1226,7 +1226,9 @@
 
       function openSheet() {
         window.clearTimeout(closeTimer);
-        previousFocus = document.activeElement === document.body ? trigger : document.activeElement;
+        if (!sheetActive) {
+          previousFocus = document.activeElement === document.body ? trigger : document.activeElement;
+        }
         sheet.hidden = false;
         void sheet.offsetWidth;
         sheetActive = true;
@@ -1241,6 +1243,7 @@
 
       function closeSheet() {
         if (!sheetActive) return;
+        window.clearTimeout(closeTimer);
         apple.classList.remove('sheet-open');
         trigger.setAttribute('aria-expanded', 'false');
         const finish = () => {

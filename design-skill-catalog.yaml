@@ -81,7 +81,7 @@ design_skills:
         path: /Users/zihan/.claude/skills/design-systems
         tree_hash: 6003b58f87b978dc36d03e74183616d2d05f105de492c5b3f6626b99f3792b4d
     role: overlay
-    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, deck]
+    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck]
     owns: [cjk-typography, cjk-spacing, erp-structure]
     call_policy: manual-confirm
     lifecycle: candidate
@@ -162,7 +162,7 @@ design_skills:
         path: /Users/zihan/.claude/skills/gstack/design-review
         tree_hash: 57de69a3f9440e6aa53c2b920ba2157985d1f2e21e8e39c57abf0063e82965eb
     role: gate
-    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck]
+    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck, video]
     owns: [post-implementation-visual-verdict]
     call_policy: auto-eligible
     lifecycle: candidate
