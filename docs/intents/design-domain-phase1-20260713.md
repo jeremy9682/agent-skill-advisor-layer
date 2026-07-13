@@ -14,6 +14,11 @@ Constraints: One `visual_author` per deliverable at a time; project design conte
 
 Verification expected: YAML parsing succeeds; catalog contains no more than 12 entries, all nine required names, only existing manifest call-policy values, and truthful null pins for local derivatives; each oracle contract has a scalar `expect.visual_author` and invocation-evidence requirement; the locked Apple-style Chinese UI contract is exactly `frontend-design` + `design-systems` baseline + `apple-design` overlay + `design-review`; live manifest/CLAUDE.md/policy consistency audit and focused regression tests pass.
 
+Point-in-time live evidence: `docs/intents/design-domain-live-audit-20260713.json`
+records the exact manifest, CLAUDE.md, catalog, and eval hashes used for the
+passing audit. It is intentionally not treated as a current-runtime substitute;
+rerun the live audit after any local installation change.
+
 Task shape: judgment
 
 Risk zone: normal governance metadata; no runtime routing or production mutation

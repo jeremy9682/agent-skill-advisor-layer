@@ -31,7 +31,7 @@ def cases():
 def test_shadow_cases_match_contracts():
     selector = load_selector()
     loaded = cases()
-    assert len(loaded) == 13
+    assert len(loaded) == 16
     for case in loaded:
         result = selector.select(case["task"], catalog())
         expected = case["expect"]
@@ -47,6 +47,8 @@ def test_shadow_cases_match_contracts():
                 continue
             if key == "usage_claim_permitted":
                 assert record["usage_claim"]["permitted"] is value
+            elif key == "accepted_evidence_kinds":
+                assert record["usage_claim"]["accepted_evidence_kinds"] == value
             elif key == "baseline_active_facets":
                 assert record["baselines"][0]["active_facets"] == value
             elif key == "baseline_suppressed_facets":
@@ -55,6 +57,8 @@ def test_shadow_cases_match_contracts():
                 assert [overlay["skill"] for overlay in record["overlays"]] == value
             elif key == "overlay_precedence_note":
                 assert record["overlays"][0]["precedence_note"] == value
+            elif key == "reason_contains":
+                assert value in record["reason"]
             else:
                 assert record[key] == value, case["id"]
 
@@ -90,7 +94,49 @@ def test_invalid_contracts_fail_or_stay_invalid():
         raise AssertionError("empty deliverables must fail")
 
     result = selector.select({"id": "bad", "deliverables": [{"id": "x"}]}, catalog())
-    assert result["records"][0]["status"] == "invalid"
+    record = result["records"][0]
+    assert record["status"] == "invalid"
+    assert record["visual_author"] is None
+    assert record["usage_claim"]["requested"] is False
+    assert record["provenance"]["task_id"] == "bad"
+
+
+def test_duplicate_catalog_names_fail_closed():
+    selector = load_selector()
+    duplicate = catalog()
+    duplicate["design_skills"].append(duplicate["design_skills"][0].copy())
+
+    try:
+        selector.catalog_entries(duplicate)
+    except ValueError as error:
+        assert "duplicate skill names" in str(error)
+    else:
+        raise AssertionError("duplicate catalog names must fail")
+
+
+def test_selected_facets_exhaust_catalog_ownership_and_surface_is_checked():
+    selector = load_selector()
+    selected = selector.select(next(case["task"] for case in cases() if case["id"] == "apple-cjk-product-ui"), catalog())["records"][0]
+    entries = selector.catalog_entries(catalog())
+    for item in [*selected["baselines"], *selected["overlays"]]:
+        facets = item["active_facets"] + item["suppressed_facets"]
+        assert facets == entries[item["skill"]]["owns"]
+        assert len(facets) == len(set(facets))
+
+    unsupported = selector.select(next(case["task"] for case in cases() if case["id"] == "apple-overlay-unsupported-on-marketing-web"), catalog())["records"][0]
+    assert unsupported["status"] == "needs_direction"
+    assert unsupported["visual_author"] is None
+
+
+def test_usage_evidence_needs_existing_path_and_dedupes_kinds():
+    selector = load_selector()
+    fabricated = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-claim-blocked-with-fabricated-path"), catalog())["records"][0]
+    assert fabricated["usage_claim"]["permitted"] is False
+    duplicate = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-evidence-dedupes-kinds"), catalog())["records"][0]
+    claim = duplicate["usage_claim"]
+    assert claim["accepted_evidence_kinds"] == ["read", "invocation"]
+    assert len(claim["accepted_evidence"]) == 2
+    assert all((ROOT / item["path"]).exists() for item in claim["accepted_evidence"])
 
 
 def test_cli_writes_yaml_record(tmp_path):

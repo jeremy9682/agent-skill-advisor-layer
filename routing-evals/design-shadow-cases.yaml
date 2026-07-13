@@ -113,6 +113,18 @@ cases:
           needs_direction: true
     expect: {status: needs_direction}
 
+  - id: apple-overlay-unsupported-on-marketing-web
+    task:
+      id: apple-overlay-unsupported-on-marketing-web
+      deliverables:
+        - id: landing
+          surface: marketing-web
+          language: latin
+          visual_direction: apple
+    expect:
+      status: needs_direction
+      reason_contains: apple-design does not support surface marketing-web
+
   - id: two-deliverables-separate-records
     task:
       id: two-deliverables-separate-records
@@ -142,8 +154,34 @@ cases:
     task:
       id: usage-claim-permitted-with-read-evidence
       usage_claim: true
-      evidence: [{kind: read, path: /Users/zihan/.claude/skills/design-systems/SKILL.md}]
+      evidence: [{kind: read, path: design-skill-catalog.yaml}]
       deliverables:
         - id: page
           surface: product-ui
     expect: {status: selected, usage_claim_permitted: true}
+
+  - id: usage-claim-blocked-with-fabricated-path
+    task:
+      id: usage-claim-blocked-with-fabricated-path
+      usage_claim: true
+      evidence: [{kind: read, path: does-not-exist/pretend.md}]
+      deliverables:
+        - id: page
+          surface: product-ui
+    expect: {status: selected, usage_claim_permitted: false}
+
+  - id: usage-evidence-dedupes-kinds
+    task:
+      id: usage-evidence-dedupes-kinds
+      usage_claim: true
+      evidence:
+        - {kind: read, path: design-skill-catalog.yaml}
+        - {kind: read, path: routing-policy.yaml}
+        - {kind: invocation, path: scripts/design_shadow_select.py}
+      deliverables:
+        - id: page
+          surface: product-ui
+    expect:
+      status: selected
+      usage_claim_permitted: true
+      accepted_evidence_kinds: [read, invocation]

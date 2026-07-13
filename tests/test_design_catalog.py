@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 
 import yaml
@@ -35,7 +37,7 @@ def fixture_entry(name: str, role: str, tree_hash: str, path: Path) -> dict:
             "installed_commit": None,
             "path": str(path),
             "tree_hash": tree_hash,
-            "update_policy": "manual-only",
+            "update_policy": "git-managed",
         },
         "installations": [
             {"runtime": "codex", "path": str(path), "tree_hash": tree_hash}
@@ -79,6 +81,9 @@ def build_fixture(tmp_path: Path) -> tuple[dict, dict, str, dict]:
             ),
             "lifecycle": sorted({"candidate", "evaluated", "approved", "deprecated"}),
             "source_kind": sorted({"upstream", "local-derivative"}),
+            "update_policy": sorted(
+                {"git-managed", "merge-only", "review-then-ff-only", "source-managed"}
+            ),
             "surface": sorted(
                 {
                     "product-ui",
@@ -202,6 +207,16 @@ def test_source_kind_and_policy_relaxation_fail_closed(tmp_path):
     assert any("source.kind" in error for error in errors)
     assert any("allowed_values.source_kind" in error for error in errors)
     assert any("only tighten protection" in error for error in errors)
+
+
+def test_unknown_update_policy_fails_closed(tmp_path):
+    audit = load_audit_module()
+    catalog, manifest, claude_md, _ = build_fixture(tmp_path)
+    catalog["design_skills"][0]["source"]["update_policy"] = "trust-latest"
+
+    errors, _ = audit.validate_catalog(catalog, manifest, claude_md)
+
+    assert any("source.update_policy" in error for error in errors)
 
 
 def test_call_policy_override_requires_live_fact_and_reason(tmp_path):
@@ -340,3 +355,24 @@ def test_repo_phase1_contract_is_internally_consistent():
     }
     for key in ("selector", "selection_record_schema", "evals"):
         assert (ROOT / policy["design_domain"]["shadow_mode"][key]).is_file()
+
+
+def test_checked_in_live_audit_evidence_matches_repo_inputs():
+    evidence = json.loads(
+        (ROOT / "docs" / "intents" / "design-domain-live-audit-20260713.json").read_text()
+    )
+
+    assert evidence["kind"] == "point-in-time-live-audit-evidence"
+    assert evidence["result"] == {
+        "status": "passed",
+        "catalog_entries": 9,
+        "eval_cases": 5,
+        "errors": [],
+    }
+    for key in ("catalog", "evals"):
+        item = evidence["inputs"][key]
+        digest = hashlib.sha256((ROOT / item["path"]).read_bytes()).hexdigest()
+        assert item["sha256"] == digest
+    for key in ("manifest", "claude_md"):
+        digest = evidence["inputs"][key]["sha256"]
+        assert len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)

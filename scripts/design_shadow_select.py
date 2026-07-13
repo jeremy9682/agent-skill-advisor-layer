@@ -9,7 +9,6 @@ network request, hook prompt submission, or invoke any skill.
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
@@ -29,59 +28,122 @@ def load_mapping(path: Path) -> dict[str, Any]:
     return data
 
 
-def catalog_names(catalog: dict[str, Any]) -> set[str]:
+def catalog_entries(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
     entries = catalog.get("design_skills")
     if not isinstance(entries, list):
         raise ValueError("catalog.design_skills must be a list")
-    names = {entry.get("name") for entry in entries if isinstance(entry, dict)}
-    if not all(isinstance(name, str) and name for name in names):
+    mapped_entries = [entry for entry in entries if isinstance(entry, dict)]
+    names = [entry.get("name") for entry in mapped_entries]
+    if not names or not all(isinstance(name, str) and name for name in names):
         raise ValueError("catalog contains an unnamed skill")
-    return names
+    if len(set(names)) != len(names):
+        raise ValueError("catalog contains duplicate skill names")
+    return {str(entry["name"]): entry for entry in mapped_entries}
 
 
 def _usage_claim(task: dict[str, Any]) -> dict[str, Any]:
     requested = bool(task.get("usage_claim", False))
     evidence = task.get("evidence", [])
     evidence = evidence if isinstance(evidence, list) else []
-    accepted = [item for item in evidence if isinstance(item, dict) and item.get("kind") in VALID_EVIDENCE_KINDS]
+    accepted: list[dict[str, str]] = []
+    seen_kinds: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        kind, path_text = item.get("kind"), item.get("path")
+        if (
+            kind not in VALID_EVIDENCE_KINDS
+            or not isinstance(path_text, str)
+            or not path_text.strip()
+        ):
+            continue
+        declared_path = Path(path_text).expanduser()
+        resolved_path = declared_path if declared_path.is_absolute() else ROOT / declared_path
+        if not resolved_path.exists() or kind in seen_kinds:
+            continue
+        seen_kinds.add(kind)
+        retained_path = (
+            str(resolved_path.resolve())
+            if declared_path.is_absolute()
+            else str(declared_path)
+        )
+        accepted.append({"kind": kind, "path": retained_path})
     permitted = not requested or bool(accepted)
     return {
         "requested": requested,
         "permitted": permitted,
         "accepted_evidence_kinds": [item["kind"] for item in accepted],
-        "reason": None if permitted else "usage claim requires read, invocation, or artifact evidence",
+        "accepted_evidence": accepted,
+        "reason": (
+            None
+            if permitted
+            else "usage claim requires existing read, invocation, or artifact evidence"
+        ),
     }
 
 
-def _baseline(language: str, *, erp: bool, apple: bool) -> list[dict[str, Any]]:
+def _facet_scope(entry: dict[str, Any], active: list[str]) -> tuple[list[str], list[str]]:
+    """Derive an exhaustive active/suppressed split from catalogued ownership."""
+    owned = entry.get("owns")
+    if (
+        not isinstance(owned, list)
+        or not owned
+        or not all(isinstance(item, str) for item in owned)
+    ):
+        raise ValueError(f"catalog entry {entry.get('name')} has invalid owns facets")
+    if (
+        len(set(owned)) != len(owned)
+        or len(set(active)) != len(active)
+        or not set(active).issubset(owned)
+    ):
+        raise ValueError(f"invalid facet selection for {entry.get('name')}")
+    return active, [facet for facet in owned if facet not in active]
+
+
+def _baseline(
+    entries: dict[str, dict[str, Any]],
+    language: str,
+    *,
+    erp: bool,
+    apple: bool,
+) -> list[dict[str, Any]]:
     if language != "cjk":
         return []
     active = ["cjk-typography", "cjk-spacing"]
-    suppressed: list[str] = []
     if erp and not apple:
         active.append("erp-structure")
-    else:
-        suppressed.append("erp-structure")
-    return [{
-        "skill": "design-systems",
-        "active_facets": active,
-        "suppressed_facets": suppressed,
-        "precedence_note": "CJK baseline controls typography and forbids negative letter-spacing.",
-    }]
+    active, suppressed = _facet_scope(entries["design-systems"], active)
+    return [
+        {
+            "skill": "design-systems",
+            "active_facets": active,
+            "suppressed_facets": suppressed,
+            "precedence_note": (
+                "CJK baseline controls typography and forbids negative letter-spacing."
+            ),
+        }
+    ]
 
 
-def _apple_overlay(*, has_cjk_baseline: bool) -> list[dict[str, Any]]:
+def _apple_overlay(
+    entries: dict[str, dict[str, Any]], *, has_cjk_baseline: bool
+) -> list[dict[str, Any]]:
     precedence_note = (
         "CJK baseline outranks typography-micro for CJK letter-spacing."
         if has_cjk_baseline
         else "No CJK baseline; typography-micro applies unconstrained."
     )
-    return [{
-        "skill": "apple-design",
-        "active_facets": ["motion-physics", "gesture", "transient-material", "typography-micro"],
-        "suppressed_facets": [],
-        "precedence_note": precedence_note,
-    }]
+    active, suppressed = _facet_scope(
+        entries["apple-design"], list(entries["apple-design"]["owns"])
+    )
+    return [
+        {
+            "skill": "apple-design",
+            "active_facets": active,
+            "suppressed_facets": suppressed,
+            "precedence_note": precedence_note,
+        }
+    ]
 
 
 def _author_for(deliverable: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -98,14 +160,79 @@ def _author_for(deliverable: dict[str, Any]) -> tuple[str | None, str | None]:
         return None, "deck requires explicit deck_mode: magazine, template, or branded"
     if surface in {"video", "image"} or deliverable.get("media_export"):
         return "huashu-design", None
-    if surface in {"product-ui", "mobile-ui", "dashboard", "detail", "table", "schedule", "marketing-web"}:
+    if surface in {
+        "product-ui",
+        "mobile-ui",
+        "dashboard",
+        "detail",
+        "table",
+        "schedule",
+        "marketing-web",
+    }:
         return "frontend-design", None
     return None, "unknown or unsupported surface"
 
 
+def _provenance(task_id: str) -> dict[str, str]:
+    return {
+        "catalog": "design-skill-catalog.yaml",
+        "schema": SCHEMA_REF,
+        "mode": "manual-shadow",
+        "task_id": task_id,
+    }
+
+
+def _record(
+    deliverable_id: str,
+    status: str,
+    reason: str,
+    task_id: str,
+    usage_claim: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the common shape for non-selected records."""
+    return {
+        "deliverable_id": deliverable_id,
+        "status": status,
+        "reason": reason,
+        "visual_author": None,
+        "baselines": [],
+        "overlays": [],
+        "gates": [],
+        "usage_claim": usage_claim,
+        "provenance": _provenance(task_id),
+    }
+
+
+def _unsupported(
+    entries: dict[str, dict[str, Any]], surface: str, skills: list[str]
+) -> str | None:
+    for skill in skills:
+        entry = entries.get(skill)
+        if entry is None:
+            return f"catalog lacks selected skill: {skill}"
+        supported = entry.get("surface")
+        if not isinstance(supported, list) or surface not in supported:
+            return f"{skill} does not support surface {surface}"
+    return None
+
+
+def _gates_for(
+    entries: dict[str, dict[str, Any]], surface: str, *, magazine: bool
+) -> list[str]:
+    """Select only catalog-supported advisory gates for this surface."""
+    candidates = ["design-review"]
+    if magazine:
+        candidates.insert(0, "plan-design-review")
+    return [
+        skill for skill in candidates
+        if isinstance(entries.get(skill, {}).get("surface"), list)
+        and surface in entries[skill]["surface"]
+    ]
+
+
 def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
     """Return deterministic records for an explicit contract; never invokes skills."""
-    names = catalog_names(catalog)
+    entries = catalog_entries(catalog)
     deliverables = task.get("deliverables")
     if not isinstance(deliverables, list) or not deliverables:
         raise ValueError("task.deliverables must be a non-empty list")
@@ -115,61 +242,110 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
     seen: set[str] = set()
     for index, raw in enumerate(deliverables):
         if not isinstance(raw, dict):
-            records.append({"deliverable_id": f"invalid-{index}", "status": "invalid", "reason": "deliverable must be a mapping"})
+            records.append(
+                _record(
+                    f"invalid-{index}",
+                    "invalid",
+                    "deliverable must be a mapping",
+                    task_id,
+                    usage_claim,
+                )
+            )
             continue
         deliverable_id = raw.get("id")
         if not isinstance(deliverable_id, str) or not deliverable_id or deliverable_id in seen:
-            records.append({"deliverable_id": str(deliverable_id or f"invalid-{index}"), "status": "invalid", "reason": "deliverable id must be unique and non-empty"})
+            records.append(
+                _record(
+                    str(deliverable_id or f"invalid-{index}"),
+                    "invalid",
+                    "deliverable id must be unique and non-empty",
+                    task_id,
+                    usage_claim,
+                )
+            )
             continue
         seen.add(deliverable_id)
         surface = raw.get("surface")
         if not isinstance(surface, str) or not surface:
-            records.append({"deliverable_id": deliverable_id, "status": "invalid", "reason": "surface is required"})
+            records.append(_record(deliverable_id, "invalid", "surface is required", task_id, usage_claim))
             continue
         if raw.get("needs_direction") is True:
-            records.append({
-                "deliverable_id": deliverable_id,
-                "status": "needs_direction",
-                "reason": "task contract explicitly marks visual direction unresolved",
-                "usage_claim": usage_claim,
-                "provenance": {"catalog": "design-skill-catalog.yaml", "schema": SCHEMA_REF, "mode": "manual-shadow"},
-            })
+            records.append(
+                _record(
+                    deliverable_id,
+                    "needs_direction",
+                    "task contract explicitly marks visual direction unresolved",
+                    task_id,
+                    usage_claim,
+                )
+            )
             continue
         author, reason = _author_for(raw)
         if author is None:
-            records.append({
-                "deliverable_id": deliverable_id,
-                "status": "needs_direction",
-                "reason": reason,
-                "usage_claim": usage_claim,
-                "provenance": {"catalog": "design-skill-catalog.yaml", "schema": SCHEMA_REF, "mode": "manual-shadow"},
-            })
+            records.append(
+                _record(
+                    deliverable_id,
+                    "needs_direction",
+                    reason or "selection requires direction",
+                    task_id,
+                    usage_claim,
+                )
+            )
             continue
-        if author not in names:
-            raise ValueError(f"catalog lacks selected author: {author}")
         language = raw.get("language", "latin")
         apple = raw.get("visual_direction") == "apple"
-        baselines = _baseline(language, erp=bool(raw.get("erp", False)), apple=apple)
-        overlays = _apple_overlay(has_cjk_baseline=bool(baselines)) if apple else []
-        gates = ["design-review"]
-        if surface == "deck" and raw.get("deck_mode", raw.get("visual_direction")) == "magazine":
-            gates.insert(0, "plan-design-review")
-        records.append({
-            "deliverable_id": deliverable_id,
-            "status": "selected",
-            "visual_author": author,
-            "baselines": baselines,
-            "overlays": overlays,
-            "gates": gates,
-            "usage_claim": usage_claim,
-            "provenance": {
-                "catalog": "design-skill-catalog.yaml",
-                "schema": SCHEMA_REF,
-                "mode": "manual-shadow",
-                "task_id": task_id,
-            },
-        })
-    return {"version": 1, "mode": "manual-shadow", "task_id": task_id, "records": records}
+        baselines = _baseline(
+            entries, language, erp=bool(raw.get("erp", False)), apple=apple
+        )
+        overlays = (
+            _apple_overlay(entries, has_cjk_baseline=bool(baselines))
+            if apple
+            else []
+        )
+        gates = _gates_for(
+            entries,
+            surface,
+            magazine=(
+                surface == "deck"
+                and raw.get("deck_mode", raw.get("visual_direction")) == "magazine"
+            ),
+        )
+        required_skills = [
+            author,
+            *[item["skill"] for item in baselines],
+            *[item["skill"] for item in overlays],
+            *gates,
+        ]
+        unsupported = _unsupported(entries, surface, required_skills)
+        if unsupported:
+            records.append(
+                _record(
+                    deliverable_id,
+                    "needs_direction",
+                    unsupported,
+                    task_id,
+                    usage_claim,
+                )
+            )
+            continue
+        records.append(
+            {
+                "deliverable_id": deliverable_id,
+                "status": "selected",
+                "visual_author": author,
+                "baselines": baselines,
+                "overlays": overlays,
+                "gates": gates,
+                "usage_claim": usage_claim,
+                "provenance": _provenance(task_id),
+            }
+        )
+    return {
+        "version": 1,
+        "mode": "manual-shadow",
+        "task_id": task_id,
+        "records": records,
+    }
 
 
 def main() -> int:

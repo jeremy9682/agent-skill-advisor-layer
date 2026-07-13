@@ -14,12 +14,16 @@ invariants:
   usage_claim_requires_read_or_invocation_evidence: true
 
 baseline_skill_ids: [local/design-systems]
+# `baseline` is a selector layer, not a second catalog role. A baseline skill
+# keeps the `overlay` role because the same constraints may also be attached as
+# an overlay on another surface; this list gives it precedence for selection.
 
 allowed_values:
   role: [direction, author, adapter, overlay, gate]
   call_policy: [auto-eligible, manual-confirm, suggest-confirm, router, explicit-only]
   lifecycle: [candidate, evaluated, approved, deprecated]
   source_kind: [upstream, local-derivative]
+  update_policy: [git-managed, merge-only, review-then-ff-only, source-managed]
   surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck, image, video]
 
 # Plugin cache is observed for provenance/inventory only in phase 1. Its skills
@@ -77,7 +81,7 @@ design_skills:
         path: /Users/zihan/.claude/skills/design-systems
         tree_hash: 6003b58f87b978dc36d03e74183616d2d05f105de492c5b3f6626b99f3792b4d
     role: overlay
-    surface: [product-ui, dashboard, detail, table, schedule, deck]
+    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, deck]
     owns: [cjk-typography, cjk-spacing, erp-structure]
     call_policy: manual-confirm
     lifecycle: candidate
@@ -158,7 +162,7 @@ design_skills:
         path: /Users/zihan/.claude/skills/gstack/design-review
         tree_hash: 57de69a3f9440e6aa53c2b920ba2157985d1f2e21e8e39c57abf0063e82965eb
     role: gate
-    surface: [product-ui, dashboard, detail, table, schedule, marketing-web, deck]
+    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck]
     owns: [post-implementation-visual-verdict]
     call_policy: auto-eligible
     lifecycle: candidate
@@ -179,7 +183,7 @@ design_skills:
         path: /Users/zihan/.agents/skills/frontend-design
         tree_hash: 25b18e6ac9b6c0953b013f0795665af958a08eb40b40cc23df27c3f377168575
     role: author
-    surface: [product-ui, dashboard, detail, table, schedule, marketing-web]
+    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web]
     owns: [page-layout, component-composition, implementation-css]
     call_policy: auto-eligible
     lifecycle: candidate

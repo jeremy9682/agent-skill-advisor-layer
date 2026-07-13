@@ -45,6 +45,12 @@ Each `records[]` item has these fields:
 | `usage_claim` | Whether a public skill-use claim was requested and whether supplied evidence permits it. |
 | `provenance` | Catalog/schema/version references for auditability. |
 
+All statuses have the same record shape.  A `selected` record has one
+non-null `visual_author` and may contain baselines, overlays, and gates.  An
+`invalid` or `needs_direction` record has `visual_author: null`, empty
+`baselines`/`overlays`/`gates`, and a non-empty `reason`; it still carries
+`usage_claim` and `provenance.task_id` so a rejected decision is auditable.
+
 ### Facet precedence
 
 `local/design-systems` may contribute `cjk-typography`, `cjk-spacing`, and
@@ -72,9 +78,12 @@ precedence claim.
 
 Selection is not proof that a skill was used.  A public `usage_claim` is
 permitted only if the input provides at least one evidence item with kind
-`read`, `invocation`, or `artifact`.  Otherwise the record remains a valid
-selection but marks the claim `permitted: false` and explains the evidence
-gap.
+`read`, `invocation`, or `artifact` **and** a non-empty path that exists on
+disk.  Relative paths are resolved from the repository root for validation but
+remain repository-relative in the record; absolute paths stay absolute.
+Accepted kinds are deduplicated in first-seen order and retained in
+`accepted_evidence`.  Otherwise the record remains a valid selection but marks
+the claim `permitted: false` and explains the evidence gap.
 
 ### Boundary
 

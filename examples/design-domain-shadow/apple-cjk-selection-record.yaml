@@ -25,14 +25,10 @@ records:
   gates:
   - design-review
   usage_claim:
-    requested: true
+    requested: false
     permitted: true
-    accepted_evidence_kinds:
-    - read
-    - read
-    - read
-    - read
-    - artifact
+    accepted_evidence_kinds: []
+    accepted_evidence: []
     reason: null
   provenance:
     catalog: design-skill-catalog.yaml

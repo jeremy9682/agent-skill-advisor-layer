@@ -1,0 +1,30 @@
+{
+  "kind": "point-in-time-live-audit-evidence",
+  "captured_at": "2026-07-13T11:07:27Z",
+  "command": "python3 scripts/design_catalog_audit.py --json",
+  "inputs": {
+    "manifest": {
+      "path": "/Users/zihan/.codex/skill-governance/skills-manifest.json",
+      "sha256": "dbe320d5dfdfb8b1335a58747f0aec700e5e2a4f63179c865e381c7ab6ddda87"
+    },
+    "claude_md": {
+      "path": "/Users/zihan/.claude/CLAUDE.md",
+      "sha256": "a5780f54ff26d182161ca7c560eaacc1b2bfaf80b0eff63432e992b9f259ae8c"
+    },
+    "catalog": {
+      "path": "design-skill-catalog.yaml",
+      "sha256": "89f1225f83db1a6dc49f1d5c0adb082ce881ed16236fb9d1208e76ea14c71186"
+    },
+    "evals": {
+      "path": "routing-evals/design-cases.yaml",
+      "sha256": "e6473da31d0faee5017f5ad9e2c625508caabd26c7d2942b9c9c984de48efb9f"
+    }
+  },
+  "result": {
+    "status": "passed",
+    "catalog_entries": 9,
+    "eval_cases": 5,
+    "errors": []
+  },
+  "limitations": "The live manifest and CLAUDE.md are machine-local. This checked-in artifact records their exact hashes and the audit verdict; it is evidence, not a replacement for rerunning the live audit after installation drift."
+}

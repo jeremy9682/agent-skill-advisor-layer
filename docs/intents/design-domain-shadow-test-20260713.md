@@ -8,7 +8,7 @@ User-facing outcome: a UI/deck/media task has one named visual author, bounded
 baseline and overlay facets, advisory gates, and a truthful distinction between
 selection and evidence of actual skill usage.
 
-In scope: a local CLI, a Markdown record schema, and 13 deterministic cases.
+In scope: a local CLI, a Markdown record schema, and 16 deterministic cases.
 The selector reads local YAML only and can write a YAML record when a human
 runs it explicitly.
 
@@ -29,9 +29,13 @@ Deliberate choices:
   letter-spacing.
 - Treat Apple Design as an interaction/material overlay, never a whole-page
   author.
+- Verify every selected author, baseline, overlay, and gate declares support
+  for the requested surface in the catalog; unsupported combinations become
+  `needs_direction`, never silent attachment.
 - A selection is not proof of use: a requested public usage claim needs at
-  least `read`, `invocation`, or `artifact` evidence.
+  least `read`, `invocation`, or `artifact` evidence with an existing local
+  path; accepted evidence kinds are deduplicated but retain resolved paths.
 
-Verification: focused pytest loads all 13 YAML contracts, asserts exact
+Verification: focused pytest loads all 16 YAML contracts, asserts exact
 Apple+CJK facets/precedence, tests ambiguous/multi-deliverable/evidence paths,
 and invokes the CLI once without network access.

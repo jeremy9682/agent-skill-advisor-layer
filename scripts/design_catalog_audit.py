@@ -35,6 +35,12 @@ CALL_POLICIES = {
 ROLES = {"direction", "author", "adapter", "overlay", "gate"}
 LIFECYCLES = {"candidate", "evaluated", "approved", "deprecated"}
 SOURCE_KINDS = {"upstream", "local-derivative"}
+UPDATE_POLICIES = {
+    "git-managed",
+    "merge-only",
+    "review-then-ff-only",
+    "source-managed",
+}
 SURFACES = {
     "product-ui",
     "mobile-ui",
@@ -157,6 +163,7 @@ def _validate_catalog_shape(catalog: dict[str, Any], errors: list[str]) -> list[
         "call_policy": CALL_POLICIES,
         "lifecycle": LIFECYCLES,
         "source_kind": SOURCE_KINDS,
+        "update_policy": UPDATE_POLICIES,
         "surface": SURFACES,
     }
     if not isinstance(allowed_values, dict):
@@ -237,6 +244,11 @@ def _validate_entry(
     source_kind = source.get("kind")
     if source_kind not in SOURCE_KINDS:
         errors.append(f"{label}: source.kind must be one of {sorted(SOURCE_KINDS)}")
+    update_policy = source.get("update_policy")
+    if update_policy not in UPDATE_POLICIES:
+        errors.append(
+            f"{label}: source.update_policy must be one of {sorted(UPDATE_POLICIES)}"
+        )
     commit = source.get("installed_commit")
     if commit is not None and (not isinstance(commit, str) or not HEX40_RE.fullmatch(commit)):
         errors.append(f"{label}: installed_commit must be null or a 40-char lowercase SHA")
