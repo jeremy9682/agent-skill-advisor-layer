@@ -1,0 +1,66 @@
+# Independent phase-1 selection contracts for the design catalog. These are
+# offline contracts; they do not add a runtime filter or change user-prompt
+# routing. Each author expectation is intentionally a scalar.
+version: 1
+contract_kind: oracle-only
+catalog: ../design-skill-catalog.yaml
+cases:
+  - id: apple-style-chinese-product-ui
+    prompt: "做一个 Apple 风格的中文库存管理界面，支持表格和详情页。"
+    expect:
+      visual_author: frontend-design
+      baselines: [design-systems]
+      overlays: [apple-design]
+      gates: [design-review]
+    forbid:
+      visual_author: [apple-design, huashu-design]
+    require:
+      invocation_evidence: true
+
+  - id: cjk-erp-table-refinement
+    prompt: "把现有 Frappe 的中文经营报表表格页重新设计，保留信息密度并提升层级。"
+    expect:
+      visual_author: frontend-design
+      baselines: [design-systems]
+      overlays: []
+      gates: [design-review]
+    forbid:
+      visual_author: [apple-design, huashu-design]
+    require:
+      invocation_evidence: true
+
+  - id: magazine-horizontal-deck
+    prompt: "做一份电子杂志风、横向翻页的中文发布会 PPT。"
+    expect:
+      visual_author: guizang-ppt-skill
+      baselines: [design-systems]
+      overlays: []
+      gates: [plan-design-review, design-review]
+    forbid:
+      visual_author: [html-ppt, huashu-design]
+    require:
+      invocation_evidence: true
+
+  - id: template-corporate-deck
+    prompt: "把这份中文周报做成可演讲的企业培训 PPT，沿用模板化布局。"
+    expect:
+      visual_author: html-ppt
+      baselines: [design-systems]
+      overlays: []
+      gates: [design-review]
+    forbid:
+      visual_author: [guizang-ppt-skill, huashu-design]
+    require:
+      invocation_evidence: true
+
+  - id: html-animation-to-mp4
+    prompt: "把现有产品宣传 HTML 动画导出为 60fps MP4，不要改产品页面的信息架构。"
+    expect:
+      visual_author: huashu-design
+      baselines: []
+      overlays: []
+      gates: [design-review]
+    forbid:
+      visual_author: [apple-design, frontend-design]
+    require:
+      invocation_evidence: true

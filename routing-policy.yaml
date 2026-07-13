@@ -26,6 +26,27 @@ enums:
   review_seat: [codex, fable]           # who may hold the final-review seat
   review_independence: [cross_family_blind, same_family_independent]
 
+# --- Design-domain phase 1 -------------------------------------------------
+# Offline governance only. The catalog records authority/provenance and the
+# eval file records expected selections; neither is a runtime LLM router.
+design_domain:
+  status: phase1_offline
+  catalog: design-skill-catalog.yaml
+  selection_evals: routing-evals/design-cases.yaml
+  runtime_consumer: none
+  invariants:
+    max_visual_authors_per_deliverable: 1
+    baseline_precedes_style_overlay: true
+    overlay_has_visual_naming_authority: false
+    handoff_requires_new_selection_record: true
+    usage_claim_requires_read_or_invocation_evidence: true
+  deferred:
+    - runtime_filter_or_hook
+    - embedding_router
+    - full_plugin_cache_enforcement
+    - automatic_design_md_generation
+    - fixed_full_gate_chain
+
 # --- Task-shape base routes -------------------------------------------------
 # execution_seat lists the families allowed to PRODUCE the diff for that shape.
 # execution_model maps each allowed family to its default model tier. Final

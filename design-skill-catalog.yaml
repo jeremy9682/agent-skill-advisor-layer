@@ -1,0 +1,259 @@
+# Phase-1 design-domain catalog. This is inventory and selection-contract data,
+# not a runtime router. `routing-policy.yaml` remains the machine canon for
+# model routing and review independence.
+schema_version: 1
+canon_ref: routing-policy.yaml#design_domain
+status: phase1_offline
+runtime_consumer: none
+
+invariants:
+  max_visual_authors_per_deliverable: 1
+  baseline_precedes_style_overlay: true
+  overlay_has_visual_naming_authority: false
+  handoff_requires_new_selection_record: true
+  usage_claim_requires_read_or_invocation_evidence: true
+
+baseline_skill_ids: [local/design-systems]
+
+allowed_values:
+  role: [direction, author, adapter, overlay, gate]
+  call_policy: [auto-eligible, manual-confirm, suggest-confirm, router, explicit-only]
+  lifecycle: [candidate, evaluated, approved, deprecated]
+  source_kind: [upstream, local-derivative]
+  surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck, image, video]
+
+# Plugin cache is observed for provenance/inventory only in phase 1. Its skills
+# are deliberately not promoted to catalog entries or pin enforcement here.
+sources_observed:
+  - id: openai-curated-remote/product-design
+    kind: plugin-cache
+    version: 0.1.50
+    path: /Users/zihan/.codex/plugins/cache/openai-curated-remote/product-design/0.1.50
+    enforcement: observe-only
+    note: "Router-only package observed during research; not an additional design authority."
+
+design_skills:
+  - id: emilkowalski/apple-design
+    name: apple-design
+    source:
+      kind: upstream
+      repository: https://github.com/emilkowalski/skills.git
+      upstream_observed_commit: 7bb7061b5cf7de15ea1aeaf00fbd9e6592a20fce
+      installed_commit: f76beceb7d3fc8c43309cefad5a095a206103a4e
+      path: skills/apple-design
+      tree_hash: 8d5d6949abe176aed835dc259e91470b6ee219f2bc2af92784a7f072a2e50ed0
+      update_policy: review-then-ff-only
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/apple-design
+        tree_hash: 8d5d6949abe176aed835dc259e91470b6ee219f2bc2af92784a7f072a2e50ed0
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/apple-design
+        tree_hash: 8d5d6949abe176aed835dc259e91470b6ee219f2bc2af92784a7f072a2e50ed0
+    role: overlay
+    surface: [product-ui, mobile-ui]
+    owns: [motion-physics, gesture, transient-material, typography-micro]
+    call_policy: manual-confirm
+    manifest_call_policy: auto-eligible
+    call_policy_reason: "Prevent a style-named overlay from being selected or credited as the whole-page visual author."
+    lifecycle: evaluated
+    evidence: docs/intents/apple-design-audit-gap-2026-07-13.md
+
+  - id: local/design-systems
+    name: design-systems
+    source:
+      kind: local-derivative
+      repository: null
+      upstream_observed_commit: null
+      installed_commit: null
+      path: /Users/zihan/.claude/skills/design-systems
+      tree_hash: 6003b58f87b978dc36d03e74183616d2d05f105de492c5b3f6626b99f3792b4d
+      update_policy: source-managed
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/design-systems
+        tree_hash: 6003b58f87b978dc36d03e74183616d2d05f105de492c5b3f6626b99f3792b4d
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/design-systems
+        tree_hash: 6003b58f87b978dc36d03e74183616d2d05f105de492c5b3f6626b99f3792b4d
+    role: overlay
+    surface: [product-ui, dashboard, detail, table, schedule, deck]
+    owns: [cjk-typography, cjk-spacing, erp-structure]
+    call_policy: manual-confirm
+    lifecycle: candidate
+    evidence: null
+
+  - id: gstack/design-consultation
+    name: design-consultation
+    source:
+      kind: upstream
+      repository: https://github.com/garrytan/gstack.git
+      upstream_observed_commit: null
+      installed_commit: dc6252d1df7f1f650ea6e9b2bba7d08fab5de902
+      path: .agents/skills/gstack-design-consultation
+      tree_hash: null
+      update_policy: merge-only
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/gstack-design-consultation
+        tree_hash: 1b89bbfd121e955065b82ef1fd860db2f4a8d214d23d0bccf9452e70ae9bd6cc
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/design-consultation
+        tree_hash: 81d770a1836c847e09ab53d20e19273f542ec324fa6ee9de47e8c5655fc8487c
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/gstack/design-consultation
+        tree_hash: b43d9b7a08534811b702b4f0deb8d3fc774e8ee4edf64e9d68751d96b9276e8c
+    role: direction
+    surface: [product-ui, dashboard, marketing-web, deck]
+    owns: [design-context, design-tokens]
+    call_policy: manual-confirm
+    lifecycle: candidate
+    evidence: null
+
+  - id: gstack/plan-design-review
+    name: plan-design-review
+    source:
+      kind: upstream
+      repository: https://github.com/garrytan/gstack.git
+      upstream_observed_commit: null
+      installed_commit: dc6252d1df7f1f650ea6e9b2bba7d08fab5de902
+      path: .agents/skills/gstack-plan-design-review
+      tree_hash: null
+      update_policy: merge-only
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/gstack-plan-design-review
+        tree_hash: d48a52c6269f347f9dc046a0966961ebdffae4c04aafa928636437e126f47a32
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/gstack/plan-design-review
+        tree_hash: e8f01f1397e238edc4af30bad9a41a9fb4912d40477065b769d6b5b0e2e26fc0
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/plan-design-review
+        tree_hash: b9ab30c95cffb7579fe2b612c17ccf3a00fb97fa4c22d19b363eb9eb0cde61f9
+    role: gate
+    surface: [product-ui, dashboard, marketing-web, deck]
+    owns: [pre-implementation-design-verdict]
+    call_policy: auto-eligible
+    lifecycle: candidate
+    evidence: null
+
+  - id: gstack/design-review
+    name: design-review
+    source:
+      kind: upstream
+      repository: https://github.com/garrytan/gstack.git
+      upstream_observed_commit: null
+      installed_commit: dc6252d1df7f1f650ea6e9b2bba7d08fab5de902
+      path: .agents/skills/gstack-design-review
+      tree_hash: null
+      update_policy: merge-only
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/gstack-design-review
+        tree_hash: 8e22e77ac8faa79a6e0d76b1c7eba96c38d374a17e5d83718ac3855c2f3bb3b7
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/design-review
+        tree_hash: 9dc8c824041480bc06f0f49e5406812e82163910a1ff5ae2eb280b9c4de97373
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/gstack/design-review
+        tree_hash: 57de69a3f9440e6aa53c2b920ba2157985d1f2e21e8e39c57abf0063e82965eb
+    role: gate
+    surface: [product-ui, dashboard, detail, table, schedule, marketing-web, deck]
+    owns: [post-implementation-visual-verdict]
+    call_policy: auto-eligible
+    lifecycle: candidate
+    evidence: null
+
+  - id: local/frontend-design
+    name: frontend-design
+    source:
+      kind: local-derivative
+      repository: null
+      upstream_observed_commit: null
+      installed_commit: null
+      path: /Users/zihan/.agents/skills/frontend-design
+      tree_hash: 25b18e6ac9b6c0953b013f0795665af958a08eb40b40cc23df27c3f377168575
+      update_policy: git-managed
+    installations:
+      - runtime: agents
+        path: /Users/zihan/.agents/skills/frontend-design
+        tree_hash: 25b18e6ac9b6c0953b013f0795665af958a08eb40b40cc23df27c3f377168575
+    role: author
+    surface: [product-ui, dashboard, detail, table, schedule, marketing-web]
+    owns: [page-layout, component-composition, implementation-css]
+    call_policy: auto-eligible
+    lifecycle: candidate
+    evidence: null
+
+  - id: local/huashu-design
+    name: huashu-design
+    source:
+      kind: local-derivative
+      repository: null
+      upstream_observed_commit: null
+      installed_commit: null
+      path: /Users/zihan/.codex/skills/huashu-design
+      tree_hash: 74e64baef1e7f1c3dc9e87b88c731da38b4fc3be9620ac6cbe749c182080a5b5
+      update_policy: git-managed
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/huashu-design
+        tree_hash: 74e64baef1e7f1c3dc9e87b88c731da38b4fc3be9620ac6cbe749c182080a5b5
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/huashu-design
+        tree_hash: 74e64baef1e7f1c3dc9e87b88c731da38b4fc3be9620ac6cbe749c182080a5b5
+    role: author
+    surface: [product-ui, marketing-web, deck, image, video]
+    owns: [prototype-direction, branded-composition, media-export]
+    call_policy: auto-eligible
+    lifecycle: candidate
+    evidence: null
+
+  - id: op7418/guizang-ppt-skill
+    name: guizang-ppt-skill
+    source:
+      kind: upstream
+      repository: https://github.com/op7418/guizang-ppt-skill.git
+      upstream_observed_commit: null
+      installed_commit: f6676c3f315e4cbf8abb41daa26377688a716a5f
+      path: .
+      tree_hash: 28cf1957eeb716ab8430903ed7647a28797ca7a180182f631ee2f985e2cd3be1
+      update_policy: source-managed
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/guizang-ppt-skill
+        tree_hash: 28cf1957eeb716ab8430903ed7647a28797ca7a180182f631ee2f985e2cd3be1
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/guizang-ppt-skill
+        tree_hash: 28cf1957eeb716ab8430903ed7647a28797ca7a180182f631ee2f985e2cd3be1
+    role: author
+    surface: [deck]
+    owns: [magazine-deck-composition, horizontal-swipe-deck]
+    call_policy: auto-eligible
+    lifecycle: candidate
+    evidence: null
+
+  - id: lewislulu/html-ppt
+    name: html-ppt
+    aliases: [html-ppt-skill]
+    source:
+      kind: upstream
+      repository: https://github.com/lewislulu/html-ppt-skill.git
+      upstream_observed_commit: null
+      installed_commit: f3a8435d3901697d5ac5e64d356c933637e43107
+      path: .
+      tree_hash: 82ff1bd17a2d3ab493f7ee8a914ecfe0d75c0b8fd0f8c2d0eb28c3cd6275adfa
+      update_policy: source-managed
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/html-ppt
+        tree_hash: 82ff1bd17a2d3ab493f7ee8a914ecfe0d75c0b8fd0f8c2d0eb28c3cd6275adfa
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/html-ppt-skill
+        tree_hash: 82ff1bd17a2d3ab493f7ee8a914ecfe0d75c0b8fd0f8c2d0eb28c3cd6275adfa
+    role: author
+    surface: [deck]
+    owns: [template-deck-composition, static-html-deck]
+    call_policy: auto-eligible
+    lifecycle: candidate
+    evidence: null
