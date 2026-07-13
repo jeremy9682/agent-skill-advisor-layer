@@ -835,7 +835,17 @@ def scan_gstack_timeline(counts: dict[str, dict[str, int]], valid: set[str], cut
             continue
 
 
-def estimate_usage(entries: list[dict[str, Any]], days: int, limit: int, max_bytes: int) -> dict[str, dict[str, int]]:
+def estimate_usage(entries: list[dict[str, Any]], days: int, limit: int, max_bytes: int,
+                   health: dict[str, int] | None = None) -> dict[str, dict[str, int]]:
+    """Scan recent transcripts for skill-usage evidence.
+
+    Per-file scan errors are swallowed so one corrupt session cannot blank the
+    whole report — but that means an all-zero result is ambiguous between "no
+    usage" and "every scan failed". Pass a ``health`` dict to disambiguate: it is
+    populated with ``files_found`` (recent transcript files in the window) and
+    ``files_scanned`` (how many were read without raising). A caller can then
+    treat a zero with ``files_scanned == 0`` as a scan gap, not an observed zero.
+    """
     names = sorted({e["dir_name"] for e in entries} | {e["name"] for e in entries})
     valid = set(names)
     counts = {name: empty_usage() for name in names}
@@ -853,15 +863,20 @@ def estimate_usage(entries: list[dict[str, Any]], days: int, limit: int, max_byt
             if p.stat().st_mtime >= cutoff
         ]
     files = sorted(codex_files + claude_files, key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+    scanned_ok = 0
     for f in files:
         try:
             if "/.codex/sessions/" in str(f):
                 scan_codex_session(f, counts, valid, max_bytes)
             else:
                 scan_claude_session(f, counts, valid, max_bytes)
+            scanned_ok += 1
         except Exception:
             continue
     scan_gstack_timeline(counts, valid, cutoff)
+    if health is not None:
+        health["files_found"] = len(files)
+        health["files_scanned"] = scanned_ok
     return counts
 
 

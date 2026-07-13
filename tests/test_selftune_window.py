@@ -20,9 +20,12 @@ class Audit:
     def discover_skills(self):
         return [{"name": "prototype", "dir_name": "prototype"}]
 
-    def estimate_usage(self, entries, days, limit, max_bytes):
+    def estimate_usage(self, entries, days, limit, max_bytes, health=None):
         assert entries == self.discover_skills()
         assert (days, limit, max_bytes) == (7, 400, 3_000_000)
+        if health is not None:  # healthy scan: files found and read
+            health["files_found"] = 5
+            health["files_scanned"] = 5
         return {"prototype": {"actual_skill_invocation": 3}}
 
 
@@ -124,7 +127,7 @@ def test_analyze_log_windows_out_untimestamped_rows_when_any_are_dated(tmp_path,
 
 
 class _RaisingAudit(Audit):
-    def estimate_usage(self, entries, days, limit, max_bytes):
+    def estimate_usage(self, entries, days, limit, max_bytes, health=None):
         raise RuntimeError("no transcripts available")
 
 
@@ -172,41 +175,47 @@ def test_no_routing_log_reports_adoption_unavailable_not_zero(tmp_path, monkeypa
 
 
 class _ZeroAudit(Audit):
-    """Usage estimator that returns a populated all-zero dict without raising —
-    the shape estimate_usage produces when it swallows every per-file scan error."""
-    def estimate_usage(self, entries, days, limit, max_bytes):
+    """Usage estimator that returns a populated all-zero dict without raising.
+    ``scanned`` sets the reported scan health: 0 mimics 'no recent files, or
+    every per-file scan swallowed an error'; a positive value mimics a clean
+    scan that genuinely found no usage."""
+    def __init__(self, scanned):
+        self._scanned = scanned
+
+    def estimate_usage(self, entries, days, limit, max_bytes, health=None):
+        if health is not None:
+            health["files_found"] = 4
+            health["files_scanned"] = self._scanned
         return {"prototype": {"actual_skill_invocation": 0}}
 
 
 class _ZeroRouting(Routing):
-    def __init__(self):
-        self.audit = _ZeroAudit()
+    def __init__(self, scanned):
+        self.audit = _ZeroAudit(scanned)
 
 
-def test_adoption_zero_with_absent_sources_is_unavailable(tmp_path, monkeypatch):
-    # A bare 0 is only an observed zero when transcript sources are live; with
-    # the sources missing it must degrade to unavailable, not assert "0".
+def test_adoption_zero_with_no_files_scanned_is_unavailable(tmp_path, monkeypatch):
+    # files_scanned == 0 (no recent files, or every scan threw) means a 0 is a
+    # scan gap, not data — must degrade to unavailable rather than assert "0".
     m = load_selftune()
     monkeypatch.setattr(m, "LOG_PATH", tmp_path / "routing-log.jsonl")
-    monkeypatch.setattr(m, "_usage_sources_present", lambda days: False)
     now = dt.datetime.now(dt.timezone.utc)
     m.LOG_PATH.write_text(json.dumps(
         {"ts": (now - dt.timedelta(days=1)).isoformat(), "fired": True,
          "prompt_sha": "x", "candidates": []}) + "\n")
-    result = m.analyze_log(_ZeroRouting())
+    result = m.analyze_log(_ZeroRouting(scanned=0))
     assert result["adoption"]["available"] is False
     assert result["adoption"]["invocations"] is None
 
 
-def test_adoption_zero_with_live_sources_is_a_real_zero(tmp_path, monkeypatch):
-    # When the sources ARE live, a 0 is a genuine observed zero and reported.
+def test_adoption_zero_with_files_scanned_is_a_real_zero(tmp_path, monkeypatch):
+    # When at least one file scanned cleanly, a 0 is a genuine observed zero.
     m = load_selftune()
     monkeypatch.setattr(m, "LOG_PATH", tmp_path / "routing-log.jsonl")
-    monkeypatch.setattr(m, "_usage_sources_present", lambda days: True)
     now = dt.datetime.now(dt.timezone.utc)
     m.LOG_PATH.write_text(json.dumps(
         {"ts": (now - dt.timedelta(days=1)).isoformat(), "fired": True,
          "prompt_sha": "x", "candidates": []}) + "\n")
-    result = m.analyze_log(_ZeroRouting())
+    result = m.analyze_log(_ZeroRouting(scanned=4))
     assert result["adoption"] == {
         "available": True, "fires": 1, "invocations": 0, "ratio": 0.0}

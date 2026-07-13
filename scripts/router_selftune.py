@@ -164,26 +164,6 @@ def _record_time(rec: dict) -> dt.datetime | None:
     return None
 
 
-def _usage_sources_present(days: int) -> bool:
-    """Liveness proxy: True if any transcript source holds a file recent enough
-    to fall inside the window. It mirrors the source roots ``estimate_usage``
-    scans (see skill_audit.py) so ``_adoption`` can tell a genuine zero from
-    absent sources. Returns on the first recent file (rglob is lazy); a window
-    with only stale files still walks both roots once."""
-    cutoff = dt.datetime.now().timestamp() - days * 86400
-    home = Path.home()
-    for root in (home / ".codex" / "sessions", home / ".claude" / "projects"):
-        if not root.exists():
-            continue
-        for p in root.rglob("*.jsonl"):
-            try:
-                if p.stat().st_mtime >= cutoff:
-                    return True
-            except OSError:
-                continue
-    return False
-
-
 def _adoption(audit, fires: int) -> dict:
     """Same-window adoption context: transcript-backed skill invocations vs the
     number of prompts the router fired on, both over ATTRACTOR_WINDOW_DAYS.
@@ -197,21 +177,21 @@ def _adoption(audit, fires: int) -> dict:
     work). ``available`` is False when usage evidence could not be gathered —
     kept distinct from a genuine zero so the report never prints a bare "0".
     """
+    unavailable = {"available": False, "fires": fires, "invocations": None, "ratio": None}
+    health: dict = {}
     try:
         usage = audit.estimate_usage(
-            audit.discover_skills(), ATTRACTOR_WINDOW_DAYS, 400, 3_000_000)
+            audit.discover_skills(), ATTRACTOR_WINDOW_DAYS, 400, 3_000_000, health=health)
         invocations = sum(counts.get("actual_skill_invocation", 0) for counts in usage.values())
     except Exception:  # usage evidence must never make the watchdog unavailable
-        return {"available": False, "fires": fires, "invocations": None, "ratio": None}
-    # estimate_usage swallows per-file scan errors and always returns a populated
-    # all-skills dict, so a bare 0 could be a real zero OR a total scan failure. A
-    # zero is only trustworthy when the transcript sources actually hold recent
-    # files; otherwise downgrade to unavailable rather than assert an observed 0.
-    # Residual: sources present but every scan throwing still reads as 0 — the
-    # airtight fix is to expose scan-health from estimate_usage (skill_audit.py:889),
-    # tracked as a separate follow-up in that module.
-    if invocations == 0 and not _usage_sources_present(ATTRACTOR_WINDOW_DAYS):
-        return {"available": False, "fires": fires, "invocations": None, "ratio": None}
+        return unavailable
+    # estimate_usage swallows per-file scan errors, so a bare 0 is ambiguous
+    # between "no usage" and "every scan failed". The health signal disambiguates:
+    # a 0 is only an observed zero when at least one transcript file was actually
+    # scanned. files_scanned == 0 (no recent files, OR every scan threw) means the
+    # zero is a scan gap — report unavailable rather than assert an observed zero.
+    if invocations == 0 and health.get("files_scanned", 0) == 0:
+        return unavailable
     ratio = invocations / fires if fires else None
     return {"available": True, "fires": fires, "invocations": invocations, "ratio": ratio}
 
