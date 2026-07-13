@@ -87,6 +87,31 @@ design_skills:
     lifecycle: candidate
     evidence: null
 
+  - id: emilkowalski/review-animations
+    name: review-animations
+    source:
+      kind: upstream
+      repository: https://github.com/emilkowalski/skills.git
+      upstream_observed_commit: 7bb7061b5cf7de15ea1aeaf00fbd9e6592a20fce
+      installed_commit: f76beceb7d3fc8c43309cefad5a095a206103a4e
+      path: skills/review-animations
+      tree_hash: 8181d3f91922643f6aee472f989fb2b579f95a20b7c7800a488e21857c3b4152
+      update_policy: review-then-ff-only
+    installations:
+      - runtime: codex
+        path: /Users/zihan/.codex/skills/review-animations
+        tree_hash: 8181d3f91922643f6aee472f989fb2b579f95a20b7c7800a488e21857c3b4152
+      - runtime: claude
+        path: /Users/zihan/.claude/skills/review-animations
+        tree_hash: 8181d3f91922643f6aee472f989fb2b579f95a20b7c7800a488e21857c3b4152
+    role: gate
+    surface: [product-ui, mobile-ui, dashboard, detail, schedule, marketing-web, video]
+    surface_scope_note: "video means HTML/interface motion before export; this gate does not review cinematography or editorial cuts."
+    owns: [motion-verdict]
+    call_policy: explicit-only
+    lifecycle: candidate
+    evidence: null
+
   - id: gstack/design-consultation
     name: design-consultation
     source:
@@ -162,7 +187,7 @@ design_skills:
         path: /Users/zihan/.claude/skills/gstack/design-review
         tree_hash: 57de69a3f9440e6aa53c2b920ba2157985d1f2e21e8e39c57abf0063e82965eb
     role: gate
-    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck, video]
+    surface: [product-ui, mobile-ui, dashboard, detail, table, schedule, marketing-web, deck]
     owns: [post-implementation-visual-verdict]
     call_policy: auto-eligible
     lifecycle: candidate

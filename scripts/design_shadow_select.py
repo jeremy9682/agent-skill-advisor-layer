@@ -9,7 +9,10 @@ network request, hook prompt submission, or invoke any skill.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -18,7 +21,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = ROOT / "design-skill-catalog.yaml"
 SCHEMA_REF = "schemas/design-selection-record.md"
-VALID_EVIDENCE_KINDS = {"read", "invocation", "artifact"}
+VALID_EVIDENCE_KINDS = ("read", "invocation")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 def load_mapping(path: Path) -> dict[str, Any]:
@@ -41,43 +46,168 @@ def catalog_entries(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(entry["name"]): entry for entry in mapped_entries}
 
 
-def _usage_claim(task: dict[str, Any]) -> dict[str, Any]:
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _inside_installation(
+    path: Path, skill: str, entries: dict[str, dict[str, Any]]
+) -> bool:
+    installations = entries.get(skill, {}).get("installations", [])
+    if not isinstance(installations, list):
+        return False
+    for installation in installations:
+        root_text = installation.get("path") if isinstance(installation, dict) else None
+        if not isinstance(root_text, str) or not root_text:
+            continue
+        try:
+            path.relative_to(Path(root_text).expanduser().resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _receipt_matches(path: Path, expected: dict[str, str]) -> bool:
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return False
+    objects: list[Any]
+    try:
+        parsed = json.loads(text)
+        objects = parsed if isinstance(parsed, list) else [parsed]
+    except json.JSONDecodeError:
+        try:
+            objects = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except json.JSONDecodeError:
+            return False
+    return any(
+        isinstance(item, dict)
+        and all(item.get(key) == value for key, value in expected.items())
+        for item in objects
+    )
+
+
+def _usage_claim(
+    task: dict[str, Any],
+    deliverable_id: str,
+    selected_skills: list[str],
+    entries: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     requested = bool(task.get("usage_claim", False))
+    if not requested:
+        return {
+            "requested": False,
+            "permitted": True,
+            "verification": "not-requested",
+            "accepted_evidence_kinds": [],
+            "accepted_evidence": [],
+            "reason": None,
+        }
     evidence = task.get("evidence", [])
     evidence = evidence if isinstance(evidence, list) else []
     accepted: list[dict[str, str]] = []
     seen_kinds: set[str] = set()
+    seen_events: set[tuple[str, ...]] = set()
+    selected = set(selected_skills)
+    task_id = str(task.get("id", "unnamed-task"))
     for item in evidence:
         if not isinstance(item, dict):
             continue
-        kind, path_text = item.get("kind"), item.get("path")
+        kind = item.get("kind")
+        path_text = item.get("path")
+        skill = item.get("skill")
+        evidence_task = item.get("task_id")
+        evidence_deliverable = item.get("deliverable_id")
+        occurred_at = item.get("occurred_at")
+        declared_sha = item.get("sha256")
         if (
             kind not in VALID_EVIDENCE_KINDS
+            or skill not in selected
+            or evidence_task != task_id
+            or evidence_deliverable != deliverable_id
+            or not isinstance(occurred_at, str)
+            or not UTC_TIMESTAMP_RE.fullmatch(occurred_at)
+            or not isinstance(declared_sha, str)
+            or not SHA256_RE.fullmatch(declared_sha)
             or not isinstance(path_text, str)
             or not path_text.strip()
         ):
             continue
         declared_path = Path(path_text).expanduser()
         resolved_path = declared_path if declared_path.is_absolute() else ROOT / declared_path
-        if not resolved_path.exists() or kind in seen_kinds:
+        resolved_path = resolved_path.resolve()
+        if not resolved_path.is_file() or _file_sha256(resolved_path) != declared_sha:
             continue
+        event_id = item.get("event_id")
+        if kind == "read":
+            if not _inside_installation(resolved_path, skill, entries):
+                continue
+            event_key = (
+                kind,
+                skill,
+                task_id,
+                deliverable_id,
+                occurred_at,
+                str(resolved_path),
+                declared_sha,
+            )
+        else:
+            if not isinstance(event_id, str) or not event_id:
+                continue
+            expected_receipt = {
+                "event_id": event_id,
+                "kind": "invocation",
+                "skill": skill,
+                "task_id": task_id,
+                "deliverable_id": deliverable_id,
+                "occurred_at": occurred_at,
+            }
+            if not _receipt_matches(resolved_path, expected_receipt):
+                continue
+            event_key = (kind, event_id, skill, task_id, deliverable_id, declared_sha)
+        if event_key in seen_events:
+            continue
+        seen_events.add(event_key)
         seen_kinds.add(kind)
         retained_path = (
-            str(resolved_path.resolve())
+            str(resolved_path)
             if declared_path.is_absolute()
             else str(declared_path)
         )
-        accepted.append({"kind": kind, "path": retained_path})
-    permitted = not requested or bool(accepted)
+        retained = {
+            "kind": kind,
+            "skill": skill,
+            "task_id": task_id,
+            "deliverable_id": deliverable_id,
+            "occurred_at": occurred_at,
+            "path": retained_path,
+            "sha256": declared_sha,
+        }
+        if kind == "invocation":
+            retained["event_id"] = event_id
+        accepted.append(retained)
+    permitted = bool(accepted)
     return {
         "requested": requested,
         "permitted": permitted,
-        "accepted_evidence_kinds": [item["kind"] for item in accepted],
+        "verification": "hash-bound-attestation" if permitted else "insufficient-evidence",
+        "accepted_evidence_kinds": [
+            kind for kind in VALID_EVIDENCE_KINDS if kind in seen_kinds
+        ],
         "accepted_evidence": accepted,
         "reason": (
             None
             if permitted
-            else "usage claim requires existing read, invocation, or artifact evidence"
+            else (
+                "usage claim requires task-, deliverable-, skill-, time-, "
+                "and SHA-bound read or invocation evidence"
+            )
         ),
     }
 
@@ -198,6 +328,7 @@ def _record(
         "baselines": [],
         "overlays": [],
         "gates": [],
+        "gate_note": None,
         "usage_claim": usage_claim,
         "provenance": _provenance(task_id),
     }
@@ -217,10 +348,17 @@ def _unsupported(
 
 
 def _gates_for(
-    entries: dict[str, dict[str, Any]], surface: str, *, magazine: bool
+    entries: dict[str, dict[str, Any]],
+    surface: str,
+    *,
+    magazine: bool,
+    html_motion: bool,
 ) -> list[str]:
     """Select only catalog-supported advisory gates for this surface."""
-    candidates = ["design-review"]
+    if surface == "video":
+        candidates = ["review-animations"] if html_motion else []
+    else:
+        candidates = ["design-review"]
     if magazine:
         candidates.insert(0, "plan-design-review")
     return [
@@ -237,37 +375,46 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(deliverables, list) or not deliverables:
         raise ValueError("task.deliverables must be a non-empty list")
     task_id = task.get("id", "unnamed-task")
-    usage_claim = _usage_claim(task)
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, raw in enumerate(deliverables):
         if not isinstance(raw, dict):
+            deliverable_id = f"invalid-{index}"
             records.append(
                 _record(
-                    f"invalid-{index}",
+                    deliverable_id,
                     "invalid",
                     "deliverable must be a mapping",
                     task_id,
-                    usage_claim,
+                    _usage_claim(task, deliverable_id, [], entries),
                 )
             )
             continue
         deliverable_id = raw.get("id")
         if not isinstance(deliverable_id, str) or not deliverable_id or deliverable_id in seen:
+            invalid_id = str(deliverable_id or f"invalid-{index}")
             records.append(
                 _record(
-                    str(deliverable_id or f"invalid-{index}"),
+                    invalid_id,
                     "invalid",
                     "deliverable id must be unique and non-empty",
                     task_id,
-                    usage_claim,
+                    _usage_claim(task, invalid_id, [], entries),
                 )
             )
             continue
         seen.add(deliverable_id)
         surface = raw.get("surface")
         if not isinstance(surface, str) or not surface:
-            records.append(_record(deliverable_id, "invalid", "surface is required", task_id, usage_claim))
+            records.append(
+                _record(
+                    deliverable_id,
+                    "invalid",
+                    "surface is required",
+                    task_id,
+                    _usage_claim(task, deliverable_id, [], entries),
+                )
+            )
             continue
         if raw.get("needs_direction") is True:
             records.append(
@@ -276,7 +423,7 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
                     "needs_direction",
                     "task contract explicitly marks visual direction unresolved",
                     task_id,
-                    usage_claim,
+                    _usage_claim(task, deliverable_id, [], entries),
                 )
             )
             continue
@@ -288,7 +435,7 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
                     "needs_direction",
                     reason or "selection requires direction",
                     task_id,
-                    usage_claim,
+                    _usage_claim(task, deliverable_id, [], entries),
                 )
             )
             continue
@@ -305,6 +452,7 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
         gates = _gates_for(
             entries,
             surface,
+            html_motion=raw.get("motion_source") == "html-interface",
             magazine=(
                 surface == "deck"
                 and raw.get("deck_mode", raw.get("visual_direction")) == "magazine"
@@ -324,7 +472,7 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
                     "needs_direction",
                     unsupported,
                     task_id,
-                    usage_claim,
+                    _usage_claim(task, deliverable_id, [], entries),
                 )
             )
             continue
@@ -337,7 +485,15 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
                 "baselines": baselines,
                 "overlays": overlays,
                 "gates": gates,
-                "usage_claim": usage_claim,
+                "gate_note": (
+                    f"No catalogued gate supports this {surface} scope; "
+                    "choose a manual review before publication."
+                    if surface in {"image", "video"} and not gates
+                    else None
+                ),
+                "usage_claim": _usage_claim(
+                    task, deliverable_id, required_skills, entries
+                ),
                 "provenance": _provenance(task_id),
             }
         )
@@ -351,7 +507,9 @@ def select(task: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, type=Path, help="Explicit YAML/JSON task contract")
+    parser.add_argument(
+        "--input", required=True, type=Path, help="Explicit YAML/JSON task contract"
+    )
     parser.add_argument("--output", type=Path, help="Write YAML record instead of stdout")
     parser.add_argument("--catalog", type=Path, default=CATALOG_PATH)
     args = parser.parse_args()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -31,7 +33,7 @@ def cases():
 def test_shadow_cases_match_contracts():
     selector = load_selector()
     loaded = cases()
-    assert len(loaded) == 17
+    assert len(loaded) == 19
     for case in loaded:
         result = selector.select(case["task"], catalog())
         expected = case["expect"]
@@ -59,6 +61,8 @@ def test_shadow_cases_match_contracts():
                 assert record["overlays"][0]["precedence_note"] == value
             elif key == "reason_contains":
                 assert value in record["reason"]
+            elif key == "gate_note_contains":
+                assert value in record["gate_note"]
             else:
                 assert record[key] == value, case["id"]
 
@@ -128,15 +132,101 @@ def test_selected_facets_exhaust_catalog_ownership_and_surface_is_checked():
     assert unsupported["visual_author"] is None
 
 
-def test_usage_evidence_needs_existing_path_and_dedupes_kinds():
+def test_unbound_or_fabricated_usage_evidence_fails_closed():
     selector = load_selector()
     fabricated = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-claim-blocked-with-fabricated-path"), catalog())["records"][0]
     assert fabricated["usage_claim"]["permitted"] is False
-    duplicate = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-evidence-dedupes-kinds"), catalog())["records"][0]
-    claim = duplicate["usage_claim"]
-    assert claim["accepted_evidence_kinds"] == ["read", "invocation"]
-    assert len(claim["accepted_evidence"]) == 2
-    assert all((ROOT / item["path"]).exists() for item in claim["accepted_evidence"])
+    unbound = selector.select(next(case["task"] for case in cases() if case["id"] == "usage-evidence-dedupes-kinds"), catalog())["records"][0]
+    assert unbound["usage_claim"]["permitted"] is False
+    assert unbound["usage_claim"]["accepted_evidence"] == []
+
+
+def test_hash_bound_read_evidence_is_skill_and_deliverable_scoped(tmp_path):
+    selector = load_selector()
+    local_catalog = catalog()
+    skill_root = tmp_path / "frontend-design"
+    skill_root.mkdir()
+    skill_file = skill_root / "SKILL.md"
+    skill_file.write_text("# Test skill\n")
+    digest = hashlib.sha256(skill_file.read_bytes()).hexdigest()
+    frontend = next(entry for entry in local_catalog["design_skills"] if entry["name"] == "frontend-design")
+    frontend["installations"] = [{"runtime": "test", "path": str(skill_root), "tree_hash": digest}]
+    evidence = {
+        "kind": "read",
+        "skill": "frontend-design",
+        "task_id": "bound-read",
+        "deliverable_id": "page",
+        "occurred_at": "2026-07-13T11:30:00Z",
+        "path": str(skill_file),
+        "sha256": digest,
+    }
+    task = {
+        "id": "bound-read",
+        "usage_claim": True,
+        "evidence": [evidence, evidence.copy()],
+        "deliverables": [{"id": "page", "surface": "product-ui"}],
+    }
+    claim = selector.select(task, local_catalog)["records"][0]["usage_claim"]
+    assert claim["permitted"] is True
+    assert claim["verification"] == "hash-bound-attestation"
+    assert claim["accepted_evidence_kinds"] == ["read"]
+    assert len(claim["accepted_evidence"]) == 1
+
+    for changed in (
+        {"sha256": "0" * 64},
+        {"deliverable_id": "other"},
+        {"skill": "apple-design"},
+    ):
+        bad_task = {**task, "evidence": [{**evidence, **changed}]}
+        assert selector.select(bad_task, local_catalog)["records"][0]["usage_claim"]["permitted"] is False
+
+
+def test_hash_bound_invocation_receipt_must_match_event(tmp_path):
+    selector = load_selector()
+    receipt = {
+        "event_id": "evt-test-1",
+        "kind": "invocation",
+        "skill": "frontend-design",
+        "task_id": "bound-invocation",
+        "deliverable_id": "page",
+        "occurred_at": "2026-07-13T11:31:00Z",
+    }
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+    digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    evidence = {**receipt, "path": str(receipt_path), "sha256": digest}
+    task = {
+        "id": "bound-invocation",
+        "usage_claim": True,
+        "evidence": [evidence],
+        "deliverables": [{"id": "page", "surface": "product-ui"}],
+    }
+    claim = selector.select(task, catalog())["records"][0]["usage_claim"]
+    assert claim["permitted"] is True
+    assert claim["accepted_evidence_kinds"] == ["invocation"]
+    assert claim["accepted_evidence"][0]["event_id"] == "evt-test-1"
+
+    bad_task = {**task, "evidence": [{**evidence, "event_id": "evt-forged"}]}
+    assert selector.select(bad_task, catalog())["records"][0]["usage_claim"]["permitted"] is False
+
+
+def test_artifact_evidence_kind_is_not_accepted():
+    selector = load_selector()
+    task = {
+        "id": "artifact-is-not-use",
+        "usage_claim": True,
+        "evidence": [{
+            "kind": "artifact",
+            "skill": "frontend-design",
+            "task_id": "artifact-is-not-use",
+            "deliverable_id": "page",
+            "occurred_at": "2026-07-13T11:32:00Z",
+            "path": "README.md",
+            "sha256": hashlib.sha256((ROOT / "README.md").read_bytes()).hexdigest(),
+        }],
+        "deliverables": [{"id": "page", "surface": "product-ui"}],
+    }
+    assert selector.select(task, catalog())["records"][0]["usage_claim"]["permitted"] is False
 
 
 def test_cli_writes_yaml_record(tmp_path):

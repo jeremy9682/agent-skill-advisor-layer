@@ -697,6 +697,8 @@
       font-weight: 500;
       text-overflow: ellipsis;
       white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
     }
 
     .activity-copy span,
@@ -850,7 +852,11 @@
       content: "";
     }
 
-    .sheet-list strong { font-weight: 500; }
+    .sheet-list strong {
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+    }
     .sheet-list span {
       color: #748196;
       font-variant-numeric: tabular-nums;
@@ -912,17 +918,19 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-      *,
-      *::before,
-      *::after {
-        scroll-behavior: auto !important;
-        transition-duration: 0.01ms !important;
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-      }
-
+      html { scroll-behavior: auto; }
       .sheet,
-      .apple-panels { transform: none !important; }
+      .apple-panels {
+        transform: none !important;
+        transition: opacity 160ms var(--ease-out);
+      }
+      .sheet-backdrop { transition: opacity 160ms var(--ease-out); }
+      .apple-action,
+      .segment button,
+      .sheet-close { transition: none; }
+      .apple-action:active,
+      .segment button:active,
+      .sheet-close:active { transform: none; }
     }
 
     @media (prefers-reduced-transparency: reduce) {
@@ -1197,6 +1205,7 @@
 
         window.clearTimeout(switchTimer);
         if (skipMotion || reducedMotion.matches) {
+          panel.classList.remove('is-switching');
           renderView(tab);
           return;
         }

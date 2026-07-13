@@ -59,7 +59,7 @@ cases:
       visual_author: huashu-design
       baselines: []
       overlays: []
-      gates: [design-review]
+      gates: [review-animations]
     forbid:
       visual_author: [apple-design, frontend-design]
     require:

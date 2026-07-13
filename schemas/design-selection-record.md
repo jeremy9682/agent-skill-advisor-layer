@@ -13,7 +13,7 @@ deliverable is a separate visual decision:
 task:
   id: inventory-apple-cjk
   usage_claim: false # true only when a skill-use claim will be published
-  evidence: []       # required to permit a published usage claim
+  evidence: []       # structured, hash-bound attestation required for a claim
   deliverables:
     - id: inventory-ui
       surface: product-ui
@@ -27,6 +27,9 @@ when an author cannot be selected safely (for example, an unqualified
 `deck`).  Valid surfaces are the catalog surfaces.  Recognised explicit
 attributes are `language` (`cjk` or `latin`), `visual_direction` (`apple`,
 `magazine`, `template`, `branded`), `erp`, `media_export`, and `deck_mode`.
+`motion_source: html-interface` explicitly permits the `review-animations`
+gate before an HTML/interface animation is exported to video; it is not
+inferred for arbitrary editorial video.
 The selector intentionally does not infer any of these from a natural-language
 prompt.
 
@@ -42,13 +45,14 @@ Each `records[]` item has these fields:
 | `baselines` | Constraints applied before style overlays.  Every entry declares `active_facets` and `suppressed_facets`. |
 | `overlays` | Optional bounded overlays, also facet-scoped. |
 | `gates` | Advisory review gates, not automatically executed. |
+| `gate_note` | Explicit explanation when a selected surface has no catalogued gate. |
 | `usage_claim` | Whether a public skill-use claim was requested and whether supplied evidence permits it. |
 | `provenance` | Catalog/schema/version references for auditability. |
 
 All statuses have the same record shape.  A `selected` record has
 `reason: null`, one non-null `visual_author`, and may contain baselines,
 overlays, and gates.  An `invalid` or `needs_direction` record has
-`visual_author: null`, empty `baselines`/`overlays`/`gates`, and a non-empty
+`visual_author: null`, empty `baselines`/`overlays`/`gates`, `gate_note: null`, and a non-empty
 `reason`; it still carries `usage_claim` and `provenance.task_id` so a rejected
 decision is auditable.
 
@@ -77,14 +81,27 @@ precedence claim.
 
 ### Usage evidence
 
-Selection is not proof that a skill was used.  A public `usage_claim` is
-permitted only if the input provides at least one evidence item with kind
-`read`, `invocation`, or `artifact` **and** a non-empty path that exists on
-disk.  Relative paths are resolved from the repository root for validation but
-remain repository-relative in the record; absolute paths stay absolute.
-Accepted kinds are deduplicated in first-seen order and retained in
-`accepted_evidence`.  Otherwise the record remains a valid selection but marks
-the claim `permitted: false` and explains the evidence gap.
+Selection is not proof that a skill was used. A public `usage_claim` is
+permitted only when at least one evidence item passes a hash-bound local
+attestation. Every item must declare `kind`, `skill`, `task_id`,
+`deliverable_id`, `occurred_at`, `path`, and `sha256`; the task, deliverable,
+and skill must match the current selected record, the timestamp must use strict
+UTC `YYYY-MM-DDTHH:MM:SSZ`, and the file bytes must match the lowercase SHA-256.
+
+For `kind: read`, the resolved file must be inside a catalogued installation
+root for that selected skill. For `kind: invocation`, `event_id` is also
+required and the JSON/JSONL receipt at `path` must contain an object with the
+same event ID, kind, skill, task, deliverable, and timestamp. `artifact` is not
+an accepted kind: producing a deliverable is not evidence that a skill was
+read or invoked. Exact duplicate events are removed; different valid events
+are retained and `accepted_evidence_kinds` keeps canonical `read`, then
+`invocation` order.
+
+`verification` is `not-requested`, `hash-bound-attestation`, or
+`insufficient-evidence`. The middle value describes local integrity and
+binding only; it is not a cryptographic identity claim or proof of a human's
+mental act. Otherwise the selection remains valid while the usage claim is
+marked `permitted: false` with the evidence gap explained.
 
 ### Boundary
 

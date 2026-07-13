@@ -21,6 +21,13 @@ The standalone HTML needs no network request, build step, framework, external
 font, or runtime router. Regenerating the governance record requires Python 3
 and PyYAML, matching the repository audit/test environment.
 
+The repository regression suite also runs this page in headless Chromium when
+Playwright is installed:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q
+```
+
 ## What to test
 
 1. Compare **A** (labeled legacy Carbon × CJK structure) with **B** (labeled

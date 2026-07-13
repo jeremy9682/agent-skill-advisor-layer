@@ -25,9 +25,11 @@ records:
     precedence_note: CJK baseline outranks typography-micro for CJK letter-spacing.
   gates:
   - design-review
+  gate_note: null
   usage_claim:
     requested: false
     permitted: true
+    verification: not-requested
     accepted_evidence_kinds: []
     accepted_evidence: []
     reason: null

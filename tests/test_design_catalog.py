@@ -340,7 +340,7 @@ def test_repo_phase1_contract_is_internally_consistent():
     errors.extend(audit.validate_evals(evals, catalog, refs))
 
     assert errors == []
-    assert len(catalog["design_skills"]) == 9
+    assert len(catalog["design_skills"]) == 10
     assert policy["design_domain"]["catalog"] == "design-skill-catalog.yaml"
     assert policy["design_domain"]["selection_evals"] == "routing-evals/design-cases.yaml"
     assert policy["design_domain"]["runtime_consumer"] == "none"
@@ -365,7 +365,7 @@ def test_checked_in_live_audit_evidence_matches_repo_inputs():
     assert evidence["kind"] == "point-in-time-live-audit-evidence"
     assert evidence["result"] == {
         "status": "passed",
-        "catalog_entries": 9,
+        "catalog_entries": 10,
         "eval_cases": 5,
         "errors": [],
     }

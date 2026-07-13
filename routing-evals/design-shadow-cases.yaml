@@ -106,7 +106,33 @@ cases:
         - id: hero-video
           surface: video
           media_export: true
-    expect: {status: selected, visual_author: huashu-design, gates: [design-review]}
+          motion_source: html-interface
+    expect: {status: selected, visual_author: huashu-design, gates: [review-animations]}
+
+  - id: generic-video-with-explicit-gate-gap
+    task:
+      id: generic-video-with-explicit-gate-gap
+      deliverables:
+        - id: editorial-video
+          surface: video
+          media_export: true
+    expect:
+      status: selected
+      visual_author: huashu-design
+      gates: []
+      gate_note_contains: No catalogued gate supports this video scope
+
+  - id: image-export-with-explicit-gate-gap
+    task:
+      id: image-export-with-explicit-gate-gap
+      deliverables:
+        - id: launch-image
+          surface: image
+    expect:
+      status: selected
+      visual_author: huashu-design
+      gates: []
+      gate_note_contains: No catalogued gate supports this image scope
 
   - id: ambiguous-deck
     task:
@@ -170,7 +196,7 @@ cases:
       deliverables:
         - id: page
           surface: product-ui
-    expect: {status: selected, usage_claim_permitted: true}
+    expect: {status: selected, usage_claim_permitted: false}
 
   - id: usage-claim-blocked-with-fabricated-path
     task:
@@ -195,5 +221,5 @@ cases:
           surface: product-ui
     expect:
       status: selected
-      usage_claim_permitted: true
-      accepted_evidence_kinds: [read, invocation]
+      usage_claim_permitted: false
+      accepted_evidence_kinds: []

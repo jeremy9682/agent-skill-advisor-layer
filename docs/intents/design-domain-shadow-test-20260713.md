@@ -8,7 +8,7 @@ User-facing outcome: a UI/deck/media task has one named visual author, bounded
 baseline and overlay facets, advisory gates, and a truthful distinction between
 selection and evidence of actual skill usage.
 
-In scope: a local CLI, a Markdown record schema, and 17 deterministic cases.
+In scope: a local CLI, a Markdown record schema, and 19 deterministic cases.
 The selector reads local YAML only and can write a YAML record when a human
 runs it explicitly.
 
@@ -33,11 +33,17 @@ Deliberate choices:
 - Verify every selected author, baseline, overlay, and gate declares support
   for the requested surface in the catalog; unsupported combinations become
   `needs_direction`, never silent attachment.
-- A selection is not proof of use: a requested public usage claim needs at
-  least `read`, `invocation`, or `artifact` evidence with an existing local
-  path; accepted evidence kinds are deduplicated but retain resolved paths.
+- A selection is not proof of use: a requested public usage claim needs a
+  task-, deliverable-, skill-, UTC-time-, and SHA-bound `read` or `invocation`
+  attestation. Reads must resolve inside that skill's catalogued installation;
+  invocation receipts must contain the matching event. `artifact` is rejected
+  because a deliverable alone does not establish skill use.
+- Do not invent review coverage. Video export uses the catalogued
+  `review-animations` only when `motion_source: html-interface` is explicit;
+  generic video and image output record a `gate_note` until a truthful gate is
+  catalogued.
 
-Verification: focused pytest loads all 17 YAML contracts, asserts exact
+Verification: focused pytest loads all 19 YAML contracts, asserts exact
 Apple+CJK facets/precedence, tests ambiguous/multi-deliverable/evidence paths,
-invokes the CLI without network access, and confirms malformed YAML exits
-cleanly without a Python traceback.
+invokes the CLI without network access, confirms malformed YAML exits cleanly
+without a Python traceback, and runs committed Chromium interaction checks.
