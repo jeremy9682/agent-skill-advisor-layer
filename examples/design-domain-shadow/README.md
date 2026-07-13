@@ -1,6 +1,6 @@
 # Design-domain shadow prototype
 
-This folder contains a real, dependency-free A/B test for the design-skill
+This folder contains a real, runtime-free A/B prototype for the design-skill
 selection contract.
 
 - `DESIGN.md` — the visual contract and explicit exclusions
@@ -17,8 +17,9 @@ python3 scripts/design_shadow_select.py \
   --output examples/design-domain-shadow/apple-cjk-selection-record.yaml
 ```
 
-No network request, build step, framework, external font, or runtime router is
-required.
+The standalone HTML needs no network request, build step, framework, external
+font, or runtime router. Regenerating the governance record requires Python 3
+and PyYAML, matching the repository audit/test environment.
 
 ## What to test
 

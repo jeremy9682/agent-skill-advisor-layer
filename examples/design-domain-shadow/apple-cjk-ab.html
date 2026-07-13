@@ -11,7 +11,6 @@
       color-scheme: light;
       --font-cjk: "PingFang SC", "MiSans", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
       --ink: #142033;
-      --muted: #667085;
       --line: rgba(20, 32, 51, 0.11);
       --apple-blue: #0a84ff;
       --apple-blue-pressed: #0071e3;
@@ -67,7 +66,7 @@
     button:focus-visible,
     input:focus-visible,
     [tabindex]:focus-visible {
-      outline: 3px solid color-mix(in srgb, var(--focus) 72%, white);
+      outline: 3px solid var(--focus);
       outline-offset: 3px;
     }
 
@@ -390,12 +389,15 @@
       font-weight: 600;
     }
 
-    .apple-nav {
+    .apple-nav ul {
       display: grid;
       gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
     }
 
-    .apple-nav button {
+    .apple-nav li {
       display: grid;
       grid-template-columns: 24px 1fr;
       align-items: center;
@@ -407,12 +409,11 @@
       border-radius: 12px;
       color: #5c697a;
       background: transparent;
-      font-size: 12px;
+      font-size: 13px;
       text-align: left;
-      cursor: pointer;
     }
 
-    .apple-nav button[aria-current="page"] {
+    .apple-nav li[aria-current="page"] {
       color: #095fae;
       background: rgba(255, 255, 255, 0.9);
       box-shadow: 0 5px 15px rgba(20, 32, 51, 0.07), inset 0 0 0 1px rgba(20, 32, 51, 0.04);
@@ -435,12 +436,10 @@
       width: 44px;
       height: 44px;
       margin: auto auto 0;
-      border: 0;
       border-radius: 50%;
       color: #415167;
       background: rgba(255, 255, 255, 0.82);
       box-shadow: 0 5px 14px rgba(20, 32, 51, 0.08);
-      cursor: pointer;
     }
 
     .apple-workspace {
@@ -511,8 +510,6 @@
     }
 
     .apple-action:active,
-    .apple-nav button:active,
-    .apple-profile:active,
     .segment button:active,
     .sheet-close:active {
       transform: scale(0.97);
@@ -530,7 +527,7 @@
     .eyebrow {
       margin: 0 0 5px;
       color: #718096;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 500;
     }
 
@@ -569,7 +566,7 @@
       border-radius: 9px;
       color: #667085;
       background: transparent;
-      font-size: 12px;
+      font-size: 13px;
       cursor: pointer;
       transition: transform 100ms ease-out;
     }
@@ -624,6 +621,8 @@
       color: #248a3d;
       font-size: 12px;
       font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
     }
 
     .secondary-metric strong {
@@ -680,8 +679,8 @@
     .activity-mark {
       display: grid;
       place-items: center;
-      width: 44px;
-      height: 44px;
+      width: 32px;
+      height: 32px;
       border-radius: 11px;
       color: #2366a8;
       background: #eaf4ff;
@@ -704,6 +703,8 @@
     .activity time {
       color: #7a8798;
       font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
     }
 
     .pulse-column {
@@ -815,8 +816,8 @@
       display: grid;
       flex: none;
       place-items: center;
-      width: 32px;
-      height: 32px;
+      width: 44px;
+      height: 44px;
       border: 0;
       border-radius: 50%;
       color: #536277;
@@ -850,15 +851,17 @@
     }
 
     .sheet-list strong { font-weight: 500; }
-    .sheet-list span { color: #748196; }
+    .sheet-list span {
+      color: #748196;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum";
+    }
 
     @media (hover: hover) and (pointer: fine) {
       .legacy-nav a:hover { background: #393939; color: white; }
       .legacy-primary:hover { background: #0043ce; }
       .legacy-filter button:hover { background: #e0e0e0; }
-      .apple-nav button:hover { color: #254665; background: rgba(255, 255, 255, 0.62); }
       .apple-action:hover { background: var(--apple-blue-pressed); }
-      .apple-profile:hover,
       .sheet-close:hover { background: rgba(20, 32, 51, 0.11); }
       .segment button:hover { color: #24344a; background: rgba(255, 255, 255, 0.55); }
     }
@@ -954,7 +957,7 @@
         backdrop-filter: none;
         -webkit-backdrop-filter: none;
       }
-      .muted, .eyebrow, .apple-intro p { color: #344054; }
+      .eyebrow, .apple-intro p { color: #344054; }
     }
 
     @media (forced-colors: active) {
@@ -977,7 +980,7 @@
     <div class="route-chip">唯一作者：frontend-design · Apple 仅作 overlay</div>
   </header>
 
-  <main class="comparison" id="comparison" aria-label="设计风格 A/B 对比">
+  <main class="comparison" id="comparison" tabindex="-1" aria-label="设计风格 A/B 对比">
     <section class="variant legacy" aria-labelledby="legacy-title">
       <div class="variant-label">A · 旧 Carbon × CJK 基线</div>
       <div class="legacy-shell">
@@ -1033,13 +1036,15 @@
       <div class="apple-shell">
         <aside class="apple-sidebar" aria-label="新版导航">
           <div class="apple-brand" aria-hidden="true">YC</div>
-          <nav class="apple-nav" aria-label="主要功能">
-            <button type="button" aria-current="page"><span class="nav-icon" aria-hidden="true">⌂</span><span>概览</span></button>
-            <button type="button"><span class="nav-icon" aria-hidden="true">单</span><span>订单</span></button>
-            <button type="button"><span class="nav-icon" aria-hidden="true">车</span><span>库存</span></button>
-            <button type="button"><span class="nav-icon" aria-hidden="true">客</span><span>客户</span></button>
+          <nav class="apple-nav" aria-label="主要功能预览">
+            <ul>
+              <li aria-current="page"><span class="nav-icon" aria-hidden="true">⌂</span><span>概览</span></li>
+              <li><span class="nav-icon" aria-hidden="true">单</span><span>订单</span></li>
+              <li><span class="nav-icon" aria-hidden="true">车</span><span>库存</span></li>
+              <li><span class="nav-icon" aria-hidden="true">客</span><span>客户</span></li>
+            </ul>
           </nav>
-          <button class="apple-profile" type="button" aria-label="打开个人菜单">子</button>
+          <div class="apple-profile"><span class="sr-only">当前用户：</span>子</div>
         </aside>
 
         <div class="apple-workspace">
@@ -1051,7 +1056,7 @@
           <div class="apple-content">
             <div class="apple-intro">
               <div>
-                <p class="eyebrow">2026年7月13日 · 星期一</p>
+                <p class="eyebrow num">2026年7月13日 · 星期一</p>
                 <h2 id="apple-title">上午好，今天的经营节奏很稳。</h2>
                 <p>订单确认速度高于近七日均值，库存周转保持健康。先处理两项需要人工判断的事项。</p>
               </div>
@@ -1061,7 +1066,7 @@
               </div>
             </div>
 
-            <div class="apple-panels" id="apple-panel" role="tabpanel" aria-labelledby="overview-tab" aria-live="polite">
+            <div class="apple-panels" id="apple-panel" role="tabpanel" tabindex="0" aria-labelledby="overview-tab">
               <div class="summary-line">
                 <div class="primary-metric">
                   <small>本月销售额</small>
@@ -1115,6 +1120,9 @@
     (() => {
       const apple = document.querySelector('#apple-variant');
       const appleShell = apple.querySelector('.apple-shell');
+      const pageHeader = document.querySelector('.page-header');
+      const legacy = document.querySelector('.legacy');
+      const skipLink = document.querySelector('.skip-link');
       const trigger = document.querySelector('#sheet-trigger');
       const sheet = document.querySelector('#daily-sheet');
       const close = document.querySelector('#sheet-close');
@@ -1125,6 +1133,7 @@
       let previousFocus = null;
       let switchTimer = 0;
       let closeTimer = 0;
+      let sheetActive = false;
 
       const views = {
         'overview-tab': {
@@ -1220,18 +1229,27 @@
         previousFocus = document.activeElement === document.body ? trigger : document.activeElement;
         sheet.hidden = false;
         void sheet.offsetWidth;
+        sheetActive = true;
         apple.classList.add('sheet-open');
         appleShell.inert = true;
+        pageHeader.inert = true;
+        legacy.inert = true;
+        skipLink.inert = true;
         trigger.setAttribute('aria-expanded', 'true');
         close.focus();
       }
 
       function closeSheet() {
+        if (!sheetActive) return;
         apple.classList.remove('sheet-open');
-        appleShell.inert = false;
         trigger.setAttribute('aria-expanded', 'false');
         const finish = () => {
+          sheetActive = false;
           sheet.hidden = true;
+          appleShell.inert = false;
+          pageHeader.inert = false;
+          legacy.inert = false;
+          skipLink.inert = false;
           (previousFocus || trigger).focus();
         };
         if (reducedMotion.matches) finish();
@@ -1243,13 +1261,18 @@
       backdrop.addEventListener('click', closeSheet);
 
       document.addEventListener('keydown', (event) => {
-        if (!apple.classList.contains('sheet-open')) return;
+        if (!sheetActive) return;
         if (event.key === 'Escape') {
           event.preventDefault();
           closeSheet();
           return;
         }
         if (event.key !== 'Tab') return;
+        if (!sheet.contains(document.activeElement)) {
+          event.preventDefault();
+          close.focus();
+          return;
+        }
         const focusable = [...sheet.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
           .filter((element) => !element.disabled && !element.hidden);
         const first = focusable[0];

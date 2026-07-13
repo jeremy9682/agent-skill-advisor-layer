@@ -36,7 +36,8 @@ overlay and is never credited as the page author.
 - Font stack: `PingFang SC`, `MiSans`, `Source Han Sans SC`,
   `Microsoft YaHei`, then platform fallbacks.
 - No negative `letter-spacing`, including headings.
-- Chinese body copy stays at 13px or larger; prose uses generous line height.
+- Chinese body copy and primary control labels stay at 13px or larger;
+  timestamps, captions, and compact metadata may use 12px.
 - Money, dates, percentages, order IDs, and timestamps use tabular numerals.
 - CJK weights map to 400 / 500 / 600; no synthetic 510 / 590 weights.
 - No fake italic, decorative underline, or Latin-only OpenType features on
