@@ -52,4 +52,4 @@
 
 ## F0-F3 实施记录(2026-07-14){#f0-f3-impl-20260714}
 
-founder 批准全做(2026-07-14):F0 profiles 迁移 ✅(终审两档强制只读);F1 3+1 显式入口 ✅(命名冲突预检通过;Codex 侧显式 `$` 调用验证 LOADED);F2 治理接线 ✅(本文档 + distill-reminder hook + 预算审计脚本 + 月度复查任务);F3 催进度分类 ✅(结论:主因是回合自主性不足,非通知缺失;详情在本地私有报告附录)。实施经 `-p review` 终审两轮收敛;过程记录在 `skill-governance` 账本。
+founder 批准全做(2026-07-14):F0 profiles 迁移 ✅(终审两档强制只读);F1 3+1 显式入口 ✅(命名冲突预检通过;Codex 侧显式 `$` 调用验证 LOADED);F2 治理接线 ✅(本文档 + distill-reminder hook + 预算审计脚本 + 月度复查任务);F3 催进度分类 ✅(结论:主因是回合自主性不足,非通知缺失;详情在本地私有报告附录)。**实施 diff 以 `codex exec -p review` 终审为合并前置(gate)**;过程与收敛记录见 `skill-governance` 与 `agent-skill-advisor-layer` 账本。
