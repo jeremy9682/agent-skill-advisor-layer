@@ -1,6 +1,6 @@
 # 提示词蒸馏标准(Prompt Distillation Standard)
 
-> 依据:2026-07-12 提示词使用全量分析(4,865 条人打提示词,Codex sol xhigh 五轮终审 PASS,报告存 Obsidian `04 - AI/工程与架构/提示词蒸馏与模型路由-使用数据分析-2026-07-12.md`)。
+> 依据:2026-07-12 提示词使用全量分析(4,865 条人打提示词;Codex sol xhigh 五轮终审 PASS;完整报告为本地私有文档,不随本仓发布)。
 > 本文档是蒸馏层的 canon 入口;分档/席位以 `routing-policy.yaml` 为准,本文不复制政策。
 
 ## 四层分层(重复的话放哪)
@@ -12,7 +12,7 @@
 | CLAUDE.md / AGENTS.md | 永远生效的**事实**与协议 | >30 行的"流程"应外迁;协议(如 ledger 纪律)留守 | 全局/项目 memory 文件 |
 | Hooks | 必须强制、不能靠自觉的规则 | "Every time X, always Y" → hook 不是散文 | settings.json / hooks.json |
 
-**关键经验**:元指令必须走显式调用——skill 自动触发不可靠(Vercel 评测 56% 未触发;被动 description 激活率实测 ~20%)。
+**关键经验**:元指令必须走显式调用——skill 自动触发不可靠(Vercel 评测 56% 的 case 未调用 skill:<https://vercel.com/blog/agents-md-outperforms-skills-in-our-agent-evals>;被动 description 激活率第三方 200+ 次实测约 20%:<https://scottspence.com/posts/how-to-make-claude-code-skills-activate-reliably>)。
 
 ## 现役显式入口(2026-07-14 F1 落地)
 
@@ -31,11 +31,11 @@
 
 | profile | 文件 | model/effort | 用途 |
 |---|---|---|---|
-| `-p exec` | `~/.codex/exec.config.toml` | terra / medium | 普通修复/实现派发 |
-| `-p review` | `~/.codex/review.config.toml` | sol / high | 普通 diff/doc 终审**地板** |
-| `-p review-x` | `~/.codex/review-x.config.toml` | sol / xhigh | flip 清单/禁区/判断型盲审 |
+| `-p exec` | `~/.codex/exec.config.toml` | terra / medium | 普通实现派发(执行席) |
+| `-p review` | `~/.codex/review.config.toml` | sol / high / **read-only** | 终审地板(判断型默认也走这档) |
+| `-p review-x` | `~/.codex/review-x.config.toml` | sol / xhigh / **read-only + 非fast** | **risk overlay 命中(flip 清单/禁区)强制**;判断型需要更深时显式升 |
 
-机械活执行席归 Claude(canon),不建 Codex low 档;改档位须过判断案,不得静默漂移。三档已冒烟验证(模型/effort/端到端回包)。
+注意 `-p` 是**叠加语义**(继承基础 config 未覆盖的键),终审两档因此在 profile 内显式覆盖 sandbox 为 read-only。机械活执行席归 Claude(canon),不建 Codex low 档;改档位须过判断案,不得静默漂移。三档已冒烟验证(模型/effort/sandbox/端到端回包)。
 
 ## 月度复跑规程
 
@@ -52,4 +52,4 @@
 
 ## F0-F3 实施记录(2026-07-14){#f0-f3-impl-20260714}
 
-founder 批准全做(2026-07-14):F0 profiles 迁移 ✅;F1 3+1 显式入口 ✅(命名冲突预检通过;Codex 侧显式 `$` 调用验证 LOADED);F2 治理接线(本文档 + distill-reminder hook + 预算审计脚本 + 月度任务);F3 催进度假设分类(结果见 Obsidian 报告附录)。ledger:`skill-governance` evt-20260714T102314。
+founder 批准全做(2026-07-14):F0 profiles 迁移 ✅(终审两档强制只读);F1 3+1 显式入口 ✅(命名冲突预检通过;Codex 侧显式 `$` 调用验证 LOADED);F2 治理接线 ✅(本文档 + distill-reminder hook + 预算审计脚本 + 月度复查任务);F3 催进度分类 ✅(结论:主因是回合自主性不足,非通知缺失;详情在本地私有报告附录)。实施经 `-p review` 终审两轮收敛;过程记录在 `skill-governance` 账本。

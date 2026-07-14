@@ -5,8 +5,10 @@ Codex 官方口径: skill 元数据(name+description)预算约为上下文窗口
 窗口未知时 8,000 字符;超预算先缩短 description,严重时省略并警告。
 (https://developers.openai.com/codex/skills)
 
-本脚本测量本机各 skill 根目录的元数据占用,标出最大的 description,
-并对照 8k 保守预算与 2% 估算给出结论。只读,不改任何文件。
+本脚本测量**用户级 skill 根目录**的元数据占用(下界估算:不含 plugin/
+system/repo 级 skills;frontmatter 为简化解析,block scalar 有 ±个位数字符误差;
+路径等固定开销按常数 40 字符/项计),对照 8k 保守预算与 2% 估算给出量级结论——
+数字是估算,不代表 Codex 实际截断点。只读,不改任何文件。
 
 用法: python3 scripts/discovery_budget_check.py [--context-tokens N] [--json]
 """
@@ -93,6 +95,8 @@ def main():
                     help="token→字符换算(混合中英保守值)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
+    if args.context_tokens <= 0 or args.chars_per_token <= 0:
+        ap.error("--context-tokens 与 --chars-per-token 必须为正数")
 
     codex = [scan_root(r, l) for r, l in CODEX_ROOTS]
     claude = [scan_root(r, l) for r, l in CLAUDE_ROOTS]
@@ -128,7 +132,7 @@ def main():
         return
 
     c = result["codex"]
-    print("== Codex 侧 skill 发现预算 ==")
+    print("== Codex 侧 skill 发现预算(用户根目录下界估算;不含 plugin/system/repo skills) ==")
     for r in c["roots"]:
         print(f"  {r['label']:22s} {r['root']}: {r['count']} 个, {r['meta_chars']:,} 字符" if r["exists"]
               else f"  {r['label']:22s} {r['root']}: (不存在)")
