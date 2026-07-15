@@ -458,42 +458,49 @@ def decode_cursor_model(db_path: Path) -> str:
     return names[-1] if names else "unknown"
 
 
-def _scan_jsonl_rows(path: Path, limit: int = 400):
+def _scan_jsonl_rows(path: Path, limit: int = 2000, *, prefer_tail: bool = False):
     try:
-        with path.open(encoding="utf-8") as handle:
-            for index, line in enumerate(handle):
-                if index >= limit:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(row, dict):
-                    yield row
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return
+    if prefer_tail and len(raw_lines) > limit:
+        selected = raw_lines[-limit:]
+    else:
+        selected = raw_lines[:limit]
+    for line in selected:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            yield row
 
 
 def extract_codex_model_from_jsonl(path: Path) -> tuple[str, str]:
     """Read model identity from Codex rollout JSONL. Never invents a value."""
-    last_model = ""
-    for row in _scan_jsonl_rows(path):
-        payload = row.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        for key in ("model", "current_model_id", "primaryModelId", "primary_model_id"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                last_model = value.strip()
-        info = payload.get("info")
-        if isinstance(info, dict):
-            for key in ("current_model_id", "model", "primaryModelId"):
-                value = info.get(key)
+
+    def scan(prefer_tail: bool) -> str:
+        last_model = ""
+        for row in _scan_jsonl_rows(path, prefer_tail=prefer_tail):
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            for key in ("model", "current_model_id", "primaryModelId", "primary_model_id"):
+                value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     last_model = value.strip()
+            info = payload.get("info")
+            if isinstance(info, dict):
+                for key in ("current_model_id", "model", "primaryModelId"):
+                    value = info.get(key)
+                    if isinstance(value, str) and value.strip():
+                        last_model = value.strip()
+        return last_model
+
+    last_model = scan(False) or scan(True)
     if last_model:
         return last_model, "codex-jsonl-turn-context"
     return "unknown", "codex-jsonl-model-missing"
@@ -1085,7 +1092,11 @@ def classify_failure(
         return timeout_class or "timeout"
     if run_status == "interrupted":
         return "interrupted"
-    if run_status in {"provider-health-unverified", "review-independence-violation"}:
+    if run_status in {
+        "provider-health-unverified",
+        "review-independence-violation",
+        "provider-start-failed",
+    }:
         return run_status
     if exit_code != 0 and (
         "402" in lowered
@@ -1477,12 +1488,13 @@ def run_codex_json_process(
         )
         return completed, "interrupted", telemetry, events
     except OSError as exc:
-        telemetry["timeout_class"] = "timeout_startup"
+        # Spawn failure is not a timeout stage; keep timeout_* for real deadlines.
+        telemetry["timeout_class"] = None
         telemetry.pop("_last_progress_mono", None)
         completed = subprocess.CompletedProcess(
             command, 127, stdout="", stderr=f"provider-start-failed: {exc}"
         )
-        return completed, "timed-out", telemetry, events
+        return completed, "provider-start-failed", telemetry, events
 
 
 def classify_route_status(blockers: list[dict]) -> str:

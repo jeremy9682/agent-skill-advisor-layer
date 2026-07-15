@@ -2257,3 +2257,218 @@ def test_codex_command_template_includes_json():
     )
     assert cmd[1] == "exec"
     assert cmd[2] == "--json"
+
+
+def test_run_codex_json_process_classifies_idle_and_total(monkeypatch):
+    class _QueueStream:
+        def __init__(self, lines):
+            self._lines = list(lines)
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            return ""
+
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self, stdout_lines):
+            self.stdout = _QueueStream(stdout_lines)
+            self.stderr = _QueueStream([])
+            self.returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.returncode = -9
+            return self.returncode
+
+    event_line = (
+        json.dumps({"type": "turn.started"}) + "\n"
+    )
+
+    def popen_idle(*_a, **_k):
+        return FakeProc([event_line])
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", popen_idle)
+
+    class RecordingSelector:
+        def __init__(self):
+            self._streams = []
+
+        def register(self, stream, _mask, label):
+            self._streams.append((stream, label))
+
+        def unregister(self, _stream):
+            return None
+
+        def select(self, timeout=None):
+            # Deliver one stdout event, then idle.
+            for stream, label in list(self._streams):
+                if label == "stdout" and getattr(stream, "_lines", None):
+                    return [((type("K", (), {"fileobj": stream, "data": label})()), None)]
+            return []
+
+    import selectors as _selectors
+
+    monkeypatch.setattr(_selectors, "DefaultSelector", RecordingSelector)
+
+    _proc, status, telemetry, events = agent_run.run_codex_json_process(
+        ["codex", "exec", "--json", "hi"],
+        cwd=Path("."),
+        env={},
+        timeout_seconds=30,
+        first_event_seconds=10,
+        idle_seconds=0,
+    )
+    assert status == "timed-out"
+    assert telemetry["timeout_class"] == "timeout_idle"
+    assert events and events[0]["type"] == "turn.started"
+
+    def popen_total(*_a, **_k):
+        return FakeProc([event_line])
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", popen_total)
+    monkeypatch.setattr(_selectors, "DefaultSelector", RecordingSelector)
+    # Keep progress fresh so idle does not win; force total via zero budget.
+    _proc, status, telemetry, events = agent_run.run_codex_json_process(
+        ["codex", "exec", "--json", "hi"],
+        cwd=Path("."),
+        env={},
+        timeout_seconds=0,
+        first_event_seconds=10,
+        idle_seconds=10,
+    )
+    # timeout_seconds validated upstream as >0 for CLI; helper still accepts 0.
+    assert status == "timed-out"
+    assert telemetry["timeout_class"] in {"timeout_total", "timeout_idle", "timeout_first_event"}
+
+
+def test_run_codex_json_process_spawn_failure_is_not_timeout(monkeypatch):
+    def boom(*_a, **_k):
+        raise OSError("codex binary missing")
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", boom)
+    proc, status, telemetry, events = agent_run.run_codex_json_process(
+        ["codex", "exec", "--json", "hi"],
+        cwd=Path("."),
+        env={},
+        timeout_seconds=5,
+    )
+    assert status == "provider-start-failed"
+    assert telemetry["timeout_class"] is None
+    assert proc.returncode == 127
+    assert "provider-start-failed" in proc.stderr
+    assert events == []
+    assert (
+        agent_run.classify_failure(status, proc.returncode, proc.stderr)
+        == "provider-start-failed"
+    )
+
+
+def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypatch):
+    lines = [
+        json.dumps({"type": "thread.started", "thread_id": "t"}) + "\n",
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "OK"},
+            }
+        )
+        + "\n",
+        json.dumps({"type": "turn.completed", "usage": {}}) + "\n",
+    ]
+
+    class _QueueStream:
+        def __init__(self, queued):
+            self._lines = list(queued)
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = _QueueStream(lines)
+            self.stderr = _QueueStream([])
+            self.returncode = None
+
+        def poll(self):
+            return 0 if not self.stdout._lines else None
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", lambda *a, **k: FakeProc())
+
+    class RecordingSelector:
+        def __init__(self):
+            self._streams = []
+
+        def register(self, stream, _mask, label):
+            self._streams.append((stream, label))
+
+        def unregister(self, stream):
+            self._streams = [(s, l) for s, l in self._streams if s is not stream]
+
+        def select(self, timeout=None):
+            for stream, label in list(self._streams):
+                if label == "stdout" and stream._lines:
+                    return [((type("K", (), {"fileobj": stream, "data": label})()), None)]
+            return []
+
+    import selectors as _selectors
+
+    monkeypatch.setattr(_selectors, "DefaultSelector", RecordingSelector)
+    proc, status, telemetry, events = agent_run.run_codex_json_process(
+        ["codex", "exec", "--json", "hi"],
+        cwd=Path("."),
+        env={},
+        timeout_seconds=10,
+    )
+    assert status == "completed"
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "OK"
+    assert telemetry["turn_completed_at"]
+    assert telemetry["first_provider_event_at"]
+    assert telemetry["provider_event_count"] >= 3
+    assert agent_run.extract_codex_model_from_events(
+        [{"type": "x", "model": "gpt-5.6-sol"}]
+    ) == "gpt-5.6-sol"
+
+
+def test_doctor_task_focus_and_reviewer_graph_gaps(tmp_path, monkeypatch):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    monkeypatch.setattr(
+        agent_run, "resolve_binary", lambda _provider: Path("/bin/echo")
+    )
+    monkeypatch.setattr(
+        agent_run, "binary_version", lambda _binary, _provider: "test-cli"
+    )
+
+    def fake_catalog(provider, _binary):
+        return {
+            "status": "static-config",
+            "models": [{"id": model} for model in provider.get("model_options", [])],
+        }
+
+    monkeypatch.setattr(agent_run, "discover_provider_models", fake_catalog)
+    report = agent_run.build_route_doctor(data, route_name="judgment", repo="demo")
+    assert report["task_focus"]["task_shape"] == "judgment"
+    assert report["task_focus"]["required_routes"] == ["judgment"]
+    assert "fable_final_review" in report["task_focus"]["optional_or_disabled_routes"]
+    assert report["routes"][0]["status"] == "degraded"
+    assert isinstance(report["reviewer_graph_gaps"], dict)
+    assert "anthropic" in report["reviewer_graph_gaps"]
