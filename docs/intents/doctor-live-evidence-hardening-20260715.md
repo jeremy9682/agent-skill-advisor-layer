@@ -50,3 +50,15 @@ Model seats:
 Effort budget: high
 
 Scale gates: plan gate (本 intent) → final diff review → focused verification (doctor + canary)
+
+
+## Phase 1 landing (2026-07-15)
+
+Implemented in this branch:
+- `model_observed` parsers for Claude / Codex session JSONL (+ Cursor reason field)
+- Codex `exec --json` streaming with `stage_telemetry` and `timeout_first_event|idle|total|startup`
+- Doctor statuses: `ready|degraded|blocked|disabled` + `task_focus` + `reviewer_graph_gaps`
+- Fixture tests green (`tests/test_agent_provider_run.py`)
+- Live Codex canary: exit 0, `model_observed=gpt-5.6-terra`, stage telemetry populated (~20s)
+
+Still deferred: serial multi-model canary sweep / dual-seat final review of this landing PR.

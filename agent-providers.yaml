@@ -1,0 +1,222 @@
+version: 1
+routing_canon: routing-policy.yaml
+provider_aliases:
+  cursor-auto: cursor
+
+# Portable machine canon. Credentials, transcripts, account IDs and local run
+# journals never belong in this file.
+providers:
+  claude:
+    display_name: Claude Code
+    family: anthropic
+    run_policy: enabled
+    binary_candidates: [~/.local/bin/claude, claude]
+    version_args: [--version]
+    model_requested: opus
+    model_options: [sonnet, opus, fable]
+    effort_requested: high
+    effort_options: [low, medium, high, xhigh, max]
+    billing_policy: existing-subscription-login-only
+    strip_environment: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL]
+    commands:
+      read-only:
+        - "{binary}"
+        - --print
+        - --model
+        - "{model}"
+        - --effort
+        - "{effort}"
+        - --permission-mode
+        - plan
+        - --tools
+        - Read,Grep,Glob
+        - --output-format
+        - text
+        - "{prompt}"
+      execute:
+        - "{binary}"
+        - --print
+        - --model
+        - "{model}"
+        - --effort
+        - "{effort}"
+        - --permission-mode
+        - acceptEdits
+        - --output-format
+        - text
+        - "{prompt}"
+    session:
+      adapter: claude
+      roots: [~/.claude/projects]
+
+  codex:
+    display_name: Codex CLI
+    family: openai
+    run_policy: enabled
+    binary_candidates: [~/.local/bin/codex, codex]
+    version_args: [--version]
+    model_requested: gpt-5.6-terra
+    model_options: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
+    effort_requested: medium
+    effort_options: [low, medium, high, xhigh, max]
+    billing_policy: existing-subscription-login-only
+    strip_environment: [OPENAI_API_KEY, OPENAI_BASE_URL]
+    commands:
+      read-only:
+        - "{binary}"
+        - exec
+        - --json
+        - --model
+        - "{model}"
+        - -c
+        - "model_reasoning_effort={effort}"
+        - --sandbox
+        - read-only
+        - "{prompt}"
+      execute:
+        - "{binary}"
+        - exec
+        - --json
+        - --model
+        - "{model}"
+        - -c
+        - "model_reasoning_effort={effort}"
+        - --sandbox
+        - workspace-write
+        - "{prompt}"
+    session:
+      adapter: codex
+      roots: [~/.codex/sessions]
+
+  grok:
+    display_name: Grok Build
+    family: xai
+    # A direct 2026-07-14 canary completed with exit 0 as grok-4.5. The CLI
+    # emitted a 402 only for its auxiliary grok-build title request, so provider
+    # health must follow the main turn result rather than any stderr substring.
+    run_policy: enabled
+    binary_candidates:
+      - ~/.grok/bin/grok
+      - ~/.local/bin/grok
+      - grok
+    version_args: [--version]
+    model_requested: grok-4.5
+    model_options: [grok-4.5]
+    effort_requested: high
+    effort_options: [low, medium, high]
+    billing_policy: existing-login-only
+    strip_environment: [XAI_API_KEY, XAI_BASE_URL]
+    commands:
+      read-only:
+        - "{binary}"
+        - --single
+        - "{prompt}"
+        - --model
+        - "{model}"
+        - --reasoning-effort
+        - "{effort}"
+        - --cwd
+        - "{cwd}"
+        - --permission-mode
+        - plan
+        - --disable-web-search
+        - --no-subagents
+        - --output-format
+        - plain
+      execute:
+        - "{binary}"
+        - --single
+        - "{prompt}"
+        - --model
+        - "{model}"
+        - --reasoning-effort
+        - "{effort}"
+        - --cwd
+        - "{cwd}"
+        - --permission-mode
+        - default
+        - --disable-web-search
+        - --no-subagents
+        - --output-format
+        - plain
+    session:
+      adapter: grok
+      roots: [~/.grok/sessions]
+
+  cursor:
+    display_name: Cursor
+    family: cursor
+    run_policy: enabled
+    binary_candidates:
+      - ~/.local/bin/cursor-agent
+      - cursor-agent
+      - agent
+    version_args: [--version]
+    model_requested: auto
+    billing_policy: existing-subscription-login-only
+    requires_workspace_trust: true
+    require_named_model_health: true
+    model_discovery:
+      command: ["{binary}", models]
+      parser: cursor-models-v1
+    # Cursor is a broker. Review independence follows the concrete model
+    # family, not the provider process that launched it.
+    model_family_rules:
+      - {glob: auto, family: undisclosed}
+      - {glob: cursor-grok-*, family: xai}
+      - {glob: cursor-claude-*, family: anthropic}
+      - {glob: cursor-gpt-*, family: openai}
+      - {glob: grok-*, family: xai}
+      - {glob: composer-*, family: cursor}
+      - {glob: claude-*, family: anthropic}
+      - {glob: gpt-*, family: openai}
+      - {glob: gemini-*, family: google}
+      - {glob: kimi-*, family: moonshot}
+      - {glob: glm-*, family: zhipu}
+    strip_environment: [CURSOR_API_KEY]
+    commands:
+      read-only:
+        - "{binary}"
+        - --print
+        - --mode
+        - ask
+        - --model
+        - "{model}"
+        - --sandbox
+        - enabled
+        - --workspace
+        - "{cwd}"
+        - "{prompt}"
+      execute:
+        - "{binary}"
+        - --print
+        - --model
+        - "{model}"
+        - --sandbox
+        - enabled
+        - --workspace
+        - "{cwd}"
+        - "{prompt}"
+    session:
+      adapter: cursor
+      roots: [~/.cursor/projects, ~/.cursor/chats]
+
+skills:
+  manifest: ~/.codex/skill-governance/skills-manifest.json
+  router_hook: scripts/skill_router_hook.py
+  auto_select_policies: [auto-eligible, router]
+  max_embedded_bytes: 100000
+  trusted_content_roots:
+    - ~/.codex/skills
+    - ~/.agents/skills
+    - ~/.claude/skills
+    - ~/.codex/plugins/cache
+    - ~/gstack
+    - ~/Projects/external-skills
+
+journal:
+  schema_version: 4
+  root: ~/.agent-runs
+  permissions: "0600"
+  live_evidence_max_age_seconds: 21600
+  live_evidence_future_skew_seconds: 300
