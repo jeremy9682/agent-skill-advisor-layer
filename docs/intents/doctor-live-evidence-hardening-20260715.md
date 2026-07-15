@@ -11,8 +11,9 @@ Cancelled explicitly:
 - 「doctor 必须全绿」作为日常或 ship 前置条件
 - 任何以刷 `model_observed` / live-evidence TTL 为目的的后续 hardening
 
-Do **not** continue this intent as backlog. Phase 1 landing (merged via
-`59cfb16` / PR #16) remains historical record only.
+Do **not** continue this intent as backlog. Phase 1 **runtime** (merged via
+`59cfb16` / PR #16) remains in tree; only the Phase 1 *verification / canary
+narrative* in this intent is historical — the agent-run stack was not removed.
 
 ---
 
@@ -75,5 +76,6 @@ Implemented and merged (`59cfb16`):
 ~~Still deferred: serial multi-model canary sweep / dual-seat final review of this landing PR.~~
 
 **Cancelled by user decision 2026-07-15:** recoverable sessions/ledger is enough;
-do not continue live-evidence hardening or doctor-green ritual. No open doctor
-ledger slug; no further canary sweep backlog.
+do not continue live-evidence hardening or doctor-green ritual. No open Phase 2
+doctor event/backlog. (Unrelated OPEN ledger events such as the Xcode /
+agent-sessions item remain human-owned and untouched.)
