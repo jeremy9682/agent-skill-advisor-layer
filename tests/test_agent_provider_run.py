@@ -2508,3 +2508,60 @@ def test_doctor_task_focus_and_reviewer_graph_gaps(tmp_path, monkeypatch):
     assert report["routes"][0]["status"] == "degraded"
     assert isinstance(report["reviewer_graph_gaps"], dict)
     assert "anthropic" in report["reviewer_graph_gaps"]
+
+
+def test_no_skills_does_not_require_local_skill_manifest(tmp_path, monkeypatch, capsys):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    data["skills"]["manifest"] = str(tmp_path / "missing-skills-manifest.json")
+    monkeypatch.setattr(
+        agent_run, "resolve_binary", lambda _provider: Path("/bin/echo")
+    )
+    monkeypatch.setattr(
+        agent_run, "binary_version", lambda _binary, _provider: "test-cli"
+    )
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda _provider, _binary: {
+            "status": "static-config",
+            "models": [{"id": "gpt-5.6-terra"}],
+        },
+    )
+    monkeypatch.setattr(
+        agent_run.subprocess,
+        "run",
+        lambda *a, **k: type(
+            "R",
+            (),
+            {"returncode": 0, "stdout": "ok", "stderr": ""},
+        )(),
+    )
+    args = SimpleNamespace(
+        provider="codex",
+        task_shape=None,
+        model="gpt-5.6-terra",
+        effort="medium",
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=False,
+        prompt="ci no-skills path",
+    )
+    assert agent_run.run_provider(args, data) == 0
+    journals = list((tmp_path / "journal").glob("*.jsonl"))
+    assert len(journals) == 1, journals
+    row = json.loads(journals[0].read_text().strip().splitlines()[-1])
+    assert row["skill_evidence"]["routing_status"] == "explicitly-disabled-for-run"

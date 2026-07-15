@@ -1561,10 +1561,10 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
             f"effort {effort!r} is not allowed for provider {provider_id}"
         )
     if args.no_skills:
-        _path, skill_manifest, manifest_sha = skill_manifest_info(config)
+        # --no-skills must work without a local skill-governance install (CI).
         selection = {
-            "manifest_sha256": manifest_sha,
-            "available_count": len(skill_entries_by_name(skill_manifest)),
+            "manifest_sha256": sha256_text(""),
+            "available_count": 0,
             "chosen": [],
             "deferred": [],
             "entries": {},
