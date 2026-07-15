@@ -2259,7 +2259,7 @@ def test_codex_command_template_includes_json():
     assert cmd[2] == "--json"
 
 
-def test_run_codex_json_process_classifies_idle_and_total(monkeypatch):
+def test_run_codex_json_process_classifies_idle_timeout(monkeypatch):
     class _QueueStream:
         def __init__(self, lines):
             self._lines = list(lines)
@@ -2330,23 +2330,59 @@ def test_run_codex_json_process_classifies_idle_and_total(monkeypatch):
     assert telemetry["timeout_class"] == "timeout_idle"
     assert events and events[0]["type"] == "turn.started"
 
-    def popen_total(*_a, **_k):
-        return FakeProc([event_line])
+def test_run_codex_json_process_classifies_total_timeout(monkeypatch):
+    class _FakeStream:
+        def readline(self):
+            return ""
 
-    monkeypatch.setattr(agent_run.subprocess, "Popen", popen_total)
-    monkeypatch.setattr(_selectors, "DefaultSelector", RecordingSelector)
-    # Keep progress fresh so idle does not win; force total via zero budget.
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = _FakeStream()
+            self.stderr = _FakeStream()
+            self.returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.returncode = -9
+            return self.returncode
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", lambda *a, **k: FakeProc())
+
+    class FakeSelector:
+        def register(self, *a, **k):
+            return None
+
+        def unregister(self, *a, **k):
+            return None
+
+        def select(self, timeout=None):
+            return []
+
+    import selectors as _selectors
+
+    monkeypatch.setattr(_selectors, "DefaultSelector", FakeSelector)
+    # No events; first/idle budgets are high so the total deadline wins.
     _proc, status, telemetry, events = agent_run.run_codex_json_process(
         ["codex", "exec", "--json", "hi"],
         cwd=Path("."),
         env={},
-        timeout_seconds=0,
-        first_event_seconds=10,
-        idle_seconds=10,
+        timeout_seconds=1,
+        first_event_seconds=100,
+        idle_seconds=100,
     )
-    # timeout_seconds validated upstream as >0 for CLI; helper still accepts 0.
     assert status == "timed-out"
-    assert telemetry["timeout_class"] in {"timeout_total", "timeout_idle", "timeout_first_event"}
+    assert telemetry["timeout_class"] == "timeout_total"
+    assert events == []
+
+
 
 
 def test_run_codex_json_process_spawn_failure_is_not_timeout(monkeypatch):
