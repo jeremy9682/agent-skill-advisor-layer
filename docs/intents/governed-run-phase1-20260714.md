@@ -1,5 +1,10 @@
 # Intent: GovernedRun Phase 1
 
+> Historical Phase 1 landing record. Clarification (2026-07-15): daily work needs
+> recoverable sessions/journal/ledger — not a doctor-all-green / live-evidence
+> ritual. Further doctor live-evidence hardening was cancelled; see
+> `doctor-live-evidence-hardening-20260715.md`.
+
 ## 用户目标
 
 把 Cursor 从只支持 `auto-undisclosed` 的特殊入口升级为可发现模型能力的正式
