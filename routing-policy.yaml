@@ -7,8 +7,9 @@
 # ORIGIN: 2026-07-07 dual-model convergence (Codex gpt-5.6 x Claude Fable 5)
 #   collapsed ~5 drifting expression surfaces into one canon, plus the
 #   2026-07-11 user ruling D3 on ordinary-bug final-review independence.
-# DEFERRED: wiring scripts/routing_eval.py to read this canon is an explicit
-#   follow-up. Nothing consumes this file yet — it encodes policy, not runtime.
+# RUNTIME: scripts/routing_runtime.py compiles the executable bindings below;
+#   provider manifests contain adapters/capabilities only and may not redefine
+#   routes.
 
 version: 1
 
@@ -25,6 +26,27 @@ enums:
   execution_mode: [fast, careful]
   review_seat: [codex, fable]           # who may hold the final-review seat
   review_independence: [cross_family_blind, same_family_independent]
+
+# --- Design-domain phase 1 -------------------------------------------------
+# Offline governance only. The catalog records authority/provenance and the
+# eval file records expected selections; neither is a runtime LLM router.
+design_domain:
+  status: phase1_offline
+  catalog: design-skill-catalog.yaml
+  selection_evals: routing-evals/design-cases.yaml
+  runtime_consumer: none
+  invariants:
+    max_visual_authors_per_deliverable: 1
+    baseline_precedes_style_overlay: true
+    overlay_has_visual_naming_authority: false
+    handoff_requires_new_selection_record: true
+    usage_claim_requires_read_or_invocation_evidence: true
+  deferred:
+    - runtime_filter_or_hook
+    - embedding_router
+    - full_plugin_cache_enforcement
+    - automatic_design_md_generation
+    - fixed_full_gate_chain
 
 # --- Task-shape base routes -------------------------------------------------
 # execution_seat lists the families allowed to PRODUCE the diff for that shape.
@@ -118,6 +140,83 @@ final_review:
   cross_family_mandatory:
     task_shapes: [judgment, restricted_zone, arbitration]
     risk_overlay_triggers: all   # any flip trigger forces cross_family_blind via the overlay
+
+# --- Executable bindings ----------------------------------------------------
+# This is the only runtime launcher table. Provider manifests describe how a
+# provider runs and what it can expose; they never own task routes.
+runtime_routes:
+  mechanical:
+    policy_ref: task_shapes.mechanical
+    policy_family: claude
+    provider: claude
+    seat: claude-landing
+  ordinary_bug_fix:
+    policy_ref: task_shapes.ordinary_bug_fix
+    policy_family: codex
+    provider: codex
+    seat: codex-landing
+  standard_feature:
+    policy_ref: task_shapes.standard_feature
+    policy_family: claude
+    provider: claude
+    seat: claude-landing
+  judgment:
+    policy_ref: task_shapes.judgment
+    policy_family: claude
+    provider: claude
+    seat: claude-direction
+  external_second_opinion:
+    provider: grok
+    model: grok-4.5
+    effort: high
+    seat: claude-direction
+  restricted_zone:
+    policy_ref: task_shapes.restricted_zone
+    policy_family: claude
+    provider: claude
+    seat: claude-direction
+  final_review:
+    provider: grok
+    model: grok-4.5
+    effort: high
+    governance_effort: xhigh
+    seat: codex-final-review
+    review_independence: cross-family
+  claude_final_review:
+    provider: claude
+    model: opus
+    effort: high
+    governance_effort: xhigh
+    seat: claude-final-review
+    review_independence: cross-family
+  fable_final_review:
+    provider: claude
+    model: fable
+    effort: max
+    seat: fable-final-review
+    review_independence: cross-family
+    route_policy: disabled-fable-live-canary-required
+  secondary_final_review:
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    seat: codex-final-review
+    review_independence: independent-supplement
+    eligible_producer_routes: [ordinary_bug_fix]
+  codex_final_review:
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    governance_effort: xhigh
+    seat: codex-final-review
+    review_independence: cross-family
+  arbitration:
+    policy_ref: task_shapes.arbitration
+    policy_family: claude
+    provider: claude
+    seat: fable-final-review
+    review_independence: cross-family
+    route_policy: disabled-fable-live-canary-required
 
 # --- Degradation chain ------------------------------------------------------
 # When the Codex (cross-family) reviewer is unavailable.

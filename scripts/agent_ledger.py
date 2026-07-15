@@ -11,9 +11,8 @@ Rules enforced (2026-07-11 dual-model convergence, Fable 5 x gpt-5.6-sol):
   - exactly the 10 schema fields, no more, no fewer
   - exactly ONE transition marker (claimed:/closed:) per record
   - transition records carry next_action "none" and are never themselves open
-  - close rejects: missing target, already-closed target, and (without --instant)
-    closing with no prior claim by the same seat; a stray closed: marker under
-    another intent_ref is ignored by fold, not error-rejected
+  - close rejects: missing target, already-closed target, cross-intent target,
+    and (without --instant) closing with no prior claim by the same seat
   - --instant is for immediate read/verify/consume work only: closed: implies claim
   - append is flock-locked; malformed input exits nonzero
 
@@ -28,10 +27,12 @@ import os
 import re
 import sys
 
+try:
+    from scripts.ledger_core import FIELDS, ledger_violations, markers, record_violations
+except ModuleNotFoundError:  # Direct execution through the ~/.local/bin symlink.
+    from ledger_core import FIELDS, ledger_violations, markers, record_violations
+
 LEDGER_DIR = os.path.expanduser("~/.agent-ledger")
-FIELDS = ["intent_ref", "event_id", "from_seat", "to_seat", "worktree",
-          "file_scope", "decided_rejected_open", "verification", "next_action", "taint"]
-MARKER_RE = re.compile(r"^(claimed|closed):(evt-\S+?)(\s+—|\s+-|$)")
 
 
 def die(msg):
@@ -88,9 +89,9 @@ def _validate_open(ev):
     parts = wt.split(" @ ")
     if len(parts) != 3 or any(not p.strip() for p in parts):
         die(f"worktree {wt!r} must be exactly 'path @ branch @ commit' (3 "
-            f"non-empty fields); for cross-seat prefer "
-            f"'<fresh-worktree-absolute-path> @ <branch> @ <40-char-SHA>' created "
-            f"from origin/<branch>, never a shared mutable checkout")
+            f"non-empty fields); for cross-seat prefer 'origin/<branch> @ "
+            f"<branch> @ <40-char-SHA>' + fresh worktree, never a shared mutable "
+            f"checkout")
     na = ev.get("next_action") or ""
     if re.search(r"或| or |、然后|; then ", na):
         print(f"agent-ledger: warning: next_action looks like MULTIPLE actions "
@@ -126,38 +127,6 @@ def load(slug):
             except json.JSONDecodeError as e:
                 die(f"{path}:{i} malformed JSON ({e}) — fix by hand before writing")
     return events
-
-
-def markers(events, intent_ref=None):
-    """Transition markers, optionally scoped to one intent_ref (cross-intent
-    markers never claim/close a target — 2026-07-11 review fix)."""
-    out = []
-    for e in events:
-        if intent_ref is not None and e.get("intent_ref") != intent_ref:
-            continue
-        for d in e.get("decided_rejected_open", {}).get("decided", []):
-            m = MARKER_RE.match(d)
-            if m:
-                out.append((m.group(1), m.group(2), e))
-    return out
-
-
-def record_violations(ev):
-    """Schema violations of a single record (for load-time screening and fold
-    reporting). Returns list of strings, empty if clean."""
-    v = []
-    if sorted(ev.keys()) != sorted(FIELDS):
-        v.append("wrong field set")
-        return v
-    dro = ev.get("decided_rejected_open", {})
-    marks = [d for d in dro.get("decided", []) if MARKER_RE.match(d)]
-    if len(marks) > 1:
-        v.append("multiple transition markers in one record")
-    if ev.get("next_action") == "none" and len(marks) == 0:
-        v.append('dead transition: next_action "none" with no claimed:/closed: marker')
-    if marks and ev.get("next_action") != "none":
-        v.append("transition record with a real next_action")
-    return v
 
 
 def validate(ev):
@@ -316,22 +285,27 @@ def cmd_fold(a):
     if not events:
         print(f"(no ledger or empty: {ledger_path(a.slug)})")
         return
-    for i, e in enumerate(events):
-        for viol in record_violations(e):
-            print(f"VIOLATION line {i + 1} ({e.get('event_id', '?')}): {viol}")
+    for line_number, violation in ledger_violations(events):
+        event = events[line_number - 1]
+        event_id = event.get("event_id", "?") if isinstance(event, dict) else "?"
+        print(f"VIOLATION line {line_number} ({event_id}): {violation}")
+    valid_events = [
+        event for event in events
+        if isinstance(event, dict) and not record_violations(event)
+    ]
     open_events = []
-    for e in events:
+    for e in valid_events:
         if e.get("next_action") == "none":
             continue
         closed = any(k == "closed" and t == e.get("event_id")
-                     for k, t, _ in markers(events, intent_ref=e.get("intent_ref")))
+                     for k, t, _ in markers(valid_events, intent_ref=e.get("intent_ref")))
         if not closed:
             open_events.append(e)
     if not open_events:
         print("no open events — ledger clean")
         return
     for e in open_events:
-        owner = owner_of(events, e["event_id"], e.get("to_seat"),
+        owner = owner_of(valid_events, e["event_id"], e.get("to_seat"),
                          intent_ref=e.get("intent_ref"))
         print(f"OPEN {e['event_id']}  owner={owner}")
         print(f"     next_action: {e.get('next_action')}")
