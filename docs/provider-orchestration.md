@@ -188,23 +188,27 @@ artifact pair remains an explicit residual until Cursor exposes a run-scoped ID.
 
 `agent-run doctor` is non-generative: it inspects binaries, catalogues, recent
 journal evidence, route blockers and the producer-family to reviewer-family graph.
-It marks a route ready only when that exact model has recent live verified evidence;
-missing, timed-out, provider-error and health-unverified evidence fail closed. The
-reviewer graph contains only ready review routes. It never treats a historical
-success as permanent entitlement: journal evidence expires after the manifest's
-`live_evidence_max_age_seconds` window (currently six hours), becomes
-`stale-live-evidence`, and blocks the route until a fresh canary/run succeeds. It
-also rejects timestamps more than five minutes in the future, while tolerating
-minor host clock skew. It reports quota cooldown as unknown unless a structured
-reset was actually observed.
+Doctor readiness is a **diagnostic** surface (per-task required routes), not a
+daily-work or ship gate: missing / stale / health-unverified evidence may show as
+`degraded` or block *reported* readiness in `doctor`/`routes`, but normal
+`agent-run run` does not require a periodic all-green canary ritual. Journal
+evidence ages out after `live_evidence_max_age_seconds` (currently six hours) as
+`stale-live-evidence` for honesty of that diagnostic view; it also rejects
+timestamps more than five minutes in the future, while tolerating minor host
+clock skew. Quota cooldown stays unknown unless a structured reset was observed.
 
-This observed-model requirement applies to every provider. Claude and Codex runs
-whose native session adapters still report `model_observed: unknown` are recorded
-as `run-succeeded-health-unverified`; they do not make a route ready. Parsing their
-native transcript model metadata is a separate adapter task, not an excuse to
-upgrade request-only evidence to live verification.
+`model_observed` is honest audit metadata for every provider: when adapters still
+report `unknown`, the journal records `run-succeeded-health-unverified` rather
+than forging identity from `model_requested`. That is recoverability, not a
+doctor-green ritual.
 
-## Live verification snapshot (2026-07-14)
+## Live verification snapshot (2026-07-14, historical)
+
+> Historical entitlement snapshot from the Phase 1 landing window. Not an
+> ongoing requirement to keep doctor fully green or re-run serial canaries.
+> Further live-evidence hardening / Phase 2 canary sweep was **cancelled**
+> 2026-07-15 — see `docs/intents/doctor-live-evidence-hardening-20260715.md`.
+
 
 - Grok CLI `0.2.101` completed a governed `grok-4.5/high` read-only route with
   an open checkpoint and a native session ID.
