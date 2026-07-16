@@ -116,7 +116,7 @@ def test_agent_to_agent_skip_is_logged(tmp_path):
     prompt = "你是Codex，作为最终审查席，只读审核这个 diff。"
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
-        input=json.dumps({"prompt": prompt, "cwd": "/Users/x/agent-skill-advisor-layer"}),
+        input=json.dumps({"prompt": prompt, "cwd": "/Users/example/agent-skill-advisor-layer"}),
         capture_output=True,
         text=True,
         timeout=30,
@@ -150,8 +150,8 @@ def test_hints_negative_triggers_and_domains(tmp_path):
     assert "black-hole" not in names
 
     # domain-scoped skill excluded outside its cwd, included inside
-    out_names = [n for n, _ in index.rank("改一下演示 页面", cwd="/Users/x/other-repo")]
-    in_names = [n for n, _ in index.rank("改一下演示 页面", cwd="/Users/x/demo-project")]
+    out_names = [n for n, _ in index.rank("改一下演示 页面", cwd="/Users/example/other-repo")]
+    in_names = [n for n, _ in index.rank("改一下演示 页面", cwd="/Users/example/demo-project")]
     assert "scoped-skill" not in out_names
     assert "scoped-skill" in in_names
 
@@ -197,7 +197,7 @@ def test_routing_log_written_and_redacted(tmp_path, monkeypatch):
     env_home.mkdir()
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
-        input=json.dumps({"prompt": "这个接口报 500 了，帮我查一下为什么", "cwd": "/Users/x/secret-project"}),
+        input=json.dumps({"prompt": "这个接口报 500 了，帮我查一下为什么", "cwd": "/Users/example/secret-project"}),
         capture_output=True, text=True, timeout=30,
         env={**__import__("os").environ, "HOME": str(env_home)},
     )
@@ -210,7 +210,7 @@ def test_routing_log_written_and_redacted(tmp_path, monkeypatch):
         assert "prompt_head" not in rec
         assert isinstance(rec["prompt_len"], int)
         assert rec["repo"] == "secret-project"  # basename only, no full path
-        assert "/Users/x" not in json.dumps(rec)
+        assert "/Users/example" not in json.dumps(rec)
 
 
 def test_new_skill_invalidates_cache(tmp_path):

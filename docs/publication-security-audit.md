@@ -34,8 +34,12 @@ where noted.
 # Personal usernames and private project codenames
 git grep -nIiE '[z]ihan|car[d]ealer|yun[ch]ou' -- ':!*.git' ':!docs/publication-security-audit.md'
 
+# Absolute home paths (allow the documented /Users/example test fixtures)
+git grep -nIE '/[U]sers/[a-z]+' -- ':!*.git' ':!docs/publication-security-audit.md' \
+  | grep -Ev '/Users/example' || true
+
 # Personal email inboxes (not GitHub noreply or git@github.com SSH clone URLs)
-git grep -nIiE 'jeremy9682@[g]mail|@[a-z0-9._%+-]+@gmail\.com' \
+git grep -nIiE 'jeremy9682@[g]mail|[a-z0-9._%+-]+@[g]mail\.com' \
   -- ':!*.git' ':!docs/publication-security-audit.md' \
   | grep -Ev 'users\.noreply\.github\.com|git@github\.com' || true
 

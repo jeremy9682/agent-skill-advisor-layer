@@ -180,7 +180,7 @@ Review notes:
 - Operational risk: low-to-moderate. No scripts, tools, or assets — prose only.
   The risk is prompt-surface, not code execution: four descriptions are injected
   into both runtimes every session.
-- **Runtime asymmetry (verified 2026-07-10):** `review-animations` carries
+- **Runtime asymmetry:** `review-animations` carries
   `disable-model-invocation: true`. Claude Code honors it (never auto-fires).
   **Codex ignores it** — Codex parses only `name` + `description`
   (`.system/skill-creator/SKILL.md:79`) and has no slash commands. Treat

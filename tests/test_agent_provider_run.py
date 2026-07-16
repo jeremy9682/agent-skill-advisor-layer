@@ -1781,7 +1781,7 @@ def test_changed_session_is_ambiguous_under_concurrency(tmp_path):
 
 
 def test_cursor_correlates_jsonl_and_db_for_same_session(tmp_path):
-    session_id = "60a512e8-16ea-4819-9c25-7337b6e3b17d"
+    session_id = "00000000-0000-4000-8000-000000000003"
     transcript = tmp_path / session_id / f"{session_id}.jsonl"
     transcript.parent.mkdir()
     transcript.write_text("")

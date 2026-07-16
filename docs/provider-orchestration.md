@@ -135,8 +135,8 @@ agent-run run auto --task-shape codex_final_review \
 
 The current routes map mechanical work to Claude Sonnet/low, ordinary bugs to
 Codex Terra/medium, judgment and restricted-zone direction to Claude Opus/high,
-and cross-family final review to Grok 4.5/high. Grok is enabled after both a
-direct CLI run and a wrapped canary proved the primary Grok 4.5 turn succeeds.
+and cross-family final review to Grok 4.5/high. A provider route is enabled only after both a direct CLI run and a wrapped
+canary prove its primary turn succeeds.
 GPT-5.6 Sol/xhigh has two distinct routes: `codex_final_review` is the canonical
 cross-family pass for Claude-family producers, while `secondary_final_review` is
 an independent same-family supplement for Codex producers and cannot replace the
@@ -145,10 +145,9 @@ effort and seat fields are immutable. Explicit provider runs remain available fo
 Grok second opinions and Cursor named-model execution/review.
 
 Claude Opus/high remains a normalized-governance-xhigh `claude_final_review`
-route for Codex-produced work, including risk overlays. Fable is
-`fable_final_review` and remains disabled until a live run succeeds. Cursor may
-list Fable 5, but the CLI can return a data-policy acknowledgement error until
-the user accepts the model's retention policy; catalogue presence alone does
+route for Codex-produced work, including risk overlays. A `fable_final_review` route stays disabled until a live run succeeds. A
+broker may list a model whose CLI still returns a data-policy acknowledgement
+error until the account accepts that model's retention policy; catalogue presence alone does
 not enable the route. Provider
 runs default to a 300-second timeout and journal timeouts as exit `124`;
 `--no-skills` is an audited per-run escape hatch when auto-selected skill bodies
@@ -181,7 +180,7 @@ requested ID provides `live-run-verified` evidence. Review
 independence follows the concrete model family: Cursor Grok is xAI, Cursor Claude
 is Anthropic, GPT models are OpenAI, Composer is Cursor, and Auto remains
 undisclosed. If changed artifacts resolve to more than one Cursor session ID, the
-wrapper now reports `ambiguous-concurrent-artifacts` even when only one candidate
+wrapper reports `ambiguous-concurrent-artifacts` even when only one candidate
 matches the requested model; model matching cannot prove which concurrent process
 owns that session. A single unrelated concurrent session that emits the only full
 artifact pair remains an explicit residual until Cursor exposes a run-scoped ID.
@@ -223,9 +222,9 @@ These patterns are worth preserving as timeless protocol guidance:
   authentication failure. The portable manifest remains capability configuration;
   callers must distinguish `discover` (installed/config-enabled) from a live run
   that hit a spending limit and fail closed until the limit clears.
-- **Cross-family review hardening**: the final pass added a shared pure
+- **Cross-family review hardening**: the layer ships a shared pure
   ledger-history validator, an explicit `codex_final_review` cross-family route for
-  Claude-family producers, and normalized the reciprocal `claude_final_review`
+  Claude-family producers, and a normalized reciprocal `claude_final_review`
   governance tier for Codex-produced risk work. The wrapper prevents explicit-provider
   route spoofing, binds reviewers to a successful producer in the same repository,
   validates the full ledger schema, normalizes governance effort, and requires
