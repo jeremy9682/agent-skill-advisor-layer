@@ -58,11 +58,11 @@ link here instead of copying long, drifting workflow text.
 
 When decomposing an ADR / frozen intent into a spec or tickets, the authoring
 seat MUST preserve verbatim the upstream hard constraints that spec/ticket owns
-or depends on — they decay silently otherwise (YunChouAI M1a: a spec softened the
+or depends on — they decay silently otherwise (ExampleERP M1a: a spec softened the
 ADR's authorization set, atomicity, and concurrency guarantees into looser prose,
 and a strong-model implementation passed its own tests while five governance gaps
 remained, which a cross-family review later surfaced; M1b: a spec restated the
-`{boss, founder}` authorization set as "boss/finance"). Rules:
+`{admin, auditor}` authorization set as "admin/finance-bot"). Rules:
 
 - Every spec/ticket cites a stable upstream anchor (an ADR section, a
   frozen-intent heading, or an immutable permalink), and does not paraphrase the

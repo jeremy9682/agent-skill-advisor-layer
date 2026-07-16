@@ -1,6 +1,6 @@
 # PR #16 final review (claude-final-review)
 
-run_id: `37320374-af0e-4117-9b8b-a18f82c7603f`
+run_id: `<redacted-run-id>`
 model_observed via agent-run journal.
 
 ---

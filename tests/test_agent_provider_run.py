@@ -1781,7 +1781,7 @@ def test_changed_session_is_ambiguous_under_concurrency(tmp_path):
 
 
 def test_cursor_correlates_jsonl_and_db_for_same_session(tmp_path):
-    session_id = "60a512e8-16ea-4819-9c25-7337b6e3b17d"
+    session_id = "00000000-0000-4000-8000-000000000003"
     transcript = tmp_path / session_id / f"{session_id}.jsonl"
     transcript.parent.mkdir()
     transcript.write_text("")
@@ -1811,11 +1811,11 @@ def test_cursor_correlates_jsonl_and_db_for_same_session(tmp_path):
 def test_codex_session_parser_keeps_full_uuid(tmp_path):
     path = (
         tmp_path
-        / "rollout-2026-07-14T07-47-01-019f6073-ae2d-7390-9fa0-41682ea0de76.jsonl"
+        / "rollout-2026-07-14T07-47-01-00000000-0000-4000-8000-000000000001.jsonl"
     )
     path.write_text("")
     parsed = agent_run.parse_session("codex", path, "attributed-single-artifact")
-    assert parsed["session_id"] == "019f6073-ae2d-7390-9fa0-41682ea0de76"
+    assert parsed["session_id"] == "00000000-0000-4000-8000-000000000001"
 
 
 def test_journal_is_append_only_private_and_0600(tmp_path):
@@ -2103,7 +2103,7 @@ def test_ibom_rejects_repo_path_traversal(capsys):
 
 
 def test_parse_session_reads_codex_and_claude_model_from_jsonl(tmp_path):
-    codex = tmp_path / "rollout-019f64be-7b36-7fa1-80f1-1b09f41286a6.jsonl"
+    codex = tmp_path / "rollout-00000000-0000-4000-8000-000000000002.jsonl"
     codex.write_text(
         json.dumps(
             {
@@ -2116,7 +2116,7 @@ def test_parse_session_reads_codex_and_claude_model_from_jsonl(tmp_path):
     parsed = agent_run.parse_session("codex", codex)
     assert parsed["model_observed"] == "gpt-5.6-terra"
     assert parsed["model_observation_reason"] == "codex-jsonl-turn-context"
-    assert parsed["session_id"] == "019f64be-7b36-7fa1-80f1-1b09f41286a6"
+    assert parsed["session_id"] == "00000000-0000-4000-8000-000000000002"
 
     claude = tmp_path / "abc.jsonl"
     claude.write_text(

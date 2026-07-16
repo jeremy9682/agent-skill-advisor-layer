@@ -2,7 +2,7 @@
 title: "HTTP 417 'module has no attribute X' means stale worker, not code bug"
 date: "2026-07-06"
 tags: ["bug", "ops"]
-source_task: "YunChouAI workbench API failures (recurred twice)"
+source_task: "the example ERP workbench API failures (recurred twice)"
 applies_to: ["erp-service", "gunicorn deployments", "any long-lived Python worker"]
 ---
 
@@ -23,7 +23,7 @@ state.
 
 ## Fix Or Pattern
 
-Run `make local-deploy` (or restart the worker) BEFORE debugging any
+Redeploy the app service (e.g. `make deploy-local`) BEFORE debugging any
 "attribute missing" error that appeared immediately after a merge. Rule of
 thumb: if the attribute exists in the file on disk, suspect process staleness
 first, code second.

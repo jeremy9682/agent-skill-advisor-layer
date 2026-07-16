@@ -91,9 +91,9 @@ providers:
   grok:
     display_name: Grok Build
     family: xai
-    # A direct 2026-07-14 canary completed with exit 0 as grok-4.5. The CLI
-    # emitted a 402 only for its auxiliary grok-build title request, so provider
-    # health must follow the main turn result rather than any stderr substring.
+    # HTTP 402 is a spending-limit class signal, not proof the CLI is broken.
+    # Classify provider health from the main turn result; fail closed on limit
+    # signals rather than treating auxiliary stderr substrings as ground truth.
     run_policy: enabled
     binary_candidates:
       - ~/.grok/bin/grok

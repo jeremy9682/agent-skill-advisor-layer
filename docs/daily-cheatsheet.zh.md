@@ -24,7 +24,7 @@ git clone git@github.com:jeremy9682/agent-skill-advisor-layer.git ~/Projects/age
    （改 settings 前先 `cp ~/.claude/settings.json ~/.claude/settings.json.bak`）
 4. 自检：`python3 scripts/routing_eval.py --check` → 应 exit 0
 
-> 机器专属配置（carDealer 点名、effort 档位表、hook 注册）不在仓库里——各机器自管。
+> 机器专属配置（client-erp 点名、effort 档位表、hook 注册）不在仓库里——各机器自管。
 
 ---
 
