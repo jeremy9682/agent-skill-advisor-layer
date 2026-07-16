@@ -3,9 +3,9 @@
 ## Seats / receipts
 | Seat | Provider | run_id | model_observed | Verdict |
 |---|---|---|---|---|
-| claude-final-review | claude/opus | `37320374-af0e-4117-9b8b-a18f82c7603f` | `claude-opus-4-8` | **PASS_WITH_CONCERNS** |
-| codex-final-review (r1) | codex/sol | `616fecf8-a5c6-4628-9a28-00fd19717f6c` | `gpt-5.6-sol` | **FAIL** |
-| codex-final-review (r2) | codex/sol | `eaea0369-3275-4f7c-bb2f-b587480c59d3` | `gpt-5.6-sol` | **FAIL** (remaining: exact `timeout_total` assert) |
+| claude-final-review | claude/opus | `<redacted-run-id>` | `claude-opus-4-8` | **PASS_WITH_CONCERNS** |
+| codex-final-review (r1) | codex/sol | `<redacted-run-id>` | `gpt-5.6-sol` | **FAIL** |
+| codex-final-review (r2) | codex/sol | `<redacted-run-id>` | `gpt-5.6-sol` | **FAIL** (remaining: exact `timeout_total` assert) |
 
 ## Follow-up commits addressing FAIL
 - `9c1907e` — OSError → `provider-start-failed` (not `timeout_startup`); idle/spawn/success/task_focus fixtures; JSONL tail fallback

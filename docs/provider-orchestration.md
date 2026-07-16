@@ -204,13 +204,7 @@ doctor-green ritual.
 
 ## Live verification lessons (synthetic examples)
 
-> Historical landing notes, anonymized. Not an ongoing requirement to keep doctor
-> fully green or re-run serial canaries. Further live-evidence hardening was
-> cancelled — daily work needs recoverable sessions/journal/ledger, not a
-> doctor-all-green ritual.
-
-These patterns came from Phase 1 landing and are worth preserving as protocol
-lessons:
+These patterns are worth preserving as timeless protocol guidance:
 
 - **Grok health gate**: a governed Grok route requires exit `0` *and* an attributed
   native session whose model IDs match the request with zero session errors. Missing
@@ -224,12 +218,11 @@ lessons:
   `ambiguous-concurrent-artifacts`; model matching cannot prove ownership.
 - **Headless workspace trust**: Cursor read-only smokes fail fast without explicit
   `--trust-workspace`; adding trust makes subsequent smokes pass.
-- **Quota as transient state**: a rolling usage limit (e.g. `1,234,567 / 2,000,000
-  (example)`) is a transient live quota state, not evidence that the CLI never
-  worked and not an authentication failure. The portable manifest remains capability
-  configuration rather than a stale account quota database; callers must distinguish
-  `discover` (installed/config-enabled) from a live canary (currently quota-blocked
-  until usage rolls off).
+- **Spending-limit signals**: HTTP 402 and similar spending-limit classes are
+  transient live states, not evidence that the CLI never worked and not an
+  authentication failure. The portable manifest remains capability configuration;
+  callers must distinguish `discover` (installed/config-enabled) from a live run
+  that hit a spending limit and fail closed until the limit clears.
 - **Cross-family review hardening**: the final pass added a shared pure
   ledger-history validator, an explicit `codex_final_review` cross-family route for
   Claude-family producers, and normalized the reciprocal `claude_final_review`

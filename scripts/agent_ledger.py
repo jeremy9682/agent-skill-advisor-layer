@@ -256,12 +256,17 @@ def _cmd_close_locked(a):
     events = load(a.slug)
     tgt = find_target(events, a.event_id)
     if not a.instant:
-        claimed_by_me = any(k == "claimed" and t == a.event_id and r.get("from_seat") == a.seat
-                            for k, t, r in markers(events, intent_ref=tgt.get("intent_ref")))
-        if not claimed_by_me:
-            die(f"no prior claim on {a.event_id} by seat {a.seat!r}; being the addressed "
-                f"to_seat is not a claim — run `agent-ledger claim` first, or use --instant "
-                f"only for immediate read/verify/consume work")
+        latest_claimant = None
+        for k, t, r in markers(events, intent_ref=tgt.get("intent_ref")):
+            if k == "claimed" and t == a.event_id:
+                latest_claimant = r.get("from_seat")  # append order: latest claim wins
+        if latest_claimant is None:
+            die(f"no prior claim on {a.event_id}; being the addressed to_seat is not a "
+                f"claim — run `agent-ledger claim` first, or use --instant only for "
+                f"immediate read/verify/consume work")
+        if latest_claimant != a.seat:
+            die(f"stale claim: {a.event_id} is currently claimed by {latest_claimant!r}, "
+                f"not {a.seat!r}; only the latest claimant may close — re-claim to take over")
     ev = {
         "intent_ref": tgt["intent_ref"],
         "event_id": now_id(a.seat),

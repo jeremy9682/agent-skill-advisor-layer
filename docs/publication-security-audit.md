@@ -24,24 +24,28 @@ Scan for:
 ## (a) Current-tree scan
 
 Run these against the working tree before every publication or scrub pass.
-Each command should return **no output**; any hit must be fixed or explicitly
-accepted with documented rationale before going public.
+Each command should return **no output** on a scrubbed tree; any hit must be
+fixed or explicitly accepted with documented rationale before going public.
+Patterns use character-class splits (e.g. `[z]ihan`) so this document's own
+examples do not match themselves. Test fixtures and this file are excluded
+where noted.
 
 ```bash
-# Personal usernames and home-directory paths (substitute known identifiers)
-git grep -nIiE '<personal-username>|/Users/[a-z]+/' -- ':!*.git'
+# Personal usernames and private project codenames
+git grep -nIiE '[z]ihan|car[d]ealer|yun[ch]ou' -- ':!*.git' ':!docs/publication-security-audit.md'
 
-# Private project / product names (substitute known private codenames)
-git grep -nIiE '<private-project-name>' -- ':!*.git'
+# Personal email inboxes (not GitHub noreply or git@github.com SSH clone URLs)
+git grep -nIiE 'jeremy9682@[g]mail|@[a-z0-9._%+-]+@gmail\.com' \
+  -- ':!*.git' ':!docs/publication-security-audit.md' \
+  | grep -Ev 'users\.noreply\.github\.com|git@github\.com' || true
 
-# Personal email addresses (bare GitHub handles in URLs are OK)
-git grep -nIiE '<username>@gmail|@[a-z0-9.-]+\.(com|io|dev)' -- ':!*.git'
+# Exact billing forensics figures (comma-separated millions pattern)
+git grep -nIiE '[0-9]{1,3},[0-9]{3},[0-9]{3}\s*/\s*[0-9,]+' \
+  -- ':!*.git' ':!docs/publication-security-audit.md'
 
-# Exact quota / billing forensics figures (comma-separated millions pattern)
-git grep -nIiE '[0-9]{1,3},[0-9]{3},[0-9]{3}\s*/\s*[0-9,]+' -- ':!*.git'
-
-# Secrets and credentials (broad sweep)
-git grep -nE '(gho_|sk-[a-zA-Z0-9]{20,}|PRIVATE KEY|password\s*=|secret\s*=|token\s*=)' -- ':!*.git'
+# Secrets and credentials (exclude test fixtures and this doc)
+git grep -nE '(gho_|sk-[a-zA-Z0-9]{20,}|PRIVATE KEY|password\s*=|secret\s*=|token\s*=)' \
+  -- ':!*.git' ':!docs/publication-security-audit.md' ':!tests/'
 ```
 
 Narrow or extend patterns as the fleet grows. Prefer fixing forward in tracked
@@ -57,15 +61,15 @@ git log --all --format='%H %an <%ae> %cn <%ce> %s'
 git grep -nE '(/Users/|gho_|sk-|PRIVATE KEY|password|secret|token)' $(git rev-list --all)
 
 # History-specific: personal identifiers that may predate the current tree scrub
-git log --all -p | grep -nIiE '<personal-username>|<private-project-name>|@gmail|/Users/[a-z]+/'
+git log --all -p | grep -nIiE '[z]ihan|car[d]ealer|yun[ch]ou|jeremy9682@[g]mail|/Users/[a-z]+/'
 ```
 
 History hits are costlier than tree hits — see section (d).
 
 ## (c) Commit-metadata policy
 
-- Use a publication-safe author/committer identity. GitHub's `noreply` address
-  (`<id>+username@users.noreply.github.com`) avoids exposing a personal inbox.
+- Use a publication-safe author/committer identity. GitHub's noreply address
+  (`<id>+username@users.noreply.github.[c]om`) avoids exposing a personal inbox.
 - Set author email **before** the first public push if the repo was ever private
   with a personal email:
 

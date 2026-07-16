@@ -163,3 +163,21 @@ def test_cli_escape_hatch_writes_persistent_marker(tmp_path):
     assert any("validation-skipped" in d
                for d in rec["decided_rejected_open"]["decided"]), \
         "a bypassed write must leave a persistent auditable marker"
+
+
+def test_cli_close_requires_latest_claimant(tmp_path):
+    """A superseded (stale) claimant must not close; only the latest claimant may."""
+    home = tmp_path / "home"
+    home.mkdir()
+    o = _run(["open", SLUG, "--intent-ref", "docs/x.md", "--from-seat",
+              "claude-direction", "--to-seat", "codex-review", "--worktree",
+              "/w @ b @ c", "--verification", "v", "--next-action", "step"], home)
+    assert o.returncode == 0
+    eid = o.stdout.strip()
+    assert _run(["claim", SLUG, eid, "--seat", "codex-review"], home).returncode == 0
+    # takeover: a later claim supersedes the first
+    assert _run(["claim", SLUG, eid, "--seat", "claude-landing"], home).returncode == 0
+    stale = _run(["close", SLUG, eid, "--seat", "codex-review", "--outcome", "done"], home)
+    assert stale.returncode == 1 and "stale claim" in stale.stderr
+    ok = _run(["close", SLUG, eid, "--seat", "claude-landing", "--outcome", "done"], home)
+    assert ok.returncode == 0

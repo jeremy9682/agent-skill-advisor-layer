@@ -1,6 +1,6 @@
 # PR #16 final review (codex-final-review)
 
-run_id: `616fecf8-a5c6-4628-9a28-00fd19717f6c`
+run_id: `<redacted-run-id>`
 model_observed via agent-run journal.
 
 ---

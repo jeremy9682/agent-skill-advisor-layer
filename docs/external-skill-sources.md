@@ -34,22 +34,6 @@ list of group → SHA:
 | huashu-skills | `35e7cf31328f6de07e5d125bfd094791f84b2352` |
 | huashu-design | `0e7ec8aca0058184c1a9e06e57697e84f68a3f0f` |
 
-**GATE GREEN 2026-07-12:** 120 external skill entries, 120 pinned, 0 unpinned —
-`--enforce-pins` exits 0. Getting here surfaced and fixed **two audit bugs**
-rather than freezing five copies:
-
-1. **`tree_hash` was blind to link-farms** — a dir whose files are symlinks
-   pointing outside it hashed as the empty-input sha256 (every file's
-   `resolve().relative_to(root)` raised and was swallowed) → no drift
-   detection at all for those skills. Fixed: relative names come from the walk
-   path; content reads follow symlinks.
-2. **Provenance ignored resolved symlinks** — `git_info(dir)` failed for
-   wrapper dirs whose `SKILL.md` symlinks INTO a git checkout
-   (`~/.codex/skills/gstack` → `~/gstack`). Fixed: when the dir has no git
-   identity, the resolved `SKILL.md`'s parent is consulted. Four of the five
-   "stray copies" turned out to be link-farms into real checkouts and now
-   carry honest `git_head` pins.
-
 **Enforcement points** (all local — GitHub CI is NOT one: the runner's home
 has no skills, so `--enforce-pins` there would be vacuously green):
 - weekly `router_selftune.py` report + notification now includes the pin gate
@@ -66,7 +50,6 @@ benefit).
 - Source: `https://github.com/mattpocock/skills`
 - Branch: `main`
 - Checked main commit: `391a2701dd948f94f56a39f7533f8eea9a859c87`
-- Installed on this host: Codex `~/.codex/skills`, Claude `~/.claude/skills`
 - Published set: the 21 paths declared in `.claude-plugin/plugin.json` at the
   pinned commit. Directories under `deprecated/`, `in-progress/`, `misc/`, and
   `personal/` are repository content, not members of the published plugin.
@@ -157,8 +140,7 @@ Review notes:
 
 - Source: `https://github.com/emilkowalski/skills`
 - Branch: `main`
-- Checked main commit: `f76beceb7d3fc8c43309cefad5a095a206103a4e` (2026-07-09)
-- Installed on this host: Codex `~/.codex/skills`, Claude `~/.claude/skills`
+- Checked main commit: `f76beceb7d3fc8c43309cefad5a095a206103a4e`
 - Skills: `emil-design-eng`, `review-animations`, `animation-vocabulary`,
   `apple-design`
 - Install shape: **symlink into a shared mutable worktree** — cloned to
