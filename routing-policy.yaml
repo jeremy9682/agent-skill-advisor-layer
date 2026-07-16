@@ -17,10 +17,12 @@ version: 1
 # difficulty (review is the safety net); review_effort_floor may NOT follow it
 # down. execution_mode is a work posture (fast/careful), NOT a reasoning effort.
 enums:
-  execution_seat: [claude, codex]       # family that PRODUCES the diff
+  execution_seat: [claude, codex, cursor]  # family that PRODUCES the diff
   execution_model:                       # producer model tiers, keyed by family
     claude: [sonnet, opus, fable]
     codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
+    # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）
+    cursor: [composer-2.5-fast, composer-2.5, cursor-grok-4.5-high, cursor-grok-4.5-high-fast]
   execution_effort: [low, medium, high, max]
   review_effort: [high, xhigh]          # floor is `high`; never below
   execution_mode: [fast, careful]
@@ -64,9 +66,10 @@ task_shapes:
     execution_mode: fast
     review_effort_floor: high
   mechanical:                      # formatting / mechanical edits; no behavior change
-    execution_seat: [claude]
+    # Shuttle Seal：飞梭默认 Composer 2.5 Fast；并行第二梭用 mechanical_grok 路由
+    execution_seat: [cursor]
     execution_model:
-      claude: sonnet               # fast-opus acceptable when sonnet underfits
+      cursor: composer-2.5-fast
     execution_effort: low          # may downshift; base low-medium
     execution_mode: fast
     review_effort_floor: high
@@ -137,6 +140,8 @@ final_review:
 
   # These REMAIN cross-family blind and mandatory; D3 does not relax them.
   # References are canonical ids: task_shapes keys and the risk overlay.
+  # Note: mechanical producers are Cursor-family (composer/grok); still require
+  # dual-seal when the deliverable is L3/L4 acceptance or gated docs land.
   cross_family_mandatory:
     task_shapes: [judgment, restricted_zone, arbitration]
     risk_overlay_triggers: all   # any flip trigger forces cross_family_blind via the overlay
@@ -147,8 +152,14 @@ final_review:
 runtime_routes:
   mechanical:
     policy_ref: task_shapes.mechanical
-    policy_family: claude
-    provider: claude
+    policy_family: cursor
+    provider: cursor
+    seat: claude-landing
+  # 飞梭第二梭：与 mechanical 可并行；仍属机械落盘，终审仍走双印
+  mechanical_grok:
+    provider: cursor
+    model: cursor-grok-4.5-high
+    effort: high
     seat: claude-landing
   ordinary_bug_fix:
     policy_ref: task_shapes.ordinary_bug_fix

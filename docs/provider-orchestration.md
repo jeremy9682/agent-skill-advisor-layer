@@ -133,9 +133,12 @@ agent-run run auto --task-shape codex_final_review \
   --cwd /path/to/repo "Review the frozen diff against its intent."
 ```
 
-The current routes map mechanical work to Claude Sonnet/low, ordinary bugs to
-Codex Terra/medium, judgment and restricted-zone direction to Claude Opus/high,
-and cross-family final review to Grok 4.5/high. A provider route is enabled only after both a direct CLI run and a wrapped
+The current routes map mechanical work to Cursor `composer-2.5-fast`/low
+(Shuttle Seal 飞梭; parallel alternate `mechanical_grok` →
+`cursor-grok-4.5-high`), ordinary bugs to Codex Terra/medium, judgment and
+restricted-zone direction to Claude Opus/high, and dual-seal final review to
+Fable max + GPT-5.6 Sol xhigh (`fable_final_review` / `codex_final_review`).
+A provider route is enabled only after both a direct CLI run and a wrapped
 canary prove its primary turn succeeds.
 GPT-5.6 Sol/xhigh has two distinct routes: `codex_final_review` is the canonical
 cross-family pass for Claude-family producers, while `secondary_final_review` is
