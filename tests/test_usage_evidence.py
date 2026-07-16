@@ -15,10 +15,10 @@ def test_usage_kinds_keep_invocation_reads_and_self_reads_separate(tmp_path):
     session = tmp_path / "session.jsonl"
     items = [
         {"type": "response_item", "payload": {"type": "function_call", "arguments": json.dumps({
-            "cmd": "sed -n '1,20p' /Users/zihan/.codex/skills/demo/SKILL.md"
+            "cmd": "sed -n '1,20p' /Users/example/.codex/skills/demo/SKILL.md"
         })}},
         {"type": "response_item", "payload": {"type": "function_call", "arguments": json.dumps({
-            "cmd": "python3 scripts/skill_audit.py --report; sed -n '1,20p' /Users/zihan/.codex/skills/demo/SKILL.md"
+            "cmd": "python3 scripts/skill_audit.py --report; sed -n '1,20p' /Users/example/.codex/skills/demo/SKILL.md"
         })}},
         {"type": "response_item", "payload": {"type": "function_call", "arguments": json.dumps({
             "cmd": "true; gstack-demo"
@@ -39,8 +39,8 @@ def test_doctor_and_selftune_batch_reads_are_excluded():
     counts = {name: audit.empty_usage() for name in valid}
     command = (
         "python3 scripts/router_selftune.py && python3 scripts/routing_eval.py --doctor "
-        "/Users/zihan/.codex/skills/alpha/SKILL.md "
-        "/Users/zihan/.codex/skills/beta/SKILL.md"
+        "/Users/example/.codex/skills/alpha/SKILL.md "
+        "/Users/example/.codex/skills/beta/SKILL.md"
     )
 
     audit.record_skill_paths(command, counts, valid)

@@ -58,11 +58,11 @@ def test_default_no_plaintext(hook):
     prompt = "帮我 review 这个 PR 的 diff，检查 SQL 注入风险和权限边界"
     hook.write_log(
         prompt,
-        "/Users/zihan/Projects/agent-skill-advisor-layer",
+        "/Users/example/Projects/agent-skill-advisor-layer",
         [{"skill": "review", "score": 4.2}],
         fired=True,
         session_id="sess-abc-123",
-        transcript_path="/Users/zihan/.claude/projects/x/t.jsonl",
+        transcript_path="/Users/example/.claude/projects/x/t.jsonl",
     )
     (rec,) = read_records(hook)
 
@@ -79,7 +79,7 @@ def test_default_no_plaintext(hook):
 
     # Session pointer threaded through.
     assert rec["session_id"] == "sess-abc-123"
-    assert rec["transcript_path"] == "/Users/zihan/.claude/projects/x/t.jsonl"
+    assert rec["transcript_path"] == "/Users/example/.claude/projects/x/t.jsonl"
     # cwd minimized to basename.
     assert rec["repo"] == "agent-skill-advisor-layer"
 

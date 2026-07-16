@@ -50,22 +50,12 @@ rather than freezing five copies:
    "stray copies" turned out to be link-farms into real checkouts and now
    carry honest `git_head` pins.
 
-The one true stray copy is **frozen-legacy** (immutable-by-exception, keyed by
-absolute path → tree_hash; ANY drift = violation, so drift detection is
-preserved; upgrading/removing it is a separate user decision):
-
-| Frozen path | Frozen tree_hash | Provenance note |
-| --- | --- | --- |
-| `~/.agents/skills/frontend-design` | `25b18e6a…8575` | copied from the claude-plugins-official frontend-design plugin, drifted, original snapshot unknown |
-| `~/.codex/skills/gstack` | `55ef5be3…e521` | link-farm into gitignored `~/gstack/.agents/skills/gstack`; checkout HEAD cannot reproduce ignored generated targets |
-| `~/.codex/skills/gstack/gstack-upgrade` | `0bd74f7c…43bb` | nested link-farm into gitignored `~/gstack/.agents/skills/gstack-upgrade`; exact tree frozen, any regeneration reopens gate |
-
 **Enforcement points** (all local — GitHub CI is NOT one: the runner's home
 has no skills, so `--enforce-pins` there would be vacuously green):
 - weekly `router_selftune.py` report + notification now includes the pin gate
   (fail-closed on errors);
-- launchd fallback `com.zihan.skill-router-selftune` guarantees the weekly run
-  (`RunAtLoad` + Monday noon, idempotent by ISO week);
+- a launchd/cron weekly fallback can guarantee the run when the primary scheduler
+  misses (ISO-week dedupe makes double-runs harmless);
 - the documented audit command in CLAUDE.md carries `--enforce-pins`.
 
 Trust tiers and 30/60/90-day re-review stay deferred (maintenance cost before
@@ -108,11 +98,6 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
   --path <paths-from-.claude-plugin/plugin.json> \
   --dest ~/.claude/skills
 ```
-
-Host note (2026-07-12): the helper's Python download path failed local CA
-verification and its Git fallback required a newer sparse-checkout-capable Git.
-The actual installation therefore used the already reviewed pinned checkout;
-post-copy `diff -qr` verified all 21 trees in both runtimes exactly.
 
 ### Runtime and routing integration
 

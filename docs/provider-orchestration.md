@@ -8,9 +8,9 @@ identity.
 
 ```bash
 ln -sfn \
-  /Users/zihan/Projects/agent-skill-advisor-layer/scripts/agent_provider_run.py \
+  /path/to/agent-skill-advisor-layer/scripts/agent_provider_run.py \
   ~/.local/bin/agent-run
-chmod +x /Users/zihan/Projects/agent-skill-advisor-layer/scripts/agent_provider_run.py
+chmod +x /path/to/agent-skill-advisor-layer/scripts/agent_provider_run.py
 ```
 
 ## Discover providers
@@ -146,9 +146,9 @@ Grok second opinions and Cursor named-model execution/review.
 
 Claude Opus/high remains a normalized-governance-xhigh `claude_final_review`
 route for Codex-produced work, including risk overlays. Fable is
-`fable_final_review` and remains disabled until a live run succeeds. Cursor now
-lists Fable 5, but its CLI returns `ActionRequiredError: Review Data Policy` until
-the user acknowledges the model's retention policy; catalogue presence alone does
+`fable_final_review` and remains disabled until a live run succeeds. Cursor may
+list Fable 5, but the CLI can return a data-policy acknowledgement error until
+the user accepts the model's retention policy; catalogue presence alone does
 not enable the route. Provider
 runs default to a 300-second timeout and journal timeouts as exit `124`;
 `--no-skills` is an audited per-run escape hatch when auto-selected skill bodies
@@ -202,77 +202,38 @@ report `unknown`, the journal records `run-succeeded-health-unverified` rather
 than forging identity from `model_requested`. That is recoverability, not a
 doctor-green ritual.
 
-## Live verification snapshot (2026-07-14, historical)
+## Live verification lessons (synthetic examples)
 
-> Historical entitlement snapshot from the Phase 1 landing window. Not an
-> ongoing requirement to keep doctor fully green or re-run serial canaries.
-> Further live-evidence hardening / Phase 2 canary sweep was **cancelled**
-> 2026-07-15 — see `docs/intents/doctor-live-evidence-hardening-20260715.md`.
+> Historical landing notes, anonymized. Not an ongoing requirement to keep doctor
+> fully green or re-run serial canaries. Further live-evidence hardening was
+> cancelled — daily work needs recoverable sessions/journal/ledger, not a
+> doctor-all-green ritual.
 
+These patterns came from Phase 1 landing and are worth preserving as protocol
+lessons:
 
-- Grok CLI `0.2.101` completed a governed `grok-4.5/high` read-only route with
-  an open checkpoint and a native session ID.
-- Cursor Agent `2026.07.09-a3815c0` completed governed named-model smokes for
-  `composer-2.5` and `cursor-grok-4.5-high`. The
-  wrapper correlated each JSONL + SQLite pair into one session rather than guessing
-  by newest mtime.
-- After restarting Agent Sessions `4.3.1`, both new Cursor transcript sessions
-  appeared as native `source=cursor` rows. DB-only state is a source input; the
-  canonical indexed path is the emitted Cursor transcript JSONL.
-- Agent Sessions still has no runtime provider plugin for Grok. A native source
-  patch is prepared independently at
-  `/Users/zihan/Projects/agent-sessions-grok`. Its real-format redacted fixture,
-  discovery/parser, focused tests, Grok indexer, Unified index/search injection,
-  enablement and basic badge/color wiring exist. Peripheral exhaustive UI switches
-  still need a full Xcode compile to enumerate and close. Local typecheck/build/install
-  remains blocked until full Xcode is present, so the installed App is unchanged.
-
-Later the same day, one attempt emitted `402 spending-limit` and Grok was
-conservatively disabled. A direct CLI canary then completed successfully with exit
-`0`; its native session `019f60af-9aad-73f3-a948-0208977c21a7` records
-`current_model_id=grok-4.5`, `primaryModelId=grok-4.5`, zero session errors and a
-completed turn. The `402` belonged to the auxiliary `grok-build` title request,
-not the main Grok 4.5 turn. Grok invocation and review routes are therefore enabled
-again. Failure classification follows the main process exit/result, not an isolated
-stderr substring. The wrapper still never upgrades, subscribes or buys credits.
-
-The same review prompt was also used for a small baseline comparison. Codex Terra
-(`77.9s`) and Grok 4.5 (`89.6s`) independently agreed on route override, session
-attribution and billing-wording risks; Grok additionally identified the adapter-key
-seam and delivered-prompt hash gap. Cursor's first full audit failed in `1.3s`
-because headless workspace trust was missing; adding explicit `--trust` made two
-subsequent read-only smokes pass in `17.0s` and `17.3s`. This supports using Grok as
-an adversarial second opinion and Cursor Auto as a fast execution/review path, not
-letting an opaque auto-router replace the three governance seats.
-
-Final-gate status: Fable remains outside automatic use; Cursor now lists it, but
-the required data-retention acknowledgement has not been accepted. Grok's direct
-CLI canary proved that the main Grok
-4.5 turn was available and completed; the earlier auxiliary-title `402` no longer disables
-the provider. A wrapped Grok canary then completed as run
-`e839a306-17f0-4c2c-9531-2ec2f6724b5d` with exit `0` and an attributed native
-session. Claude Opus, Cursor Composer and Grok supplied independent architecture
-reviews; a resumed Sol xhigh audit produced concrete hardening findings. The
-wrapper now prevents explicit-provider route spoofing, binds reviewers to a
-successful producer in the same repository, validates the full ledger schema,
-normalizes governance effort, and requires primary-session evidence for governed
-Grok runs. Cursor Auto remains undisclosed, while named Cursor models use their
-concrete family and native model metadata for independence checks.
-
-After those successful runs and a full Grok final-review pass, a later focused
-re-review reached the free Grok Build rolling limit: the primary `grok-4.5`
-request returned `429 subscription:free-usage-exhausted` with usage
-`2,007,409 / 2,000,000` and a rolling 24-hour reset. This is a transient live
-quota state, not evidence that the CLI never worked and not an authentication
-failure. No upgrade, subscription, credit purchase or auto-top-up was attempted.
-The portable manifest remains capability configuration rather than a stale account
-quota database; callers must distinguish `discover` (installed/config-enabled)
-from a live canary (currently quota-blocked until usage rolls off).
-
-The final hardening pass added a shared pure ledger-history validator, an explicit
-`codex_final_review` cross-family route for Claude-family producers, and normalized
-the reciprocal `claude_final_review` governance tier for Codex-produced risk work.
-The full repository suite then passed with 180 tests plus Ruff and `py_compile`.
-Grok completed the earlier full cross-family review before its rolling limit was
-reached; Sol xhigh passed the final focused ledger/evidence re-review, and Claude
-Opus/high passed the latest cross-family route-and-ledger re-review.
+- **Grok health gate**: a governed Grok route requires exit `0` *and* an attributed
+  native session whose model IDs match the request with zero session errors. Missing
+  attribution journals as `provider-health-unverified` and fails closed — exit `0`
+  alone is not sufficient.
+- **Auxiliary stderr vs main turn**: failure classification follows the main process
+  exit/result, not an isolated stderr substring from an auxiliary request in the
+  same CLI invocation.
+- **Cursor broker attribution**: the wrapper correlates JSONL + SQLite pairs into
+  one session rather than guessing by newest mtime. Concurrent sessions can yield
+  `ambiguous-concurrent-artifacts`; model matching cannot prove ownership.
+- **Headless workspace trust**: Cursor read-only smokes fail fast without explicit
+  `--trust-workspace`; adding trust makes subsequent smokes pass.
+- **Quota as transient state**: a rolling usage limit (e.g. `1,234,567 / 2,000,000
+  (example)`) is a transient live quota state, not evidence that the CLI never
+  worked and not an authentication failure. The portable manifest remains capability
+  configuration rather than a stale account quota database; callers must distinguish
+  `discover` (installed/config-enabled) from a live canary (currently quota-blocked
+  until usage rolls off).
+- **Cross-family review hardening**: the final pass added a shared pure
+  ledger-history validator, an explicit `codex_final_review` cross-family route for
+  Claude-family producers, and normalized the reciprocal `claude_final_review`
+  governance tier for Codex-produced risk work. The wrapper prevents explicit-provider
+  route spoofing, binds reviewers to a successful producer in the same repository,
+  validates the full ledger schema, normalizes governance effort, and requires
+  primary-session evidence for governed Grok runs.

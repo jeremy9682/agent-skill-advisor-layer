@@ -6,8 +6,7 @@
 # harmless, so two runners cannot corrupt the streak.
 set -u
 STATUS="$HOME/.codex/skill-governance/selftune-status.jsonl"
-PY="/Users/zihan/anaconda3/bin/python3"
-[ -x "$PY" ] || PY="$(command -v python3)"
+PY="${PYTHON3:-$(command -v python3)}"
 WEEK=$("$PY" -c "import datetime;y,w,_=datetime.date.today().isocalendar();print(f'{y:04d}-W{w:02d}')")
 # already recorded this week → nothing to do
 grep -q "\"week\": \"$WEEK\"" "$STATUS" 2>/dev/null && exit 0

@@ -109,14 +109,14 @@ def test_usage_estimate_ignores_injected_skill_lists(tmp_path):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": [{"type": "input_text", "text": "/Users/zihan/.codex/skills/huashu-design/SKILL.md"}],
+                        "content": [{"type": "input_text", "text": "/Users/example/.codex/skills/huashu-design/SKILL.md"}],
                     },
                 }),
                 json.dumps({
                     "type": "response_item",
                     "payload": {
                         "type": "function_call",
-                        "arguments": json.dumps({"cmd": "sed -n '1,20p' /Users/zihan/.codex/skills/huashu-design/SKILL.md && gstack-review"}),
+                        "arguments": json.dumps({"cmd": "sed -n '1,20p' /Users/example/.codex/skills/huashu-design/SKILL.md && gstack-review"}),
                     },
                 }),
             ]) + "\n"

@@ -228,7 +228,7 @@ cases:
     # against should_skip_prompt in tests/test_routing_eval.py — it lives at the
     # skip layer, which cases.yaml (fire layer) cannot distinguish from no-fire.
 
-  # CJK-fragment false positives locked in (2026-07-11, YunChouAI session):
+  # CJK-fragment false positives locked in (2026-07-11, real-world CJK session):
   # plain Chinese execution directives scored huashu-design at 13.43 (3.4x
   # the old threshold) — single-char CJK tokens + generic process-word
   # bigrams from its long Chinese description carry inflated IDF in a
