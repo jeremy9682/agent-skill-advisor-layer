@@ -105,6 +105,24 @@ def resolve_binding(canon: dict, route_name: str) -> dict:
                 f"route {route_name!r} has invalid eligible_producer_routes"
             )
         binding["eligible_producer_routes"] = list(eligible)
+    if "timeout_seconds" in route:
+        try:
+            binding["timeout_seconds"] = int(route["timeout_seconds"])
+        except (TypeError, ValueError) as exc:
+            raise RoutingRuntimeError(
+                f"route {route_name!r} has invalid timeout_seconds"
+            ) from exc
+        if binding["timeout_seconds"] <= 0:
+            raise RoutingRuntimeError(
+                f"route {route_name!r} timeout_seconds must be positive"
+            )
+    if "serial_group" in route:
+        serial_group = route["serial_group"]
+        if not isinstance(serial_group, str) or not serial_group.strip():
+            raise RoutingRuntimeError(
+                f"route {route_name!r} has invalid serial_group"
+            )
+        binding["serial_group"] = serial_group.strip()
     return binding
 
 

@@ -9,13 +9,16 @@ digests, never prompt/response text or auth material.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -54,10 +57,24 @@ SEAT_RE = re.compile(
     r"^(?:claude|codex|fable|opus|sonnet|human|founder)"
     r"(?:-[a-z]+(?:-[a-z]+)*)?$"
 )
+DEFAULT_RUN_TIMEOUT_SECONDS = 300
+# Explicit `agent-run run <provider>` only — governed routes use serial_group
+# from routing-policy.yaml. Cursor is intentionally omitted so mechanical routes
+# without serial_group can run in parallel.
+PROVIDER_SERIAL_GROUPS = {
+    "claude": "claude-family",
+    "codex": "codex-family",
+    "grok": "grok-family",
+}
+SERIAL_LOCK_WAIT_SECONDS = 900
 SKILL_NAME_RE = re.compile(r"^- `([^`]+)`$")
 
 
 class ProviderRunError(RuntimeError):
+    pass
+
+
+class SerialLockTimeout(ProviderRunError):
     pass
 
 
@@ -1086,8 +1103,9 @@ def classify_failure(
     exit_code: int,
     stderr: str,
     timeout_class: str | None = None,
+    stdout: str = "",
 ) -> str:
-    lowered = stderr.lower()
+    combined = f"{stdout}\n{stderr}".lower()
     if run_status == "timed-out":
         return timeout_class or "timeout"
     if run_status == "interrupted":
@@ -1096,30 +1114,224 @@ def classify_failure(
         "provider-health-unverified",
         "review-independence-violation",
         "provider-start-failed",
+        "serial-lock-timeout",
     }:
         return run_status
     if exit_code != 0 and (
-        "402" in lowered
-        or "spending-limit" in lowered
-        or "run out of credits" in lowered
+        "402" in combined
+        or "spending-limit" in combined
+        or "run out of credits" in combined
+        or "quota exceeded" in combined
+        or "quota exhausted" in combined
+        or "insufficient credits" in combined
     ):
         return "quota-exhausted"
-    if exit_code != 0 and "429" in lowered and "free-usage-exhausted" in lowered:
+    if exit_code != 0 and "429" in combined and "free-usage-exhausted" in combined:
         return "quota-exhausted"
+    if exit_code != 0 and "429" in combined:
+        return "rate-limited"
     if exit_code != 0 and (
-        "401" in lowered
-        or "unauthorized" in lowered
-        or "authentication required" in lowered
+        "529" in combined
+        or "overloaded" in combined
+        or "upstream overload" in combined
     ):
-        return "authentication"
+        return "upstream-overload"
     if exit_code != 0 and (
-        "review data policy" in lowered
-        or ("actionrequirederror" in lowered and "retention policy" in lowered)
+        "401" in combined
+        or "unauthorized" in combined
+        or "authentication required" in combined
+        or "invalid api key" in combined
+        or "auth expired" in combined
+        or "token expired" in combined
+        or "login required" in combined
+        or "not logged in" in combined
+    ):
+        return "auth-expired"
+    if exit_code != 0 and (
+        "timed out" in combined
+        or "timeout" in combined
+        or "deadline exceeded" in combined
+    ):
+        return "timeout"
+    if exit_code != 0 and (
+        "review data policy" in combined
+        or ("actionrequirederror" in combined and "retention policy" in combined)
     ):
         return "action-required-data-policy"
     if exit_code != 0:
         return "provider-error"
     return "none"
+
+
+def kill_process_tree(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int):
+        try:
+            proc.kill()
+        except (ProcessLookupError, AttributeError):
+            return
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except ProcessLookupError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            return
+    except OSError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def serial_lock_path(group: str, journal_root: Path | None = None) -> Path:
+    root = journal_root or expand("~/.agent-runs")
+    return root / "locks" / f"{group}.lock"
+
+
+class ProviderSerialLock:
+    def __init__(
+        self,
+        group: str,
+        *,
+        journal_root: Path | None = None,
+        wait_seconds: int = SERIAL_LOCK_WAIT_SECONDS,
+    ):
+        self.group = group
+        self.journal_root = journal_root
+        self.wait_seconds = wait_seconds
+        self._handle = None
+        self.acquired = False
+        self.telemetry = {
+            "group": group,
+            "status": "pending",
+            "wait_started_at": None,
+            "acquired_at": None,
+            "wait_ms": None,
+            "wait_timeout_seconds": wait_seconds,
+        }
+
+    def __enter__(self) -> ProviderSerialLock:
+        path = serial_lock_path(self.group, self.journal_root)
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self._handle = open(path, "a+", encoding="utf-8")
+        self.telemetry["wait_started_at"] = utc_now()
+        started = time.monotonic()
+        deadline = time.monotonic() + self.wait_seconds
+        while True:
+            try:
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.acquired = True
+                self.telemetry.update(
+                    {
+                        "status": "acquired",
+                        "acquired_at": utc_now(),
+                        "wait_ms": round((time.monotonic() - started) * 1000),
+                    }
+                )
+                return self
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    self.telemetry.update(
+                        {
+                            "status": "timed-out",
+                            "wait_ms": round((time.monotonic() - started) * 1000),
+                        }
+                    )
+                    self._handle.close()
+                    self._handle = None
+                    raise SerialLockTimeout(
+                        f"serial lock wait exceeded for group {self.group!r}"
+                    ) from None
+                time.sleep(0.25)
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._handle is not None:
+            if self.acquired:
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+            self._handle.close()
+            self._handle = None
+            self.acquired = False
+
+
+def serial_group_for_provider(
+    provider_id: str, route: dict | None = None
+) -> str | None:
+    if route is not None:
+        if route.get("serial_group"):
+            return str(route["serial_group"])
+        return None
+    return PROVIDER_SERIAL_GROUPS.get(provider_id)
+
+
+def effective_timeout_seconds(
+    args: argparse.Namespace, route_name: str | None, config: dict
+) -> int:
+    requested = getattr(args, "timeout_seconds", None)
+    if requested is not None:
+        return int(requested)
+    if route_name:
+        timeout = route_binding(config, route_name).get("timeout_seconds")
+        if timeout is not None:
+            return int(timeout)
+    return DEFAULT_RUN_TIMEOUT_SECONDS
+
+
+def extract_claude_session_from_events(events: list[dict]) -> str | None:
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            session_id = event.get("session_id")
+            if isinstance(session_id, str) and session_id.strip():
+                return session_id.strip()
+    return None
+
+
+def extract_codex_session_from_events(events: list[dict]) -> str | None:
+    for event in events:
+        if not isinstance(event, dict) or event.get("type") != "thread.started":
+            continue
+        thread_id = event.get("thread_id")
+        if isinstance(thread_id, str) and thread_id.strip():
+            return thread_id.strip()
+    return None
+
+
+def configure_claude_stream_json(provider_id: str, command: list[str]) -> bool:
+    if provider_id != "claude" or "--output-format" not in command:
+        return False
+    command[command.index("--output-format") + 1] = "stream-json"
+    if "--verbose" not in command:
+        command.insert(command.index("--output-format"), "--verbose")
+    return True
+
+
+def stream_session_record(
+    adapter: str,
+    session_id: str,
+    artifacts: dict[str, tuple[int, int]],
+) -> dict:
+    lowered = session_id.lower()
+    for raw_path in artifacts:
+        path = Path(raw_path)
+        if lowered not in path.name.lower():
+            continue
+        parsed = parse_session(adapter, path, "attributed-stream-json")
+        if str(parsed.get("session_id") or "") == session_id:
+            return parsed
+    return parse_session(adapter, None, "attributed-stream-json")
 
 
 def validate_checkpoint(slug: str, event_id: str | None, expected_seat: str) -> dict:
@@ -1244,6 +1456,45 @@ def extract_codex_agent_message(events: list[dict]) -> str:
     return texts[-1] if texts else ""
 
 
+def extract_claude_agent_message(events: list[dict]) -> str:
+    results: list[str] = []
+    assistant_texts: list[str] = []
+    for event in events:
+        if event.get("type") == "result":
+            value = event.get("result")
+            if isinstance(value, str) and value.strip():
+                results.append(value)
+        if event.get("type") != "assistant":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            value = block.get("text")
+            if isinstance(value, str) and value.strip():
+                assistant_texts.append(value)
+    if results:
+        return results[-1]
+    return "\n".join(assistant_texts)
+
+
+def extract_claude_model_from_events(events: list[dict]) -> str:
+    last = ""
+    for event in events:
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        model = message.get("model")
+        if isinstance(model, str) and model.strip():
+            last = model.strip()
+    return last or "unknown"
+
+
 def extract_codex_model_from_events(events: list[dict]) -> str:
     last = ""
     for event in events:
@@ -1268,41 +1519,159 @@ def run_blocking_process(
 ) -> tuple[subprocess.CompletedProcess, str, dict]:
     telemetry = empty_stage_telemetry()
     telemetry["process_started_at"] = utc_now()
+    proc: subprocess.Popen[str] | None = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             command,
             cwd=cwd,
             env=env,
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
-            timeout=timeout_seconds,
+            start_new_session=True,
         )
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
         run_status = "completed"
+        completed = subprocess.CompletedProcess(
+            command, proc.returncode if proc.returncode is not None else 0, stdout, stderr
+        )
     except subprocess.TimeoutExpired as exc:
         run_status = "timed-out"
         telemetry["timeout_class"] = "timeout_total"
-        proc = subprocess.CompletedProcess(
-            command,
-            124,
-            stdout=exc.stdout.decode()
+        if proc is not None:
+            kill_process_tree(proc)
+        stdout = (
+            exc.stdout.decode()
             if isinstance(exc.stdout, bytes)
-            else (exc.stdout or ""),
-            stderr=(
-                (
-                    exc.stderr.decode()
-                    if isinstance(exc.stderr, bytes)
-                    else (exc.stderr or "")
-                )
-                + "\nprovider-timeout"
-            ),
+            else (exc.stdout or "")
         )
+        stderr = (
+            (exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or ""))
+            + "\nprovider-timeout"
+        )
+        completed = subprocess.CompletedProcess(command, 124, stdout, stderr)
     except KeyboardInterrupt:
         run_status = "interrupted"
-        proc = subprocess.CompletedProcess(
+        if proc is not None:
+            kill_process_tree(proc)
+        completed = subprocess.CompletedProcess(
             command, 130, stdout="", stderr="provider-interrupted"
         )
-    return proc, run_status, telemetry
+    return completed, run_status, telemetry
+
+
+def run_claude_stream_json_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+) -> tuple[subprocess.CompletedProcess, str, dict, list[dict]]:
+    """Stream Claude --output-format stream-json; classify total timeout."""
+    telemetry = empty_stage_telemetry()
+    telemetry["stream_mode"] = "claude-stream-json"
+    telemetry["total_budget_seconds"] = float(timeout_seconds)
+    events: list[dict] = []
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    run_status = "completed"
+    started = time.monotonic()
+    proc: subprocess.Popen[str] | None = None
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+        )
+        telemetry["process_started_at"] = utc_now()
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        import selectors
+
+        selector = selectors.DefaultSelector()
+        selector.register(proc.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(proc.stderr, selectors.EVENT_READ, "stderr")
+        stdout_open = True
+        stderr_open = True
+        while stdout_open or stderr_open or proc.poll() is None:
+            if time.monotonic() - started >= timeout_seconds:
+                run_status = "timed-out"
+                telemetry["timeout_class"] = "timeout_total"
+                break
+            ready = selector.select(timeout=0.25)
+            if not ready:
+                if proc.poll() is not None and not stdout_open and not stderr_open:
+                    break
+                continue
+            for key, _mask in ready:
+                stream = key.fileobj
+                label = key.data
+                line = stream.readline()
+                if line == "":
+                    selector.unregister(stream)
+                    if label == "stdout":
+                        stdout_open = False
+                    else:
+                        stderr_open = False
+                    continue
+                if label == "stderr":
+                    stderr_chunks.append(line)
+                    continue
+                stdout_chunks.append(line)
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except ValueError:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+        if run_status == "timed-out" and proc.poll() is None:
+            kill_process_tree(proc)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        elif proc.poll() is None:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                kill_process_tree(proc)
+        else:
+            proc.wait(timeout=5)
+        exit_code = proc.returncode if proc.returncode is not None else 124
+        display = extract_claude_agent_message(events)
+        raw = "".join(stdout_chunks)
+        completed = subprocess.CompletedProcess(
+            command,
+            exit_code if run_status != "timed-out" else 124,
+            stdout=display if display else raw,
+            stderr="".join(stderr_chunks),
+        )
+        telemetry.pop("_last_progress_mono", None)
+        return completed, run_status, telemetry, events
+    except KeyboardInterrupt:
+        if proc is not None and proc.poll() is None:
+            kill_process_tree(proc)
+        telemetry.pop("_last_progress_mono", None)
+        completed = subprocess.CompletedProcess(
+            command, 130, stdout="", stderr="provider-interrupted"
+        )
+        return completed, "interrupted", telemetry, events
+    except OSError as exc:
+        telemetry.pop("_last_progress_mono", None)
+        completed = subprocess.CompletedProcess(
+            command, 127, stdout="", stderr=f"provider-start-failed: {exc}"
+        )
+        return completed, "provider-start-failed", telemetry, events
 
 
 def run_codex_json_process(
@@ -1353,6 +1722,7 @@ def run_codex_json_process(
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
         telemetry["process_started_at"] = utc_now()
         assert proc.stdout is not None
@@ -1446,7 +1816,7 @@ def run_codex_json_process(
                         pass
                     break
         if run_status == "timed-out" and proc.poll() is None:
-            proc.kill()
+            kill_process_tree(proc)
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -1457,8 +1827,7 @@ def run_codex_json_process(
             except subprocess.TimeoutExpired:
                 run_status = "timed-out"
                 telemetry["timeout_class"] = "timeout_total"
-                proc.kill()
-                proc.wait(timeout=5)
+                kill_process_tree(proc)
         # Drain remaining stderr
         if proc.stderr is not None:
             try:
@@ -1481,7 +1850,7 @@ def run_codex_json_process(
         return completed, run_status, telemetry, events
     except KeyboardInterrupt:
         if proc is not None and proc.poll() is None:
-            proc.kill()
+            kill_process_tree(proc)
         telemetry.pop("_last_progress_mono", None)
         completed = subprocess.CompletedProcess(
             command, 130, stdout="", stderr="provider-interrupted"
@@ -1518,8 +1887,9 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         )
     if args.mode == "execute" and not args.allow_write:
         raise ProviderRunError("execute mode requires explicit --allow-write")
-    if args.timeout_seconds <= 0:
+    if args.timeout_seconds is not None and args.timeout_seconds <= 0:
         raise ProviderRunError("--timeout-seconds must be positive")
+    timeout_seconds = effective_timeout_seconds(args, route_name, config)
     if args.prompt.lstrip().startswith("-"):
         raise ProviderRunError(
             "prompt must not begin with '-' (prefix it with context text)"
@@ -1604,33 +1974,91 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
                 "--no-provider-tools is currently supported only for Claude read-only runs"
             )
         command[command.index("--tools") + 1] = ""
+    use_claude_stream = configure_claude_stream_json(provider_id, command)
     env, stripped_env = scrub_environment(provider)
-    before = session_snapshot(provider)
+    before: dict[str, tuple[int, int]] = {}
+    after: dict[str, tuple[int, int]] = {}
     run_id = str(uuid.uuid4())
     started_at = utc_now()
     started = time.monotonic()
     stream_events: list[dict] = []
-    if provider_id == "codex" and "--json" in command:
-        proc, run_status, stage_telemetry, stream_events = run_codex_json_process(
-            command,
-            cwd=cwd,
-            env=env,
-            timeout_seconds=args.timeout_seconds,
+    serial_group = serial_group_for_provider(provider_id, route if route_name else None)
+    lock_cm = (
+        ProviderSerialLock(
+            serial_group,
+            journal_root=expand(config["journal"]["root"]),
+            wait_seconds=min(timeout_seconds, SERIAL_LOCK_WAIT_SECONDS),
         )
-    else:
-        proc, run_status, stage_telemetry = run_blocking_process(
-            command,
-            cwd=cwd,
-            env=env,
-            timeout_seconds=args.timeout_seconds,
+        if serial_group
+        else contextlib.nullcontext()
+    )
+    try:
+        with lock_cm:
+            # Snapshot only after the family lock is held. Otherwise artifacts
+            # from the run ahead of us in the queue pollute file-diff fallback.
+            before = session_snapshot(provider)
+            if provider_id == "codex" and "--json" in command:
+                proc, run_status, stage_telemetry, stream_events = run_codex_json_process(
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    timeout_seconds=timeout_seconds,
+                )
+            elif use_claude_stream:
+                proc, run_status, stage_telemetry, stream_events = run_claude_stream_json_process(
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                proc, run_status, stage_telemetry = run_blocking_process(
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    timeout_seconds=timeout_seconds,
+                )
+            # Capture the post-run artifact state before releasing the family
+            # lock, so the next queued run cannot contaminate attribution.
+            after = session_snapshot(provider)
+    except SerialLockTimeout as exc:
+        run_status = "serial-lock-timeout"
+        stage_telemetry = empty_stage_telemetry()
+        proc = subprocess.CompletedProcess(
+            command, 75, stdout="", stderr=str(exc)
         )
+    if serial_group:
+        stage_telemetry["serial_lock"] = dict(lock_cm.telemetry)
     duration_ms = round((time.monotonic() - started) * 1000)
     ended_at = utc_now()
-    after = session_snapshot(provider)
     adapter = str(provider["session"].get("adapter") or "")
-    session, changed_artifact_count = attribute_session(
-        adapter, before, after, requested_model=str(model)
-    )
+    if run_status == "serial-lock-timeout":
+        session = parse_session(adapter, None, "not-observed")
+        changed_artifact_count = 0
+    else:
+        session, changed_artifact_count = attribute_session(
+            adapter, before, after, requested_model=str(model)
+        )
+    session_attribution = "file-diff"
+    stream_session_id = None
+    if provider_id == "claude":
+        stream_session_id = extract_claude_session_from_events(stream_events)
+    elif provider_id == "codex":
+        stream_session_id = extract_codex_session_from_events(stream_events)
+    if stream_session_id:
+        session = stream_session_record(adapter, stream_session_id, after)
+        session["session_id"] = stream_session_id
+        session["session_status"] = "attributed-stream-json"
+        session["session_attribution"] = "stream-json"
+        session_attribution = "stream-json"
+    if session_attribution != "stream-json":
+        status = str(session.get("session_status") or "")
+        if "ambiguous" in status:
+            session_attribution = "ambiguous"
+        else:
+            session_attribution = "file-diff"
+        session = dict(session)
+        session["session_attribution"] = session_attribution
     health_evidence = provider_health_evidence(provider_id, str(model), session)
     if (
         route_name is not None
@@ -1667,16 +2095,22 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         proc.returncode,
         stderr,
         timeout_class=stage_telemetry.get("timeout_class"),
+        stdout=stdout,
     )
     if (
-        session.get("model_observed") in {None, "", "unknown"}
+        provider_id in {"claude", "codex"}
+        and session.get("model_observed") in {None, "", "unknown"}
         and stream_events
     ):
-        stream_model = extract_codex_model_from_events(stream_events)
+        stream_model = (
+            extract_claude_model_from_events(stream_events)
+            if provider_id == "claude"
+            else extract_codex_model_from_events(stream_events)
+        )
         if stream_model != "unknown":
             session = dict(session)
             session["model_observed"] = stream_model
-            session["model_observation_reason"] = "codex-json-stream"
+            session["model_observation_reason"] = f"{provider_id}-json-stream"
     provider_version_value = binary_version(binary, provider)
     skill_evidence = sanitized_skill_evidence(selection)
     ibom_binding = {
@@ -1710,7 +2144,9 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         "duration_ms": duration_ms,
         "run_status": run_status,
         "failure_class": failure_class,
-        "timeout_seconds": args.timeout_seconds,
+        "timeout_seconds": timeout_seconds,
+        "serial_group": serial_group,
+        "session_attribution": session_attribution,
         "stage_telemetry": {
             key: value
             for key, value in stage_telemetry.items()
@@ -1984,6 +2420,8 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
         provider_rows.append(
             {
                 "provider_id": provider_id,
+                "serial_group": serial_group_for_provider(provider_id),
+                "serial_lock_enabled": bool(serial_group_for_provider(provider_id)),
                 "installed": installed,
                 "configured_runnable": (
                     installed
@@ -2065,6 +2503,7 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
                     }
                 )
             elif live["status"] in {
+                "auth-expired",
                 "authentication",
                 "action-required-data-policy",
             }:
@@ -2081,6 +2520,14 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
                         "detail": live["status"],
                     }
                 )
+        serial_group = serial_group_for_provider(provider_id, binding)
+        if not serial_group:
+            blockers.append(
+                {
+                    "code": "serial-lock-disabled",
+                    "detail": provider_id,
+                }
+            )
         route_rows.append(
             {
                 "route": name,
@@ -2089,6 +2536,9 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
                 "model": binding["model"],
                 "model_family": family,
                 "seat": binding["seat"],
+                "timeout_seconds": binding.get("timeout_seconds"),
+                "serial_group": serial_group,
+                "serial_lock_enabled": bool(serial_group),
                 "blockers": blockers,
             }
         )
@@ -2178,6 +2628,15 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
             if row["status"] in {"disabled", "degraded"}
         ]
     canon_path = ROOT / str(config.get("routing_canon") or "routing-policy.yaml")
+    serial_lock_warnings = [
+        {
+            "code": "serial-lock-disabled",
+            "route": row["route"],
+            "provider_id": row["provider_id"],
+        }
+        for row in route_rows
+        if not row["serial_lock_enabled"]
+    ]
     return {
         "routing_canon": portable_ref(canon_path),
         "routing_canon_sha256": sha256_bytes(canon_path.read_bytes()),
@@ -2187,6 +2646,7 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
             "optional_or_disabled_routes": optional_routes,
         },
         "providers": provider_rows,
+        "warnings": serial_lock_warnings,
         "routes": (
             [row for row in route_rows if row["route"] == route_name]
             if route_name
@@ -2234,7 +2694,16 @@ def ibom(args: argparse.Namespace, config: dict) -> int:
 
 def routes(config: dict) -> int:
     canon = routing_canon(config)
-    compiled = {name: resolve_binding(canon, name) for name in canon["runtime_routes"]}
+    compiled = {}
+    for name in canon["runtime_routes"]:
+        binding = resolve_binding(canon, name)
+        provider_id = canonical_provider_id(config, binding["provider"])
+        serial_group = serial_group_for_provider(provider_id, binding)
+        compiled[name] = dict(
+            binding,
+            serial_group=serial_group,
+            serial_lock_enabled=bool(serial_group),
+        )
     print(json.dumps({"routes": compiled}, ensure_ascii=False, indent=2))
     return 0
 
@@ -2304,7 +2773,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--show-stderr", action="store_true")
     run.add_argument("--no-provider-tools", action="store_true")
     run.add_argument("--no-skills", action="store_true")
-    run.add_argument("--timeout-seconds", type=int, default=300)
+    run.add_argument("--timeout-seconds", type=int)
     run.add_argument("--minimal-runtime", action="store_true")
     run.add_argument("--trust-workspace", action="store_true")
     st = sub.add_parser("status")

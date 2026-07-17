@@ -149,13 +149,22 @@ final_review:
 # --- Executable bindings ----------------------------------------------------
 # This is the only runtime launcher table. Provider manifests describe how a
 # provider runs and what it can expose; they never own task routes.
+#
+# Optional per-route keys (agent-run consumes these):
+#   timeout_seconds — default wall clock when caller omits --timeout-seconds
+#   serial_group    — flock lock name; same group never runs concurrently on one host
+#
+# Review routes MUST run serially within their provider family. Claude-family
+# seats (direction + Fable + Opus final review) share serial_group claude-family;
+# Codex/Grok review routes use their own family groups. Never run two routes from
+# the same provider family in parallel on one machine.
 runtime_routes:
   mechanical:
     policy_ref: task_shapes.mechanical
     policy_family: cursor
     provider: cursor
     seat: claude-landing
-  # 飞梭第二梭：与 mechanical 可并行；仍属机械落盘，终审仍走双印
+  # 飞梭第二梭：仍属机械落盘，终审走双印；无 serial_group，可与 mechanical 并行
   mechanical_grok:
     provider: cursor
     model: cursor-grok-4.5-high
@@ -176,16 +185,22 @@ runtime_routes:
     policy_family: claude
     provider: claude
     seat: claude-direction
+    timeout_seconds: 600
+    serial_group: claude-family
   external_second_opinion:
     provider: grok
     model: grok-4.5
     effort: high
     seat: claude-direction
+    timeout_seconds: 600
+    serial_group: grok-family
   restricted_zone:
     policy_ref: task_shapes.restricted_zone
     policy_family: claude
     provider: claude
     seat: claude-direction
+    timeout_seconds: 600
+    serial_group: claude-family
   final_review:
     provider: grok
     model: grok-4.5
@@ -193,6 +208,8 @@ runtime_routes:
     governance_effort: xhigh
     seat: codex-final-review
     review_independence: cross-family
+    timeout_seconds: 900
+    serial_group: grok-family
   claude_final_review:
     provider: claude
     model: opus
@@ -200,6 +217,8 @@ runtime_routes:
     governance_effort: xhigh
     seat: claude-final-review
     review_independence: cross-family
+    timeout_seconds: 900
+    serial_group: claude-family
   fable_final_review:
     provider: claude
     model: fable
@@ -207,6 +226,8 @@ runtime_routes:
     seat: fable-final-review
     review_independence: cross-family
     route_policy: disabled-fable-live-canary-required
+    timeout_seconds: 900
+    serial_group: claude-family
   secondary_final_review:
     provider: codex
     model: gpt-5.6-sol
@@ -214,6 +235,8 @@ runtime_routes:
     seat: codex-final-review
     review_independence: independent-supplement
     eligible_producer_routes: [ordinary_bug_fix]
+    timeout_seconds: 900
+    serial_group: codex-family
   codex_final_review:
     provider: codex
     model: gpt-5.6-sol
@@ -221,6 +244,8 @@ runtime_routes:
     governance_effort: xhigh
     seat: codex-final-review
     review_independence: cross-family
+    timeout_seconds: 900
+    serial_group: codex-family
   arbitration:
     policy_ref: task_shapes.arbitration
     policy_family: claude
@@ -228,6 +253,8 @@ runtime_routes:
     seat: fable-final-review
     review_independence: cross-family
     route_policy: disabled-fable-live-canary-required
+    timeout_seconds: 900
+    serial_group: claude-family
 
 # --- Degradation chain ------------------------------------------------------
 # When the Codex (cross-family) reviewer is unavailable.
