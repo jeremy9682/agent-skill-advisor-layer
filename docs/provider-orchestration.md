@@ -134,10 +134,13 @@ agent-run run auto --task-shape codex_final_review \
 ```
 
 The current routes map mechanical work to Cursor `composer-2.5-fast`/low
-(Shuttle Seal 飞梭; parallel alternate `mechanical_grok` →
+(Shuttle Seal 飞梭; alternate `mechanical_grok` →
 `cursor-grok-4.5-high`), ordinary bugs to Codex Terra/medium, judgment and
 restricted-zone direction to Claude Opus/high, and dual-seal final review to
 Fable max + GPT-5.6 Sol xhigh (`fable_final_review` / `codex_final_review`).
+Both Cursor routes queue on the same local provider-family lock only when
+`serial_group` is set on the route; `mechanical` / `mechanical_grok` omit it so
+parallel Cursor work is allowed.
 A provider route is enabled only after both a direct CLI run and a wrapped
 canary prove its primary turn succeeds.
 GPT-5.6 Sol/xhigh has two distinct routes: `codex_final_review` is the canonical
@@ -152,7 +155,40 @@ route for Codex-produced work, including risk overlays. A `fable_final_review` r
 broker may list a model whose CLI still returns a data-policy acknowledgement
 error until the account accepts that model's retention policy; catalogue presence alone does
 not enable the route. Provider
-runs default to a 300-second timeout and journal timeouts as exit `124`;
+runs default to a **300-second** timeout when the caller omits `--timeout-seconds`;
+governed review/direction routes in `routing-policy.yaml` carry **`timeout_seconds`**
+(600 for long direction reads, **900 for final review**) that `agent-run` applies
+automatically for `run auto --task-shape ...`.
+
+**Serial execution:** governed routes declare `serial_group` in
+`routing-policy.yaml` (e.g. `claude-family` for Fable/Opus review and Claude
+direction). Explicit `agent-run run claude|codex|grok` also serializes via the
+same family lock. Routes without `serial_group` (including mechanical Cursor
+routes) do not take a family lock. Before spawning the primary provider process, `agent-run` takes an exclusive
+flock under the configured journal root (`~/.agent-runs/locks/*.lock` by default).
+Lock acquisition queues for at most the smaller of the run timeout and 900 seconds.
+The journal's `stage_telemetry.serial_lock` records the group, wait timestamps,
+wait duration and outcome; a lock-wait timeout is journaled with exit `75`.
+Do not parallelize two runs in the same provider family on one host.
+
+**Session attribution:** Claude runs use `--output-format stream-json` when possible;
+`session_id` is taken from the stream (`session_attribution: stream-json`) with
+file-diff as fallback only. Codex likewise reads `thread_id` from its `--json`
+stream. The attribution method is one of `stream-json`, `file-diff`, or
+`ambiguous`; `session_status` retains finer confidence details.
+
+**Process cleanup:** Provider subprocesses run in a new session; timeouts call
+`killpg` to reap child trees (Codex node orphans).
+
+Failure receipts inspect both stdout and stderr. Auth expiry, quota exhaustion,
+rate limiting and provider overload are separated as `auth-expired`,
+`quota-exhausted`, `rate-limited`, and `upstream-overload`; textual deadline or
+timeout failures remain `timeout` rather than generic `provider-error`.
+
+`agent-run routes` and `agent-run doctor` expose effective route timeout and
+serial group. Doctor emits `serial-lock-disabled` when no lock group can be
+resolved for a route.
+
 `--no-skills` is an audited per-run escape hatch when auto-selected skill bodies
 exceed the provider prompt budget. For isolated Codex audits, `--minimal-runtime`
 adds `--ignore-user-config` so global plugins and hooks do not consume the review

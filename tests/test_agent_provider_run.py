@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -298,7 +299,21 @@ def test_run_public_seam_journals_private_instruction_bom(
     monkeypatch.setattr(
         agent_run, "binary_version", lambda _binary, _provider: "test-cli"
     )
-    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    snapshot_calls = []
+
+    def snapshot_while_locked(_provider):
+        lock_path = agent_run.serial_lock_path(
+            "codex-family", Path(data["journal"]["root"])
+        )
+        with open(lock_path, "a+", encoding="utf-8") as handle:
+            with pytest.raises(BlockingIOError):
+                agent_run.fcntl.flock(
+                    handle.fileno(), agent_run.fcntl.LOCK_EX | agent_run.fcntl.LOCK_NB
+                )
+        snapshot_calls.append("locked")
+        return {}
+
+    monkeypatch.setattr(agent_run, "session_snapshot", snapshot_while_locked)
     prompt = "private integration prompt that must never enter the receipt"
     args = SimpleNamespace(
         provider="codex",
@@ -330,6 +345,10 @@ def test_run_public_seam_journals_private_instruction_bom(
     assert row["instruction_bom_digest"] == row["instruction_bom"]["digest"]
     assert row["instruction_bom"]["privacy"]["contains_prompt_text"] is False
     assert row["instruction_bom"]["execution"]["mode"] == "read-only"
+    assert row["stage_telemetry"]["serial_lock"]["status"] == "acquired"
+    assert row["stage_telemetry"]["serial_lock"]["group"] == "codex-family"
+    assert snapshot_calls == ["locked", "locked"]
+    assert row["session_attribution"] in {"stream-json", "file-diff", "ambiguous"}
     assert prompt not in json.dumps(row)
 
 
@@ -1466,6 +1485,365 @@ def test_failure_classifies_quota_without_storing_error_body():
         )
         == "action-required-data-policy"
     )
+    assert (
+        agent_run.classify_failure(
+            "completed", 1, "", stdout="HTTP 529 overloaded upstream"
+        )
+        == "upstream-overload"
+    )
+    assert (
+        agent_run.classify_failure(
+            "completed", 1, "", stdout="429 Too Many Requests retry later"
+        )
+        == "rate-limited"
+    )
+    assert (
+        agent_run.classify_failure(
+            "completed", 1, "ignored", stdout="401 Unauthorized invalid token"
+        )
+        == "auth-expired"
+    )
+    assert (
+        agent_run.classify_failure(
+            "completed", 1, "", stdout="upstream deadline exceeded"
+        )
+        == "timeout"
+    )
+    assert (
+        agent_run.classify_failure(
+            "completed", 1, "token expired; login required", stdout=""
+        )
+        == "auth-expired"
+    )
+    assert (
+        agent_run.classify_failure(
+            "completed", 1, "", stdout="quota exceeded: insufficient credits"
+        )
+        == "quota-exhausted"
+    )
+
+
+def test_effective_timeout_uses_route_canon(monkeypatch, tmp_path):
+    canon = tmp_path / "routing-policy.yaml"
+    canon.write_text(
+        """
+version: 1
+task_shapes:
+  judgment:
+    execution_seat: [claude]
+    execution_model: {claude: opus}
+    execution_effort: high
+    execution_mode: careful
+    review_effort_floor: high
+runtime_routes:
+  codex_final_review:
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    seat: codex-final-review
+    timeout_seconds: 900
+"""
+    )
+    config = {"routing_canon": str(canon)}
+    args = argparse.Namespace(timeout_seconds=None)
+    assert agent_run.effective_timeout_seconds(args, "codex_final_review", config) == 900
+    args_default_explicit = argparse.Namespace(timeout_seconds=300)
+    assert (
+        agent_run.effective_timeout_seconds(
+            args_default_explicit, "codex_final_review", config
+        )
+        == 300
+    )
+    args_explicit = argparse.Namespace(timeout_seconds=120)
+    assert (
+        agent_run.effective_timeout_seconds(args_explicit, "codex_final_review", config)
+        == 120
+    )
+
+
+def test_extract_claude_session_from_stream_events():
+    events = [
+        {"type": "system", "subtype": "init", "session_id": "sess-abc"},
+        {"type": "assistant", "message": {}},
+    ]
+    assert agent_run.extract_claude_session_from_events(events) == "sess-abc"
+
+
+def test_extract_codex_session_and_claude_result_from_stream_events(tmp_path):
+    command = ["claude", "--print", "--output-format", "text", "prompt"]
+    assert agent_run.configure_claude_stream_json("claude", command) is True
+    assert command[command.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in command
+    codex_command = ["codex", "exec", "--json", "prompt"]
+    assert agent_run.configure_claude_stream_json("codex", codex_command) is False
+    assert "--verbose" not in codex_command
+    assert (
+        agent_run.extract_codex_session_from_events(
+            [{"type": "thread.started", "thread_id": "thread-abc"}]
+        )
+        == "thread-abc"
+    )
+    assert (
+        agent_run.extract_claude_agent_message(
+            [
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "draft"}]},
+                },
+                {"type": "result", "result": "final"},
+            ]
+        )
+        == "final"
+    )
+    transcript = tmp_path / "sess-abc.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {"type": "assistant", "message": {"model": "claude-opus-test"}}
+        )
+        + "\n"
+    )
+    record = agent_run.stream_session_record(
+        "claude", "sess-abc", {str(transcript): (1, 1)}
+    )
+    assert record["session_id"] == "sess-abc"
+    assert record["model_observed"] == "claude-opus-test"
+    assert record["session_status"] == "attributed-stream-json"
+
+
+def test_serial_group_for_provider():
+    assert agent_run.serial_group_for_provider("claude") == "claude-family"
+    assert (
+        agent_run.serial_group_for_provider("claude", {"serial_group": "custom"})
+        == "custom"
+    )
+    assert agent_run.serial_group_for_provider("cursor", {}) is None
+    assert agent_run.serial_group_for_provider("cursor") is None
+    assert (
+        agent_run.serial_group_for_provider(
+            "claude", {"provider": "claude", "timeout_seconds": 600}
+        )
+        is None
+    )
+
+
+def test_kill_process_tree_noop_when_exited():
+    class Done:
+        poll = lambda self: 0
+
+    agent_run.kill_process_tree(Done())  # type: ignore[arg-type]
+
+
+def test_kill_process_tree_uses_process_group(monkeypatch):
+    calls = []
+
+    class Running:
+        pid = 123
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            calls.append(("wait", timeout))
+            return -9
+
+    monkeypatch.setattr(agent_run.os, "getpgid", lambda pid: 456)
+    monkeypatch.setattr(
+        agent_run.os,
+        "killpg",
+        lambda pgid, sig: calls.append(("killpg", pgid, sig)),
+    )
+    agent_run.kill_process_tree(Running())  # type: ignore[arg-type]
+    assert ("killpg", 456, agent_run.signal.SIGKILL) in calls
+
+
+def test_provider_serial_lock_times_out_and_releases(tmp_path):
+    with agent_run.ProviderSerialLock(
+        "claude-family", journal_root=tmp_path, wait_seconds=1
+    ) as held:
+        assert held.telemetry["status"] == "acquired"
+        with pytest.raises(agent_run.SerialLockTimeout):
+            with agent_run.ProviderSerialLock(
+                "claude-family", journal_root=tmp_path, wait_seconds=0
+            ):
+                pass
+    with agent_run.ProviderSerialLock(
+        "claude-family", journal_root=tmp_path, wait_seconds=0
+    ) as reacquired:
+        assert reacquired.telemetry["status"] == "acquired"
+
+
+def test_serial_lock_timeout_is_journaled(tmp_path, monkeypatch, capsys):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    journal_root = tmp_path / "journal"
+    data["journal"]["root"] = str(journal_root)
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(
+        agent_run, "binary_version", lambda _binary, _provider: "test-cli"
+    )
+    monkeypatch.setattr(agent_run, "repo_slug", lambda _cwd: tmp_path.name)
+    monkeypatch.setattr(
+        agent_run,
+        "session_snapshot",
+        lambda _provider: pytest.fail("lock timeout must not attribute a session"),
+    )
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda _provider, _binary: {
+            "status": "static-config",
+            "models": [{"id": "gpt-5.6-terra"}],
+        },
+    )
+    monkeypatch.setattr(
+        agent_run.subprocess,
+        "Popen",
+        lambda *_a, **_k: pytest.fail("provider must not spawn without the lock"),
+    )
+    args = SimpleNamespace(
+        provider="codex",
+        task_shape=None,
+        model="gpt-5.6-terra",
+        effort="medium",
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=1,
+        minimal_runtime=False,
+        trust_workspace=False,
+        prompt="lock timeout receipt",
+    )
+    with agent_run.ProviderSerialLock(
+        "codex-family", journal_root=journal_root, wait_seconds=1
+    ):
+        assert agent_run.run_provider(args, data) == 75
+    capsys.readouterr()
+    path = journal_root / f"{tmp_path.name}.jsonl"
+    row = json.loads(path.read_text().splitlines()[-1])
+    assert row["run_status"] == "serial-lock-timeout"
+    assert row["failure_class"] == "serial-lock-timeout"
+    assert row["stage_telemetry"]["serial_lock"]["status"] == "timed-out"
+
+
+def test_run_blocking_process_starts_new_session(monkeypatch, tmp_path):
+    observed = {}
+
+    class FakeProc:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            observed["timeout"] = timeout
+            return "ok", ""
+
+    def fake_popen(*args, **kwargs):
+        observed["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", fake_popen)
+    proc, status, _telemetry = agent_run.run_blocking_process(
+        ["provider"], cwd=tmp_path, env={}, timeout_seconds=12
+    )
+    assert status == "completed"
+    assert proc.stdout == "ok"
+    assert observed["kwargs"]["start_new_session"] is True
+    assert observed["timeout"] == 12
+
+
+def test_run_claude_stream_json_extracts_result_and_session(monkeypatch, tmp_path):
+    lines = [
+        json.dumps(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "sess-claude",
+            }
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-opus-test",
+                    "content": [{"type": "text", "text": "draft"}],
+                },
+            }
+        )
+        + "\n",
+        json.dumps({"type": "result", "result": "APPROVE"}) + "\n",
+    ]
+    observed = {}
+
+    class QueueStream:
+        def __init__(self, queued):
+            self._lines = list(queued)
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = QueueStream(lines)
+            self.stderr = QueueStream([])
+            self.returncode = None
+
+        def poll(self):
+            return 0 if not self.stdout._lines else None
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+    def fake_popen(*args, **kwargs):
+        observed["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", fake_popen)
+
+    class RecordingSelector:
+        def __init__(self):
+            self._streams = []
+
+        def register(self, stream, _mask, label):
+            self._streams.append((stream, label))
+
+        def unregister(self, stream):
+            self._streams = [(s, l) for s, l in self._streams if s is not stream]
+
+        def select(self, timeout=None):
+            for stream, label in list(self._streams):
+                if stream._lines:
+                    key = type("K", (), {"fileobj": stream, "data": label})()
+                    return [(key, None)]
+            if self._streams:
+                stream, label = self._streams[0]
+                key = type("K", (), {"fileobj": stream, "data": label})()
+                return [(key, None)]
+            return []
+
+    import selectors as _selectors
+
+    monkeypatch.setattr(_selectors, "DefaultSelector", RecordingSelector)
+    proc, status, telemetry, events = agent_run.run_claude_stream_json_process(
+        ["claude", "--print", "--output-format", "stream-json", "hi"],
+        cwd=tmp_path,
+        env={},
+        timeout_seconds=10,
+    )
+    assert status == "completed"
+    assert proc.returncode == 0
+    assert proc.stdout == "APPROVE"
+    assert telemetry["stream_mode"] == "claude-stream-json"
+    assert agent_run.extract_claude_session_from_events(events) == "sess-claude"
+    assert agent_run.extract_claude_model_from_events(events) == "claude-opus-test"
+    assert observed["kwargs"]["start_new_session"] is True
 
 
 def test_cursor_hex_meta_is_decoded(tmp_path):
@@ -2446,7 +2824,13 @@ def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypat
             self.returncode = 0
             return 0
 
-    monkeypatch.setattr(agent_run.subprocess, "Popen", lambda *a, **k: FakeProc())
+    observed = {}
+
+    def fake_popen(*args, **kwargs):
+        observed["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setattr(agent_run.subprocess, "Popen", fake_popen)
 
     class RecordingSelector:
         def __init__(self):
@@ -2479,6 +2863,7 @@ def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypat
     assert telemetry["turn_completed_at"]
     assert telemetry["first_provider_event_at"]
     assert telemetry["provider_event_count"] >= 3
+    assert observed["kwargs"]["start_new_session"] is True
     assert agent_run.extract_codex_model_from_events(
         [{"type": "x", "model": "gpt-5.6-sol"}]
     ) == "gpt-5.6-sol"

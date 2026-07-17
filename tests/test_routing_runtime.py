@@ -76,6 +76,26 @@ def test_independent_supplement_preserves_canon_eligible_producer_routes():
     binding = routing.resolve_binding(canon, "secondary_final_review")
     assert binding["review_independence"] == "independent-supplement"
     assert binding["eligible_producer_routes"] == ["ordinary_bug_fix"]
+    assert binding["timeout_seconds"] == 900
+    assert binding["serial_group"] == "codex-family"
+
+
+def test_direction_and_review_routes_compile_stability_defaults():
+    canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
+    for route in ("judgment", "restricted_zone"):
+        binding = routing.resolve_binding(canon, route)
+        assert binding["timeout_seconds"] == 600
+        assert binding["serial_group"] == "claude-family"
+    for route in (
+        "fable_final_review",
+        "codex_final_review",
+        "claude_final_review",
+        "secondary_final_review",
+        "arbitration",
+    ):
+        binding = routing.resolve_binding(canon, route)
+        assert binding["timeout_seconds"] == 900
+        assert binding["serial_group"]
 
 
 def test_instruction_bom_is_stable_private_and_changes_with_instruction_bytes(tmp_path):
