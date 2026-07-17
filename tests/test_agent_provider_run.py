@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import time
 import subprocess
 from types import SimpleNamespace
 
@@ -1690,19 +1691,27 @@ def test_kill_process_tree_swallows_process_lookup_error(monkeypatch):
 
 def test_kill_process_tree_reaps_orphans_when_leader_exits_first():
     proc = subprocess.Popen(
-        ["bash", "-c", "sleep 120 & exit 0"],
+        ["bash", "-c", "sleep 120 & echo $!; exit 0"],
+        stdout=subprocess.PIPE,
+        text=True,
         start_new_session=True,
     )
-    pgid = proc.pid
+    orphan_pid = int(proc.stdout.readline().strip())
     proc.wait(timeout=5)
-    assert proc.poll() == 0
+    assert proc.returncode == 0
     try:
-        os.killpg(pgid, 0)
+        os.kill(orphan_pid, 0)
     except ProcessLookupError:
         pytest.skip("orphan child already reaped")
     agent_run.kill_process_tree(proc)
-    with pytest.raises(ProcessLookupError):
-        os.killpg(pgid, 0)
+    for _ in range(100):
+        try:
+            os.kill(orphan_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("orphan child still running after kill_process_tree")
 
 
 def test_provider_serial_lock_times_out_and_releases(tmp_path):
