@@ -1626,11 +1626,26 @@ def test_serial_group_for_provider():
     )
 
 
-def test_kill_process_tree_noop_when_exited():
-    class Done:
-        poll = lambda self: 0
+def test_kill_process_tree_kills_group_when_leader_exited(monkeypatch):
+    calls = []
 
-    agent_run.kill_process_tree(Done())  # type: ignore[arg-type]
+    class ExitedLeader:
+        pid = 123
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            calls.append(("wait", timeout))
+            return 0
+
+    monkeypatch.setattr(
+        agent_run.os,
+        "killpg",
+        lambda pgid, sig: calls.append(("killpg", pgid, sig)),
+    )
+    agent_run.kill_process_tree(ExitedLeader())  # type: ignore[arg-type]
+    assert ("killpg", 123, agent_run.signal.SIGKILL) in calls
 
 
 def test_kill_process_tree_uses_process_group(monkeypatch):
@@ -1646,14 +1661,48 @@ def test_kill_process_tree_uses_process_group(monkeypatch):
             calls.append(("wait", timeout))
             return -9
 
-    monkeypatch.setattr(agent_run.os, "getpgid", lambda pid: 456)
     monkeypatch.setattr(
         agent_run.os,
         "killpg",
         lambda pgid, sig: calls.append(("killpg", pgid, sig)),
     )
     agent_run.kill_process_tree(Running())  # type: ignore[arg-type]
-    assert ("killpg", 456, agent_run.signal.SIGKILL) in calls
+    assert ("killpg", 123, agent_run.signal.SIGKILL) in calls
+
+
+def test_kill_process_tree_swallows_process_lookup_error(monkeypatch):
+    class Running:
+        pid = 123
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            return -9
+
+    monkeypatch.setattr(
+        agent_run.os,
+        "killpg",
+        lambda _pgid, _sig: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    agent_run.kill_process_tree(Running())  # type: ignore[arg-type]
+
+
+def test_kill_process_tree_reaps_orphans_when_leader_exits_first():
+    proc = subprocess.Popen(
+        ["bash", "-c", "sleep 120 & exit 0"],
+        start_new_session=True,
+    )
+    pgid = proc.pid
+    proc.wait(timeout=5)
+    assert proc.poll() == 0
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        pytest.skip("orphan child already reaped")
+    agent_run.kill_process_tree(proc)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)
 
 
 def test_provider_serial_lock_times_out_and_releases(tmp_path):

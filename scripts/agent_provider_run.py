@@ -1164,31 +1164,30 @@ def classify_failure(
 
 
 def kill_process_tree(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
     pid = getattr(proc, "pid", None)
     if not isinstance(pid, int):
-        try:
-            proc.kill()
-        except (ProcessLookupError, AttributeError):
-            return
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except (ProcessLookupError, AttributeError):
+                return
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         return
+    # start_new_session=True on all provider spawns: leader pid is the PGID.
+    # Attempt killpg even when poll() != None (leader exited but children remain).
     try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            return
+        pass
     except OSError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            return
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                return
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
@@ -1634,12 +1633,8 @@ def run_claude_stream_json_process(
                     continue
                 if isinstance(event, dict):
                     events.append(event)
-        if run_status == "timed-out" and proc.poll() is None:
+        if run_status == "timed-out":
             kill_process_tree(proc)
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
         elif proc.poll() is None:
             try:
                 proc.wait(timeout=5)
@@ -1659,7 +1654,7 @@ def run_claude_stream_json_process(
         telemetry.pop("_last_progress_mono", None)
         return completed, run_status, telemetry, events
     except KeyboardInterrupt:
-        if proc is not None and proc.poll() is None:
+        if proc is not None:
             kill_process_tree(proc)
         telemetry.pop("_last_progress_mono", None)
         completed = subprocess.CompletedProcess(
@@ -1815,12 +1810,8 @@ def run_codex_json_process(
                     except Exception:
                         pass
                     break
-        if run_status == "timed-out" and proc.poll() is None:
+        if run_status == "timed-out":
             kill_process_tree(proc)
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
         elif proc.poll() is None:
             try:
                 proc.wait(timeout=max(1.0, total_budget - (time.monotonic() - started)))
@@ -1849,7 +1840,7 @@ def run_codex_json_process(
         telemetry.pop("_last_progress_mono", None)
         return completed, run_status, telemetry, events
     except KeyboardInterrupt:
-        if proc is not None and proc.poll() is None:
+        if proc is not None:
             kill_process_tree(proc)
         telemetry.pop("_last_progress_mono", None)
         completed = subprocess.CompletedProcess(
