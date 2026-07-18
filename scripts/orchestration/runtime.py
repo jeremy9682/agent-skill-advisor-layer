@@ -411,6 +411,10 @@ class BenchmarkLiveRuntimeAdapter:
         for relative in (
             "scripts/agent_orchestrate.py",
             "scripts/agent_provider_run.py",
+            "scripts/skill_audit.py",
+            "scripts/skill_router_hook.py",
+            "scripts/routing_eval.py",
+            "routing-evals/hints.yaml",
             "scripts/orchestration/attestation.py",
             "scripts/orchestration/benchmark.py",
             "scripts/orchestration/runtime.py",

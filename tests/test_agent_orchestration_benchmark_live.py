@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import time
 
 import pytest
@@ -541,6 +542,35 @@ def test_runtime_adapter_does_not_resolve_attested_evidence_symlink_before_loade
     adapter = BenchmarkLiveRuntimeAdapter(Path(__file__).parents[1], evidence_path=link)
     with pytest.raises(RuntimeErrorSafe, match="attested preflight evidence was rejected"):
         adapter.inspect_benchmark_live(protocol, evaluator_root=evaluator)
+
+
+def test_runtime_fingerprint_binds_skill_router_code(tmp_path: Path):
+    source = Path(__file__).parents[1]
+    checkout = tmp_path / "checkout"
+    inputs = (
+        "routing-policy.yaml",
+        "agent-providers.yaml",
+        "scripts/agent_orchestrate.py",
+        "scripts/agent_provider_run.py",
+        "scripts/skill_audit.py",
+        "scripts/skill_router_hook.py",
+        "scripts/routing_eval.py",
+        "routing-evals/hints.yaml",
+        "scripts/orchestration/attestation.py",
+        "scripts/orchestration/benchmark.py",
+        "scripts/orchestration/runtime.py",
+    )
+    for relative in inputs:
+        target = checkout / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, target)
+
+    adapter = BenchmarkLiveRuntimeAdapter(checkout)
+    original = adapter._config_fingerprint
+    router = checkout / "scripts/skill_router_hook.py"
+    router.write_bytes(router.read_bytes() + b"\n# fingerprint drift\n")
+
+    assert adapter._fingerprint() != original
 
 
 def test_runtime_adapter_attribution_uses_observed_provider_milliseconds():
