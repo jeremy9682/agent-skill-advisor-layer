@@ -722,6 +722,7 @@ class BenchmarkLiveRuntimeAdapter:
             if isinstance(task, Mapping) and not task.get("reviewer_for")
         }
         producer_successes: dict[str, float] = {}
+        started_reviewers: set[str] = set()
         terminal = {
             "task_succeeded",
             "task_failed",
@@ -744,6 +745,8 @@ class BenchmarkLiveRuntimeAdapter:
             event_type = str(row.get("event_type") or "")
             task_id = str(row.get("task_id") or "")
             if event_type == "dispatch_claimed":
+                if task_id in reviewers:
+                    started_reviewers.add(task_id)
                 events.append(
                     {
                         "event": (
@@ -757,7 +760,11 @@ class BenchmarkLiveRuntimeAdapter:
                 )
             elif event_type == "task_succeeded" and task_id in producers:
                 producer_successes[task_id] = observed_at
-            elif event_type in terminal and task_id in reviewers:
+            elif (
+                event_type in terminal
+                and task_id in reviewers
+                and task_id in started_reviewers
+            ):
                 payload = row.get("payload")
                 events.append(
                     {

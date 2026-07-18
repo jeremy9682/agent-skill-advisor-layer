@@ -183,7 +183,7 @@ def _private_task(
     repo: Path,
 ) -> dict[str, Any]:
     if task_class == "separable":
-        acceptance = [["python", "-m", "pytest", "-q"]]
+        acceptance = [["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]]
         task_input = (
             "Repair the two independent implementation defects in pilot_app/alpha.py "
             "and pilot_app/beta.py so the existing tests pass. Do not modify tests, "
@@ -215,7 +215,7 @@ def _private_task(
         runbook = {"ready_sets": [["writer-alpha", "writer-beta"]]}
         intent = {"goal": "Repair two independent defects", "constraints": ["non-overlapping writer ownership", "existing tests are immutable"]}
     elif task_class == "negative_control":
-        acceptance = [["python", "-m", "pytest", "-q"]]
+        acceptance = [["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]]
         task_input = (
             "Repair the single defect in pilot_app/negative.py so negative.enabled() "
             "returns True. Do not modify tests, ledger metadata, or unrelated files."
@@ -239,7 +239,7 @@ def _private_task(
         runbook = {"ready_sets": [["writer-negative"]]}
         intent = {"goal": "Repair one single-module defect", "constraints": ["negative control has one writer"]}
     elif task_class == "read_only":
-        acceptance = [["python", "-m", "pilot_app.report_check"]]
+        acceptance = [["python3", "-B", "-m", "pilot_app.report_check"]]
         task_input = (
             "Inspect the repository without changing source code, tests, or metadata. Create "
             "only reports/pilot-readonly-combined.md with a concise analysis of the alpha, "

@@ -614,6 +614,42 @@ def test_runtime_adapter_maps_scheduler_failures_to_benchmark_allowlist(result, 
     assert BenchmarkLiveRuntimeAdapter._benchmark_failure_class(state) == expected
 
 
+def test_blocked_unstarted_reviewer_does_not_emit_a_completed_review():
+    events: list[dict] = []
+    journal = [
+        {
+            "event_type": "dispatch_claimed",
+            "task_id": "producer",
+            "timestamp": "2026-07-18T19:56:49Z",
+        },
+        {
+            "event_type": "task_failed_unsafe",
+            "task_id": "producer",
+            "timestamp": "2026-07-18T19:58:42Z",
+            "payload": {
+                "status": "failed-unsafe",
+                "failure_class": "runtime-safety-error",
+            },
+        },
+        {
+            "event_type": "task_blocked",
+            "task_id": "review",
+            "timestamp": "2026-07-18T19:58:42Z",
+            "payload": {"failure_class": "dependency-failed"},
+        },
+    ]
+    plan = {
+        "tasks": [
+            {"id": "producer"},
+            {"id": "review", "reviewer_for": "producer"},
+        ]
+    }
+
+    BenchmarkLiveRuntimeAdapter._events_from_journal(events, journal, plan)
+
+    assert [event["event"] for event in events] == ["producer_started"]
+
+
 class _ManualRuntimeProbe:
     two_phase_process = True
     owns_deadline = True

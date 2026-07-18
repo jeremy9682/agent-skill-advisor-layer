@@ -73,6 +73,11 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
     assert {family for task in protocol["tasks"] for family in task["producer_families"]} == {
         "openai", "cursor"
     }
+    assert all(
+        command.startswith("python3 ")
+        for task in protocol["tasks"]
+        for command in task["acceptance_commands"]
+    )
     launches: dict[tuple[str, str], object] = {}
     for public in protocol["tasks"]:
         assert public["route_policy_sha256"] == fixture.route_policy_sha256
@@ -131,9 +136,31 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
         ["reports/pilot-readonly-alpha.md"],
         ["reports/pilot-readonly-beta-negative.md"],
     ]
-    expected_acceptance = [["python", "-m", "pilot_app.report_check"]]
+    expected_acceptance = [["python3", "-B", "-m", "pilot_app.report_check"]]
     assert all(task["acceptance"] == expected_acceptance for task in read_b.plan["tasks"][:-1])
     assert read_b.plan["integrated_acceptance"] == expected_acceptance
+
+    acceptance_commands = {
+        tuple(command)
+        for task_id in ("sep-1", "neg-1", "read-1")
+        for command in json.loads(
+            (fixture.evaluator_root / "tasks" / f"{task_id}.json").read_text()
+        )["lifecycle"]["single_producer"]["acceptance_argv"]
+    }
+    for command in acceptance_commands:
+        subprocess.run(
+            command,
+            cwd=fixture.repo_root,
+            check=False,
+            capture_output=True,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        )
+    assert not subprocess.run(
+        ["git", "-C", str(fixture.repo_root), "status", "--porcelain=v1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def test_refuses_existing_root_without_overwriting_it(tmp_path: Path):
