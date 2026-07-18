@@ -112,6 +112,109 @@ def trial(task_id: str, arm: str, seconds: float, *, first_pass: bool = True) ->
     }
 
 
+def test_failed_provider_before_candidate_produces_a_real_trial_receipt():
+    contract = benchmark.LaunchContract(
+        task_id="read-1",
+        arm="A",
+        launcher_kind="single-native-producer",
+        payload={},
+        graph_sha256=H,
+        manual_runbook_sha256=H,
+    )
+    receipt = benchmark.derive_trial_receipt(
+        contract,
+        [
+            {"event": "task_handoff", "at": 0},
+            {"event": "producer_started", "at": 1},
+            {
+                "event": "trial_completed",
+                "at": 10,
+                "accepted": False,
+                "failure_class": "provider-environment-failure",
+                "attributions": [
+                    {
+                        "run_id": "failed-provider-run",
+                        "model": "gpt-5.6-terra",
+                        "session_id": "failed-provider-session",
+                        "duration_seconds": 9,
+                    }
+                ],
+            },
+        ],
+        block_id="block-read-1",
+        config_fingerprint_value="f" * 64,
+        artifact_paths=[],
+    )
+    assert receipt["accepted"] is False
+    assert receipt["failure_class"] == "provider-environment-failure"
+    assert receipt["producer_seconds"] == 10
+    assert receipt["review_seconds"] == 0
+    assert receipt["artifact_sha256"] is None
+    assert receipt["artifacts"] == []
+
+
+def test_success_receipt_still_requires_the_full_quality_chain(tmp_path: Path):
+    contract = benchmark.LaunchContract(
+        task_id="read-1",
+        arm="A",
+        launcher_kind="single-native-producer",
+        payload={},
+        graph_sha256=H,
+        manual_runbook_sha256=H,
+    )
+    artifact = tmp_path / "candidate.txt"
+    artifact.write_text("candidate", encoding="utf-8")
+    events = [
+        {"event": "task_handoff", "at": 0},
+        {"event": "acceptance_completed", "at": 2, "accepted": True},
+        {"event": "review_started", "at": 3},
+        {"event": "review_completed", "at": 4},
+        {
+            "event": "trial_completed",
+            "at": 5,
+            "accepted": True,
+            "failure_class": "none",
+            "attributions": [],
+        },
+    ]
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="candidate_created"):
+        benchmark.derive_trial_receipt(
+            contract,
+            events,
+            block_id="block-read-1",
+            config_fingerprint_value="f" * 64,
+            artifact_paths=[artifact],
+        )
+
+
+def test_task_quality_failure_cannot_masquerade_as_a_pre_candidate_failure():
+    contract = benchmark.LaunchContract(
+        task_id="read-1",
+        arm="A",
+        launcher_kind="single-native-producer",
+        payload={},
+        graph_sha256=H,
+        manual_runbook_sha256=H,
+    )
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="requires a candidate"):
+        benchmark.derive_trial_receipt(
+            contract,
+            [
+                {"event": "task_handoff", "at": 0},
+                {
+                    "event": "trial_completed",
+                    "at": 5,
+                    "accepted": False,
+                    "failure_class": "task-quality-failure",
+                    "attributions": [],
+                },
+            ],
+            block_id="block-read-1",
+            config_fingerprint_value="f" * 64,
+            artifact_paths=[],
+        )
+
+
 def test_validate_protocol_requires_exact_stage_counts_and_reviewer_independence():
     assert benchmark.validate_protocol(protocol())["stage"] == "pilot"
     bad = protocol()

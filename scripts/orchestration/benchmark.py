@@ -1032,7 +1032,9 @@ def _event_time(raw: Any) -> float:
     return value
 
 
-def _artifact_digest(paths: Iterable[Path]) -> tuple[str, list[dict[str, Any]]]:
+def _artifact_digest(
+    paths: Iterable[Path], *, required: bool
+) -> tuple[str | None, list[dict[str, Any]]]:
     entries = []
     for path in sorted((item.expanduser().resolve() for item in paths), key=str):
         _require(path.is_file() and not path.is_symlink(), "trial artifact must be a regular file")
@@ -1040,7 +1042,9 @@ def _artifact_digest(paths: Iterable[Path]) -> tuple[str, list[dict[str, Any]]]:
         entries.append(
             {"name": path.name, "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
         )
-    _require(bool(entries), "at least one trial artifact is required")
+    if not entries:
+        _require(not required, "at least one trial artifact is required")
+        return None, []
     return sha256_value(entries), entries
 
 
@@ -1067,28 +1071,72 @@ def derive_trial_receipt(
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_name[str(row["event"])].append(row)
-    for name in (
-        "task_handoff",
-        "candidate_created",
-        "acceptance_completed",
-        "review_started",
-        "review_completed",
-        "trial_completed",
-    ):
+    for name in ("task_handoff", "trial_completed"):
         _require(by_name[name], f"trial event {name} is required")
     handoff = by_name["task_handoff"][0]["_at"]
-    candidate = by_name["candidate_created"][0]["_at"]
-    trial_end = by_name["trial_completed"][-1]["_at"]
+    terminal = by_name["trial_completed"][-1]
+    trial_end = terminal["_at"]
+    terminal_accepted = terminal.get("accepted") is True
+    failure_class = str(
+        terminal.get("failure_class")
+        or ("none" if terminal_accepted else "task-quality-failure")
+    )
+    _require(failure_class in FAILURE_CLASSES, "terminal failure_class is invalid")
+    successful = terminal_accepted and failure_class == "none"
+    _require(
+        terminal_accepted == (failure_class == "none"),
+        "terminal accepted and failure_class are inconsistent",
+    )
+    if successful:
+        for name in (
+            "candidate_created",
+            "acceptance_completed",
+            "review_started",
+            "review_completed",
+        ):
+            _require(by_name[name], f"trial event {name} is required")
+    if failure_class == "task-quality-failure":
+        _require(by_name["candidate_created"], "task-quality failure requires a candidate")
+        _require(
+            by_name["acceptance_completed"],
+            "task-quality failure requires an acceptance result",
+        )
+
+    candidate = (
+        by_name["candidate_created"][0]["_at"]
+        if by_name["candidate_created"]
+        else trial_end
+    )
     accepted_events = [
         row for row in by_name["acceptance_completed"] if row.get("accepted") is True
     ]
-    accepted = bool(accepted_events) and by_name["trial_completed"][-1].get("accepted") is True
+    accepted = bool(accepted_events) and terminal_accepted
+    _require(not successful or accepted, "successful trial requires an accepted acceptance event")
     rework = len(by_name["rework_started"])
-    first_acceptance = by_name["acceptance_completed"][0]
-    first_pass = first_acceptance.get("accepted") is True and rework == 0
+    first_acceptance = (
+        by_name["acceptance_completed"][0]
+        if by_name["acceptance_completed"]
+        else None
+    )
+    first_pass = bool(
+        accepted
+        and first_acceptance is not None
+        and first_acceptance.get("accepted") is True
+        and rework == 0
+    )
     review_seconds = 0.0
-    review_pairs = zip(by_name["review_started"], by_name["review_completed"], strict=False)
-    for start, end in review_pairs:
+    review_starts = by_name["review_started"]
+    review_ends = by_name["review_completed"]
+    _require(
+        len(review_ends) <= len(review_starts),
+        "review completion has no matching start",
+    )
+    for index, start in enumerate(review_starts):
+        end = review_ends[index] if index < len(review_ends) else None
+        if end is None:
+            _require(not successful, "review interval is incomplete")
+            review_seconds += max(0.0, trial_end - start["_at"])
+            continue
         _require(end["_at"] >= start["_at"], "review interval is negative")
         review_seconds += end["_at"] - start["_at"]
     starts: dict[str, float] = {}
@@ -1102,8 +1150,9 @@ def derive_trial_receipt(
             interval = row.get("interval_id")
             _require(isinstance(interval, str) and interval in starts, "coordination interval end has no start")
             coordination_seconds += row["_at"] - starts.pop(interval)
-    _require(not starts, "coordination interval is incomplete")
-    terminal = by_name["trial_completed"][-1]
+    if starts:
+        _require(not successful, "coordination interval is incomplete")
+        coordination_seconds += sum(max(0.0, trial_end - start) for start in starts.values())
     attributions = terminal.get("attributions", [])
     _require(isinstance(attributions, list), "terminal attributions must be a list")
     attribution_complete = bool(attributions) and all(
@@ -1119,10 +1168,11 @@ def derive_trial_receipt(
         if isinstance(item, Mapping)
         and isinstance(item.get("duration_seconds", 0), (int, float))
     )
-    artifact_sha, artifacts = _artifact_digest(artifact_paths)
+    artifact_sha, artifacts = _artifact_digest(artifact_paths, required=successful)
+    if failure_class == "task-quality-failure":
+        _require(bool(artifacts), "task-quality failure requires a trial artifact")
     producer_seconds = max(0.0, candidate - handoff)
     warning = review_slowness_warning(review_seconds, producer_seconds)
-    failure_class = str(terminal.get("failure_class") or ("none" if accepted else "task-quality-failure"))
     receipt = {
         "task_id": contract.task_id,
         "arm": contract.arm,

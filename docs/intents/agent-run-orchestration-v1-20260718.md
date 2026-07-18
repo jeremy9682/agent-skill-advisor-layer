@@ -832,6 +832,15 @@ Failure taxonomy and denominators:
 - `failed-unsafe`: scope escape, ambiguous accepted attribution, or residual
   process. This is never excluded and immediately blocks rollout.
 
+Every launched cell must still end in a trial receipt. A provider,
+orchestration, or safety failure that occurs before `candidate_created` records
+the observed terminal class, elapsed producer time, and any available model /
+session attribution; it does not invent a candidate, review, or artifact.
+Successful receipts keep the full candidate -> acceptance -> independent review
+-> artifact chain mandatory. `task-quality-failure` likewise requires a real
+candidate, acceptance result, and candidate artifact, so runtime failures cannot
+masquerade as quality outcomes.
+
 The confirmation denominator is twelve paired tasks per arm; the report also
 shows all 36 original raw trials and any permitted replacement separately.
 
