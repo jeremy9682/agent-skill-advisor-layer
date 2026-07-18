@@ -1034,6 +1034,115 @@ def test_cross_family_review_rejects_undisclosed_producer_family(
         )
 
 
+def test_journal_model_family_discloses_cursor_auto_from_verified_observation():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    session = {
+        "model_observed": "cursor-grok-4.5-high-fast",
+        "session_id": "cursor-session",
+    }
+    health = {
+        "status": "verified-native-session-model",
+        "model_observed": "cursor-grok-4.5-high-fast",
+    }
+    assert (
+        agent_run.journal_model_family("cursor", data, "auto", session, health)
+        == "xai"
+    )
+
+
+def test_journal_model_family_keeps_explicit_composer_disclosed():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    session = {"model_observed": "composer-2.5-fast"}
+    health = {"status": "verified-native-session-model"}
+    assert (
+        agent_run.journal_model_family(
+            "cursor", data, "composer-2.5-fast", session, health
+        )
+        == "cursor"
+    )
+
+
+def test_journal_model_family_keeps_auto_undisclosed_without_verified_observation():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    session = {"model_observed": "auto-undisclosed"}
+    health = {"status": "verified-native-session-model-opaque"}
+    assert (
+        agent_run.journal_model_family("cursor", data, "auto", session, health)
+        == "undisclosed"
+    )
+
+
+def test_cross_family_review_reconciles_cursor_auto_producer_from_observed_family(
+    tmp_path,
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    (tmp_path / "demo.jsonl").write_text(
+        json.dumps(
+            {
+                "run_id": "cursor-auto-verified-producer",
+                "provider_id": "cursor",
+                "model_requested": "auto",
+                "model_observed": "cursor-grok-4.5-high-fast",
+                "model_family": "undisclosed",
+                "session_status": "attributed-correlated-artifacts",
+                "provider_health_evidence": {
+                    "status": "verified-native-session-model",
+                    "model_observed": "cursor-grok-4.5-high-fast",
+                },
+                "seat": "claude-landing",
+                "session_id": "cursor-session",
+                "repo": "demo",
+                "run_status": "completed",
+                "exit_code": 0,
+                "mode": "execute",
+                "risk_overlay": {"triggers": []},
+            }
+        )
+        + "\n"
+    )
+    args = SimpleNamespace(
+        producer_provider="cursor",
+        producer_run_id="cursor-auto-verified-producer",
+    )
+    policy, producer_ref = agent_run.validate_review_independence(
+        "codex_final_review", "codex", args, data, "demo"
+    )
+    assert policy == "cross-family"
+    assert producer_ref["model_family"] == "xai"
+
+
+def test_cross_family_review_accepts_cursor_producer_with_disclosed_family(tmp_path):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    (tmp_path / "demo.jsonl").write_text(
+        json.dumps(
+            {
+                "run_id": "cursor-composer-producer",
+                "provider_id": "cursor",
+                **verified_producer_model("cursor", "composer-2.5-fast", "cursor"),
+                "seat": "claude-landing",
+                "session_id": "cursor-session",
+                "repo": "demo",
+                "run_status": "completed",
+                "exit_code": 0,
+                "mode": "execute",
+                "risk_overlay": {"triggers": []},
+            }
+        )
+        + "\n"
+    )
+    args = SimpleNamespace(
+        producer_provider="cursor",
+        producer_run_id="cursor-composer-producer",
+    )
+    policy, producer_ref = agent_run.validate_review_independence(
+        "codex_final_review", "codex", args, data, "demo"
+    )
+    assert policy == "cross-family"
+    assert producer_ref["model_family"] == "cursor"
+
+
 def test_cross_family_review_rejects_undisclosed_reviewer_family(tmp_path, monkeypatch):
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     data["journal"]["root"] = str(tmp_path)
