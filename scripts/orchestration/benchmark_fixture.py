@@ -44,6 +44,7 @@ class PilotFixture:
 
 
 _REPO_FILES = {
+    ".gitignore": "__pycache__/\n.pytest_cache/\n*.py[cod]\n",
     "pilot_app/__init__.py": "",
     "pilot_app/alpha.py": "def label() -> str:\n    return 'pending-alpha'\n",
     "pilot_app/beta.py": "def label() -> str:\n    return 'pending-beta'\n",

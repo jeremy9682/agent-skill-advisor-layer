@@ -155,6 +155,20 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
             capture_output=True,
             env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
         )
+    # Providers may run their own ordinary Python diagnostics before the
+    # controller-owned hermetic acceptance commands.  Standard interpreter
+    # caches must remain outside the candidate diff in that case as well.
+    for command in (
+        ("python3", "-m", "pilot_app.report_check"),
+        ("python3", "-m", "pytest", "-q"),
+    ):
+        subprocess.run(
+            command,
+            cwd=fixture.repo_root,
+            check=False,
+            capture_output=True,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        )
     assert not subprocess.run(
         ["git", "-C", str(fixture.repo_root), "status", "--porcelain=v1"],
         check=True,
