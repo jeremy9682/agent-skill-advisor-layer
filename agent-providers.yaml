@@ -13,7 +13,7 @@ providers:
     binary_candidates: [~/.local/bin/claude, claude]
     version_args: [--version]
     model_requested: opus
-    model_options: [sonnet, opus, fable]
+    model_options: [sonnet, opus, fable, claude-fable-5]
     effort_requested: high
     effort_options: [low, medium, high, xhigh, max]
     billing_policy: existing-subscription-login-only

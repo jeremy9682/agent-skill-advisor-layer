@@ -677,6 +677,7 @@ def test_route_doctor_explains_catalog_quota_evidence_and_blockers(
     with (tmp_path / "agent-skill-advisor-layer.jsonl").open("a") as handle:
         for provider_id, model in (
             ("claude", "opus"),
+            ("claude", "claude-fable-5"),
             ("codex", "gpt-5.6-sol"),
         ):
             handle.write(
@@ -732,17 +733,8 @@ def test_route_doctor_explains_catalog_quota_evidence_and_blockers(
 
     route = report["routes"][0]
     assert route["route"] == "fable_final_review"
-    assert route["status"] == "disabled"
-    assert route["blockers"] == [
-        {
-            "code": "route-policy-disabled",
-            "detail": "disabled-fable-live-canary-required",
-        },
-        {
-            "code": "live-evidence-unverified",
-            "detail": "no-live-evidence",
-        },
-    ]
+    assert route["status"] == "ready"
+    assert route["blockers"] == []
     assert report["reviewer_graph"]["anthropic"] == ["openai"]
     assert report["reviewer_graph"]["google"] == ["anthropic", "openai"]
 
@@ -1806,7 +1798,7 @@ def test_risk_review_uses_normalized_governance_effort(tmp_path):
     assert policy == "cross-family"
 
 
-def test_grok_review_route_is_enabled_but_fable_routes_fail_closed():
+def test_governed_review_and_fable_routes_resolve_exact_bindings():
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     args = type(
         "Args",
@@ -1850,8 +1842,13 @@ def test_grok_review_route_is_enabled_but_fable_routes_fail_closed():
                 "seat": None,
             },
         )()
-        with pytest.raises(agent_run.ProviderRunError, match="disabled"):
-            agent_run.resolve_route(args, data)
+        assert agent_run.resolve_route(args, data) == (
+            "claude",
+            "claude-fable-5",
+            "max",
+            "fable-final-review",
+            shape,
+        )
 
 
 def test_environment_strips_api_billing_keys(monkeypatch):
@@ -3959,7 +3956,7 @@ def test_doctor_task_focus_and_reviewer_graph_gaps(tmp_path, monkeypatch):
     report = agent_run.build_route_doctor(data, route_name="judgment", repo="demo")
     assert report["task_focus"]["task_shape"] == "judgment"
     assert report["task_focus"]["required_routes"] == ["judgment"]
-    assert "fable_final_review" in report["task_focus"]["optional_or_disabled_routes"]
+    assert "fable_final_review" not in report["task_focus"]["optional_or_disabled_routes"]
     assert report["routes"][0]["status"] == "degraded"
     assert isinstance(report["reviewer_graph_gaps"], dict)
     assert "anthropic" in report["reviewer_graph_gaps"]

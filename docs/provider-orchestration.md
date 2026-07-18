@@ -217,8 +217,12 @@ effort and seat fields are immutable. Explicit provider runs remain available fo
 Grok second opinions and Cursor named-model execution/review.
 
 Claude Opus/high remains a normalized-governance-xhigh `claude_final_review`
-route for Codex-produced work, including risk overlays. A `fable_final_review` route stays disabled until a live run succeeds. A
-broker may list a model whose CLI still returns a data-policy acknowledgement
+route for Codex-produced work, including risk overlays. The
+`fable_final_review` and `arbitration` routes request the exact native model ID
+`claude-fable-5`; they were enabled only after direct alias and exact-ID Fable 5
+Max read-only calls plus an attributed wrapped canary succeeded on 2026-07-18.
+Their exact receipts remain host-local. A broker may list a model
+whose CLI still returns a data-policy acknowledgement
 error until the account accepts that model's retention policy; catalogue presence alone does
 not enable the route. Provider
 runs default to a **300-second** timeout when the caller omits `--timeout-seconds`;

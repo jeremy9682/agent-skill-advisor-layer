@@ -19,7 +19,7 @@ version: 1
 enums:
   execution_seat: [claude, codex, cursor]  # family that PRODUCES the diff
   execution_model:                       # producer model tiers, keyed by family
-    claude: [sonnet, opus, fable]
+    claude: [sonnet, opus, fable, claude-fable-5]
     codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
     # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）
     cursor: [composer-2.5-fast, composer-2.5, cursor-grok-4.5-high, cursor-grok-4.5-high-fast]
@@ -104,7 +104,7 @@ task_shapes:
   arbitration:                     # cross-family tie-break / adversarial judgment seat
     execution_seat: [claude]
     execution_model:
-      claude: fable
+      claude: claude-fable-5
     execution_effort: max
     execution_mode: careful
     review_effort_floor: high
@@ -248,11 +248,10 @@ runtime_routes:
     managed_skills: disabled
   fable_final_review:
     provider: claude
-    model: fable
+    model: claude-fable-5
     effort: max
     seat: fable-final-review
     review_independence: cross-family
-    route_policy: disabled-fable-live-canary-required
     timeout_seconds: 900
     serial_group: claude-family
     concurrency: family_serial
@@ -285,7 +284,6 @@ runtime_routes:
     provider: claude
     seat: fable-final-review
     review_independence: cross-family
-    route_policy: disabled-fable-live-canary-required
     timeout_seconds: 900
     serial_group: claude-family
     concurrency: family_serial
