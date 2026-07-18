@@ -231,12 +231,14 @@ def compile_lifecycle_launch(
                 "task_shape": node.get("task_shape"),
                 "depends_on": node.get("depends_on", []),
                 "prompt_sha256": sha256_value(node.get("prompt_body")),
+                "acceptance_sha256": sha256_value(node.get("acceptance_argv")),
             }
             expected = {
                 "id": frozen.get("id"),
                 "task_shape": frozen.get("task_shape"),
                 "depends_on": frozen.get("depends_on", []),
                 "prompt_sha256": frozen.get("prompt_sha256"),
+                "acceptance_sha256": frozen.get("acceptance_sha256"),
             }
             if observed != expected:
                 _fail("lifecycle graph projection drift")
@@ -279,7 +281,11 @@ def compile_lifecycle_launch(
             "acceptance": _argv(node.get("acceptance_argv"), f"{node_id}.acceptance_argv"),
             "deadline_seconds": frozen_deadline,
         })
-        if [shlex.join(argv) for argv in plan_tasks[-1]["acceptance"]] != public_acceptance:
+        if (
+            contract.arm == "A"
+            and [shlex.join(argv) for argv in plan_tasks[-1]["acceptance"]]
+            != public_acceptance
+        ):
             _fail("producer acceptance differs from frozen public acceptance")
     review_id = review_spec.get("id", "review")
     if not isinstance(review_id, str) or not review_id or review_id in node_ids:

@@ -45,8 +45,8 @@ def _private(repo: Path) -> tuple[dict, dict, dict]:
     writer_a = node("writer-a", "a.txt")
     writer_b = node("writer-b", "b.txt", "standard_feature")
     graph = {"nodes": [
-        {"id": writer_a["id"], "task_shape": writer_a["task_shape"], "depends_on": [], "prompt_sha256": sha256_value(writer_a["prompt_body"])},
-        {"id": writer_b["id"], "task_shape": writer_b["task_shape"], "depends_on": [], "prompt_sha256": sha256_value(writer_b["prompt_body"])},
+        {"id": writer_a["id"], "task_shape": writer_a["task_shape"], "depends_on": [], "prompt_sha256": sha256_value(writer_a["prompt_body"]), "acceptance_sha256": sha256_value(writer_a["acceptance_argv"])},
+        {"id": writer_b["id"], "task_shape": writer_b["task_shape"], "depends_on": [], "prompt_sha256": sha256_value(writer_b["prompt_body"]), "acceptance_sha256": sha256_value(writer_b["acceptance_argv"])},
     ]}
     private = {
         "graph": graph,
@@ -123,6 +123,33 @@ def test_compiler_rejects_lifecycle_graph_projection_drift(tmp_path: Path):
     private["lifecycle"]["nodes"][0]["task_shape"] = "standard_feature"
     with pytest.raises(BenchmarkLifecycleError, match="graph projection drift"):
         compile_lifecycle_launch(_contract("B", base, private, graph), private, reviewer=reviewer, cell_root=tmp_path / "cell")
+
+
+def test_compiler_binds_per_writer_acceptance_in_frozen_graph(tmp_path: Path):
+    repo, base = _repo(tmp_path)
+    private, reviewer, graph = _private(repo)
+    writer_acceptance = [["git", "diff", "--check"]]
+    private["lifecycle"]["nodes"][0]["acceptance_argv"] = writer_acceptance
+    graph["nodes"][0]["acceptance_sha256"] = sha256_value(writer_acceptance)
+
+    launch = compile_lifecycle_launch(
+        _contract("B", base, private, graph),
+        private,
+        reviewer=reviewer,
+        cell_root=tmp_path / "bounded",
+    )
+    writer = next(task for task in launch.plan["tasks"] if task["id"] == "writer-a")
+    assert writer["acceptance"] == writer_acceptance
+    assert launch.plan["integrated_acceptance"] == [["git", "status", "--porcelain"]]
+
+    private["lifecycle"]["nodes"][0]["acceptance_argv"] = [["git", "diff", "--stat"]]
+    with pytest.raises(BenchmarkLifecycleError, match="graph projection drift"):
+        compile_lifecycle_launch(
+            _contract("B", base, private, graph),
+            private,
+            reviewer=reviewer,
+            cell_root=tmp_path / "drift",
+        )
 
 
 class _ManualLifecycle:

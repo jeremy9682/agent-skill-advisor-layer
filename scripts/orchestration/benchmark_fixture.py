@@ -187,7 +187,33 @@ def _private_task(
     repo: Path,
 ) -> dict[str, Any]:
     if task_class == "separable":
-        acceptance = [["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]]
+        full_acceptance = [
+            ["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+        ]
+        alpha_acceptance = [
+            [
+                "python3",
+                "-B",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "tests/test_pilot_app.py::test_alpha_label",
+            ]
+        ]
+        beta_acceptance = [
+            [
+                "python3",
+                "-B",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "tests/test_pilot_app.py::test_beta_label",
+            ]
+        ]
         task_input = (
             "Repair the two independent implementation defects in pilot_app/alpha.py "
             "and pilot_app/beta.py so the existing tests pass. Do not modify tests, "
@@ -199,14 +225,14 @@ def _private_task(
                 task_shape="mechanical",
                 prompt="Repair only pilot_app/alpha.py so alpha.label() returns 'alpha-ready'.",
                 own=["pilot_app/alpha.py"],
-                acceptance=acceptance,
+                acceptance=alpha_acceptance,
             ),
             _writer(
                 "writer-beta",
                 task_shape="mechanical_grok",
                 prompt="Repair only pilot_app/beta.py so beta.label() returns 'beta-ready'.",
                 own=["pilot_app/beta.py"],
-                acceptance=acceptance,
+                acceptance=beta_acceptance,
             ),
         ]
         single = _writer(
@@ -214,12 +240,24 @@ def _private_task(
             task_shape="ordinary_bug_fix",
             prompt=task_input,
             own=["pilot_app/alpha.py", "pilot_app/beta.py"],
-            acceptance=acceptance,
+            acceptance=full_acceptance,
         )
+        integrated_acceptance = full_acceptance
         runbook = {"ready_sets": [["writer-alpha", "writer-beta"]]}
         intent = {"goal": "Repair two independent defects", "constraints": ["non-overlapping writer ownership", "existing tests are immutable"]}
     elif task_class == "negative_control":
-        acceptance = [["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]]
+        negative_acceptance = [
+            [
+                "python3",
+                "-B",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "tests/test_pilot_app.py::test_negative_enabled",
+            ]
+        ]
         task_input = (
             "Repair the single defect in pilot_app/negative.py so negative.enabled() "
             "returns True. Do not modify tests, ledger metadata, or unrelated files."
@@ -230,7 +268,7 @@ def _private_task(
                 task_shape="mechanical",
                 prompt=task_input,
                 own=["pilot_app/negative.py"],
-                acceptance=acceptance,
+                acceptance=negative_acceptance,
             )
         ]
         single = _writer(
@@ -238,8 +276,9 @@ def _private_task(
             task_shape="ordinary_bug_fix",
             prompt=task_input,
             own=["pilot_app/negative.py"],
-            acceptance=acceptance,
+            acceptance=negative_acceptance,
         )
+        integrated_acceptance = negative_acceptance
         runbook = {"ready_sets": [["writer-negative"]]}
         intent = {"goal": "Repair one single-module defect", "constraints": ["negative control has one writer"]}
     elif task_class == "read_only":
@@ -279,6 +318,7 @@ def _private_task(
             own=["reports/pilot-readonly-combined.md"],
             acceptance=acceptance,
         )
+        integrated_acceptance = acceptance
         runbook = {"ready_sets": [["reader-composer-alpha", "reader-grok-beta-negative"]]}
         intent = {
             "goal": "Produce bounded source-read-only analyses as reviewable report artifacts",
@@ -299,6 +339,7 @@ def _private_task(
                 "task_shape": node["task_shape"],
                 "depends_on": node["depends_on"],
                 "prompt_sha256": sha256_value(node["prompt_body"]),
+                "acceptance_sha256": sha256_value(node["acceptance_argv"]),
             }
             for node in nodes
         ]
@@ -319,7 +360,7 @@ def _private_task(
             "single_producer": single,
             "nodes": nodes,
             "review": {"id": "review", "prompt_body": _REVIEW_PROMPT},
-            "integrated_acceptance": acceptance,
+            "integrated_acceptance": integrated_acceptance,
         },
     }
 

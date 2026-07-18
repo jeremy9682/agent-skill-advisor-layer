@@ -120,6 +120,33 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
         ("mechanical_grok", "cursor-grok-4.5-high-fast"),
     ]
     assert [task["task_shape"] for task in launches[("neg-1", "B")].plan["tasks"][:-1]] == ["mechanical"]
+
+    pytest_command = ["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+    full_acceptance = [pytest_command]
+    alpha_acceptance = [pytest_command + ["tests/test_pilot_app.py::test_alpha_label"]]
+    beta_acceptance = [pytest_command + ["tests/test_pilot_app.py::test_beta_label"]]
+    negative_acceptance = [
+        pytest_command + ["tests/test_pilot_app.py::test_negative_enabled"]
+    ]
+
+    assert launches[("sep-1", "A")].plan["tasks"][0]["acceptance"] == full_acceptance
+    for arm in ("B", "C"):
+        sep_launch = launches[("sep-1", arm)]
+        assert [task["acceptance"] for task in sep_launch.plan["tasks"][:-1]] == [
+            alpha_acceptance,
+            beta_acceptance,
+        ]
+        assert sep_launch.plan["integrated_acceptance"] == full_acceptance
+
+    for arm in ("A", "B", "C"):
+        negative_launch = launches[("neg-1", arm)]
+        assert all(
+            task["acceptance"] == negative_acceptance
+            for task in negative_launch.plan["tasks"]
+            if not task.get("reviewer_for")
+        )
+        assert negative_launch.plan["integrated_acceptance"] == negative_acceptance
+
     read_private = json.loads((fixture.evaluator_root / "tasks" / "read-1.json").read_text())
     assert read_private["intent"]["source_code_read_only"] is True
     assert read_private["intent"]["filesystem_write_scope"] == "owned report artifacts only"
