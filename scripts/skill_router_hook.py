@@ -114,16 +114,27 @@ def fleet_fingerprint(audit) -> str:
     """
     paths: list[str] = []
     total = 0.0
+    skip_dirs = set(getattr(audit, "SKIP_DIRS", set()))
     for root in getattr(audit, "SKILL_ROOTS", {}).values():
-        try:
-            for skill_md in Path(root).rglob("SKILL.md"):
-                paths.append(str(skill_md))
-                try:
-                    total += skill_md.stat().st_mtime
-                except OSError:
-                    continue
-        except OSError:
-            continue
+        for current, dirs, filenames in os.walk(root):
+            # Match skill_audit.discover_skills exactly.  Path.rglob walked
+            # unrelated hidden checkout metadata on every governed launch and
+            # exceeded the wrapper's eight-second router deadline on the live
+            # skill fleet even with a warm index cache.
+            dirs[:] = [
+                name
+                for name in dirs
+                if name not in skip_dirs
+                and (not name.startswith(".") or name == ".system")
+            ]
+            if "SKILL.md" not in filenames:
+                continue
+            skill_md = Path(current) / "SKILL.md"
+            paths.append(str(skill_md))
+            try:
+                total += skill_md.stat().st_mtime
+            except OSError:
+                continue
     digest = hashlib.sha256("\n".join(sorted(paths)).encode()).hexdigest()[:12]
     return f"{len(paths)}:{total:.0f}:{digest}"
 
