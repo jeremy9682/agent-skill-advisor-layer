@@ -496,9 +496,17 @@ def test_recoverable_writer_acceptance_failure_preserves_provider_evidence(
     assert Path(result["artifact_path"]).is_file()
     assert result["process_cleanup"]["residual"] is False
     assert ledger._lookup(launched.checkpoint_event)["state"] == "closed"
-    assert BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
-        {"tasks": {"writer": {"result": result}}}
-    ) == "task-quality-failure"
+    state = {"tasks": {"writer": {"result": result}}}
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(state)
+        == "orchestration-infrastructure-failure"
+    )
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
+            state, trusted_acceptance_failure=True
+        )
+        == "task-quality-failure"
+    )
 
 
 def test_legacy_writer_scope_violation_stays_unsafe_but_preserves_evidence(

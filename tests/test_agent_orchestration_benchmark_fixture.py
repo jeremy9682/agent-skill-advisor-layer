@@ -136,21 +136,24 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
         "-p",
         "no:cacheprovider",
     ]
-    full_acceptance = [pytest_command]
+    separable_acceptance = [pytest_command + [
+        "tests/test_pilot_app.py::test_alpha_label",
+        "tests/test_pilot_app.py::test_beta_label",
+    ]]
     alpha_acceptance = [pytest_command + ["tests/test_pilot_app.py::test_alpha_label"]]
     beta_acceptance = [pytest_command + ["tests/test_pilot_app.py::test_beta_label"]]
     negative_acceptance = [
         pytest_command + ["tests/test_pilot_app.py::test_negative_enabled"]
     ]
 
-    assert launches[("sep-1", "A")].plan["tasks"][0]["acceptance"] == full_acceptance
+    assert launches[("sep-1", "A")].plan["tasks"][0]["acceptance"] == separable_acceptance
     for arm in ("B", "C"):
         sep_launch = launches[("sep-1", arm)]
         assert [task["acceptance"] for task in sep_launch.plan["tasks"][:-1]] == [
             alpha_acceptance,
             beta_acceptance,
         ]
-        assert sep_launch.plan["integrated_acceptance"] == full_acceptance
+        assert sep_launch.plan["integrated_acceptance"] == separable_acceptance
 
     for arm in ("A", "B", "C"):
         negative_launch = launches[("neg-1", arm)]
@@ -197,6 +200,21 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
     (fixture.repo_root / "pilot_app" / "beta.py").write_text(
         "def label() -> str:\n    return 'beta-ready'\n", encoding="utf-8"
     )
+    # The separable block must not be poisoned by the independent negative
+    # control defect. Its single-producer and integrated acceptance are both
+    # constrained to alpha/beta before that control is repaired.
+    assert subprocess.run(
+        separable_acceptance[0],
+        cwd=fixture.repo_root,
+        check=False,
+        capture_output=True,
+    ).returncode == 0
+    assert subprocess.run(
+        negative_acceptance[0],
+        cwd=fixture.repo_root,
+        check=False,
+        capture_output=True,
+    ).returncode != 0
     (fixture.repo_root / "pilot_app" / "negative.py").write_text(
         "def enabled() -> bool:\n    return True\n", encoding="utf-8"
     )

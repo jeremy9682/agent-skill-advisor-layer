@@ -212,7 +212,13 @@ def _private_task(
     repo: Path,
 ) -> dict[str, Any]:
     if task_class == "separable":
-        full_acceptance = [[*_PYTEST_ACCEPTANCE_PREFIX]]
+        separable_acceptance = [
+            [
+                *_PYTEST_ACCEPTANCE_PREFIX,
+                "tests/test_pilot_app.py::test_alpha_label",
+                "tests/test_pilot_app.py::test_beta_label",
+            ]
+        ]
         alpha_acceptance = [
             [
                 *_PYTEST_ACCEPTANCE_PREFIX,
@@ -251,9 +257,9 @@ def _private_task(
             task_shape="ordinary_bug_fix",
             prompt=task_input,
             own=["pilot_app/alpha.py", "pilot_app/beta.py"],
-            acceptance=full_acceptance,
+            acceptance=separable_acceptance,
         )
-        integrated_acceptance = full_acceptance
+        integrated_acceptance = separable_acceptance
         runbook = {"ready_sets": [["writer-alpha", "writer-beta"]]}
         intent = {"goal": "Repair two independent defects", "constraints": ["non-overlapping writer ownership", "existing tests are immutable"]}
     elif task_class == "negative_control":

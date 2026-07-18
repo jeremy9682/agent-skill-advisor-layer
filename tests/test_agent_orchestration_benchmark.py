@@ -187,7 +187,7 @@ def test_success_receipt_still_requires_the_full_quality_chain(tmp_path: Path):
         )
 
 
-def test_task_quality_failure_cannot_masquerade_as_a_pre_candidate_failure():
+def test_task_quality_failure_requires_observed_acceptance_not_candidate(tmp_path):
     contract = benchmark.LaunchContract(
         task_id="read-1",
         arm="A",
@@ -196,7 +196,7 @@ def test_task_quality_failure_cannot_masquerade_as_a_pre_candidate_failure():
         graph_sha256=H,
         manual_runbook_sha256=H,
     )
-    with pytest.raises(benchmark.BenchmarkProtocolError, match="requires a candidate"):
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="requires an acceptance result"):
         benchmark.derive_trial_receipt(
             contract,
             [
@@ -213,6 +213,28 @@ def test_task_quality_failure_cannot_masquerade_as_a_pre_candidate_failure():
             config_fingerprint_value="f" * 64,
             artifact_paths=[],
         )
+
+    artifact = tmp_path / "acceptance-failed.json"
+    artifact.write_text("private receipt\n", encoding="utf-8")
+    receipt = benchmark.derive_trial_receipt(
+        contract,
+        [
+            {"event": "task_handoff", "at": 0},
+            {"event": "acceptance_completed", "at": 4, "accepted": False},
+            {
+                "event": "trial_completed",
+                "at": 5,
+                "accepted": False,
+                "failure_class": "task-quality-failure",
+                "attributions": [],
+            },
+        ],
+        block_id="block-read-1",
+        config_fingerprint_value="f" * 64,
+        artifact_paths=[artifact],
+    )
+    assert receipt["failure_class"] == "task-quality-failure"
+    assert receipt["accepted"] is False
 
 
 def test_validate_protocol_requires_exact_stage_counts_and_reviewer_independence():

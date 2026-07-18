@@ -610,14 +610,23 @@ class BenchmarkLiveRuntimeAdapter:
                 ),
                 "state": state,
             }
-            self._events_from_journal(events, journal.read(), plan)
+            trusted_acceptance_failure = self._events_from_journal(
+                events, journal.read(), plan
+            )
+        if contract.arm == "B":
+            trusted_acceptance_failure = False
         events.sort(key=lambda row: float(row["at"]))
         accepted = outcome.get("status") == "succeeded"
         now(
             "trial_completed",
             accepted=accepted,
             failure_class=(
-                "none" if accepted else self._benchmark_failure_class(state)
+                "none"
+                if accepted
+                else self._benchmark_failure_class(
+                    state,
+                    trusted_acceptance_failure=trusted_acceptance_failure,
+                )
             ),
             attributions=self._attributions(state),
         )
@@ -667,7 +676,9 @@ class BenchmarkLiveRuntimeAdapter:
         return rows
 
     @staticmethod
-    def _benchmark_failure_class(state: Mapping[str, Any]) -> str:
+    def _benchmark_failure_class(
+        state: Mapping[str, Any], *, trusted_acceptance_failure: bool = False
+    ) -> str:
         """Map internal scheduler detail into the benchmark's public allowlist.
 
         The scheduler state deliberately retains precise failure detail for
@@ -682,6 +693,9 @@ class BenchmarkLiveRuntimeAdapter:
                 result = task.get("result") if isinstance(task, Mapping) else None
                 if isinstance(result, Mapping):
                     results.append(result)
+        integration = state.get("integration")
+        if isinstance(integration, Mapping):
+            results.append(integration)
 
         def failure_class(result: Mapping[str, Any]) -> str:
             value = result.get("failure_class")
@@ -702,10 +716,13 @@ class BenchmarkLiveRuntimeAdapter:
             return "failed-unsafe"
 
         if any(
-            value == "task-quality-failure"
-            or value.startswith("review-verdict-")
-            or value.startswith("acceptance-")
+            value == "task-quality-failure" or value.startswith("review-verdict-")
             for value in classes
+        ):
+            return "task-quality-failure"
+
+        if trusted_acceptance_failure and any(
+            value == "acceptance-failed" for value in classes
         ):
             return "task-quality-failure"
 
@@ -739,7 +756,7 @@ class BenchmarkLiveRuntimeAdapter:
         events: list[dict[str, Any]],
         journal_events: Sequence[Mapping[str, Any]],
         plan: Mapping[str, Any],
-    ) -> None:
+    ) -> bool:
         """Project only observed scheduler boundaries into benchmark events."""
 
         reviewers = {
@@ -752,7 +769,16 @@ class BenchmarkLiveRuntimeAdapter:
             for task in plan.get("tasks", [])
             if isinstance(task, Mapping) and not task.get("reviewer_for")
         }
+        writers = {
+            str(task["id"])
+            for task in plan.get("tasks", [])
+            if isinstance(task, Mapping)
+            and not task.get("reviewer_for")
+            and isinstance(task.get("workspace"), Mapping)
+            and task["workspace"].get("kind") == "isolated-writer"
+        }
         producer_successes: dict[str, float] = {}
+        trusted_acceptance_failure = False
         started_reviewers: set[str] = set()
         terminal = {
             "task_succeeded",
@@ -791,6 +817,26 @@ class BenchmarkLiveRuntimeAdapter:
                 )
             elif event_type == "task_succeeded" and task_id in producers:
                 producer_successes[task_id] = observed_at
+            elif event_type == "task_failed" and task_id in writers:
+                payload = row.get("payload")
+                if (
+                    isinstance(payload, Mapping)
+                    and payload.get("status") == "failed"
+                    and payload.get("failure_class") == "acceptance-failed"
+                ):
+                    # The scheduler has already observed a provider result and
+                    # the controller's bounded writer acceptance failed.  Do
+                    # not invent a candidate commit: only the failed
+                    # acceptance boundary is an observed fact here.
+                    events.append(
+                        {
+                            "event": "acceptance_completed",
+                            "at": observed_at,
+                            "task_id": task_id,
+                            "accepted": False,
+                        }
+                    )
+                    trusted_acceptance_failure = True
             elif (
                 event_type in terminal
                 and task_id in reviewers
@@ -816,6 +862,7 @@ class BenchmarkLiveRuntimeAdapter:
                     "at": max(producer_successes.values()),
                 }
             )
+        return trusted_acceptance_failure
 
 
 def benchmark_live_adapter(

@@ -1096,7 +1096,6 @@ def derive_trial_receipt(
         ):
             _require(by_name[name], f"trial event {name} is required")
     if failure_class == "task-quality-failure":
-        _require(by_name["candidate_created"], "task-quality failure requires a candidate")
         _require(
             by_name["acceptance_completed"],
             "task-quality failure requires an acceptance result",

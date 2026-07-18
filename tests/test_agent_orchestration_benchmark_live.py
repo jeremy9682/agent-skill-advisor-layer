@@ -680,6 +680,96 @@ def test_blocked_unstarted_reviewer_does_not_emit_a_completed_review():
     assert [event["event"] for event in events] == ["producer_started"]
 
 
+def test_scheduler_acceptance_failure_projects_failed_acceptance_only():
+    events: list[dict] = []
+    journal = [
+        {
+            "event_type": "dispatch_claimed",
+            "task_id": "writer",
+            "timestamp": "2026-07-18T20:00:00Z",
+        },
+        {
+            "event_type": "task_failed",
+            "task_id": "writer",
+            "timestamp": "2026-07-18T20:00:05Z",
+            "payload": {
+                "status": "failed",
+                "failure_class": "acceptance-failed",
+            },
+        },
+    ]
+    plan = {
+        "tasks": [
+            {"id": "writer", "workspace": {"kind": "isolated-writer"}},
+            {"id": "review", "reviewer_for": ["writer"]},
+        ]
+    }
+
+    trusted = BenchmarkLiveRuntimeAdapter._events_from_journal(events, journal, plan)
+
+    assert trusted is True
+    assert events == [
+        {"event": "producer_started", "at": 1784404800.0, "task_id": "writer"},
+        {"event": "acceptance_completed", "at": 1784404805.0, "task_id": "writer", "accepted": False},
+    ]
+
+
+def test_pre_candidate_non_acceptance_failure_is_not_projected_as_task_quality():
+    events: list[dict] = []
+    journal = [
+        {
+            "event_type": "dispatch_claimed",
+            "task_id": "writer",
+            "timestamp": "2026-07-18T20:00:00Z",
+        },
+        {
+            "event_type": "task_failed",
+            "task_id": "writer",
+            "timestamp": "2026-07-18T20:00:05Z",
+            "payload": {"status": "failed", "failure_class": "adapter-transient"},
+        },
+    ]
+    plan = {"tasks": [{"id": "writer", "workspace": {"kind": "isolated-writer"}}]}
+
+    trusted = BenchmarkLiveRuntimeAdapter._events_from_journal(events, journal, plan)
+
+    assert trusted is False
+    assert [event["event"] for event in events] == ["producer_started"]
+
+
+def test_acceptance_failure_needs_trusted_scheduler_projection_for_quality_mapping():
+    state = {
+        "tasks": {
+            "writer": {
+                "result": {"status": "failed", "failure_class": "acceptance-failed"}
+            }
+        }
+    }
+
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(state)
+        == "orchestration-infrastructure-failure"
+    )
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
+            state, trusted_acceptance_failure=True
+        )
+        == "task-quality-failure"
+    )
+
+
+def test_integration_failure_class_is_not_lost_from_scheduler_state():
+    state = {
+        "tasks": {},
+        "integration": {
+            "status": "failed-unsafe",
+            "failure_class": "deterministic-join-failed",
+        },
+    }
+
+    assert BenchmarkLiveRuntimeAdapter._benchmark_failure_class(state) == "failed-unsafe"
+
+
 class _ManualRuntimeProbe:
     two_phase_process = True
     owns_deadline = True
