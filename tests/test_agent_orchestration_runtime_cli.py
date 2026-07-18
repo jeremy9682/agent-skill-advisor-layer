@@ -8,10 +8,10 @@ import pytest
 import scripts.agent_orchestrate as orchestrate_cli
 import scripts.agent_orchestration_benchmark as benchmark_cli
 from scripts.agent_orchestrate import _compiled, canonical_ledger_slug, main
-from scripts.orchestration.bridge import NativeAgentRunBridge
+from scripts.orchestration.bridge import BridgeError, NativeAgentRunBridge
 from scripts.orchestration.journal import EventJournal, read_cancel_file, write_replaceable_manifest
 from scripts.orchestration.plan import PlanValidationError, validate_plan
-from scripts.orchestration.runtime import AgentLedgerCLI, InMemoryLedger, OrchestrationRuntime, RuntimeErrorSafe, benchmark_live_adapter
+from scripts.orchestration.runtime import BenchmarkLiveRuntimeAdapter, AgentLedgerCLI, InMemoryLedger, OrchestrationRuntime, RuntimeErrorSafe, benchmark_live_adapter
 from scripts.orchestration.scheduler import Scheduler
 
 
@@ -39,6 +39,45 @@ def _repo(tmp_path: Path) -> Path:
 
 def _plan(repo: Path) -> dict:
     return validate_plan({"version": 1, "run_id": "runtime-test", "repo_root": str(repo), "tasks": [{"id": "probe", "task_shape": "mechanical", "input_ref": "prompt.txt"}]})
+
+
+def _writer_plan(repo: Path, *, acceptance: list[list[str]] | None = None) -> dict:
+    base = _git(repo, "rev-parse", "HEAD")
+    return validate_plan(
+        {
+            "version": 1,
+            "run_id": "writer-failure-evidence",
+            "repo_root": str(repo),
+            "base_sha": base,
+            "ledger_slug": "runtime-test",
+            "tasks": [
+                {
+                    "id": "writer",
+                    "task_shape": "mechanical",
+                    "input_ref": "prompt.txt",
+                    "workspace": {"kind": "isolated-writer", "own": ["output.txt"]},
+                    "acceptance": acceptance or [],
+                }
+            ],
+        }
+    )
+
+
+def _prepare_writer(runtime: OrchestrationRuntime, plan: dict, worktrees: Path) -> dict:
+    task = plan["tasks"][0]
+    runtime.prepare_resource(
+        task,
+        ownership={
+            "created_by_run_id": plan["run_id"],
+            "fencing_token": "fence-test",
+            "path": str(worktrees / plan["run_id"] / "writer"),
+            "branch": f"agent-run/{plan['run_id']}/writer",
+            "base_sha": plan["base_sha"],
+            "ledger_slug": plan["ledger_slug"],
+            "generation": 1,
+        },
+    )
+    return task
 
 
 def test_runtime_resolves_only_repo_input_and_defaults_live_closed(tmp_path: Path):
@@ -406,6 +445,120 @@ def test_live_runtime_writer_isolated_then_controller_joins(tmp_path: Path):
     assert integration["acceptance_argv"] == [["git", "status", "--porcelain"]]
     assert integration["producer_acceptance_argv"] == {"writer": []}
     assert _git(Path(integration["integration_path"]), "show", "HEAD:output.txt") == "written"
+
+
+def test_recoverable_writer_acceptance_failure_preserves_provider_evidence(
+    tmp_path: Path,
+):
+    repo = _repo(tmp_path)
+    plan = _writer_plan(repo, acceptance=[["false"]])
+    wrapper = tmp_path / "provider.py"
+    receipt = {
+        "run_id": "provider-acceptance", "provider": "cursor",
+        "seat": "claude-landing", "exit_code": 0, "failure_class": "none",
+        "duration_ms": 12, "session_id": "session-acceptance",
+        "session_status": "attributed-stream-json", "model": "composer-2.5-fast",
+        "model_family": "cursor",
+    }
+    wrapper.write_text(
+        "#!" + sys.executable + "\n"
+        "from pathlib import Path\nimport json\n"
+        "Path('output.txt').write_text('provider edit\\n', encoding='utf-8')\n"
+        f"print(json.dumps({{'agent_run': {receipt!r}}}))\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+    artifacts, worktrees = tmp_path / "artifacts", tmp_path / "worktrees"
+    ledger = InMemoryLedger()
+    runtime = OrchestrationRuntime(
+        plan,
+        artifact_root=artifacts,
+        worktree_root=worktrees,
+        bridge=NativeAgentRunBridge(artifact_root=artifacts, binary=str(wrapper)),
+        ledger=ledger,
+        live=True,
+    )
+    task = _prepare_writer(runtime, plan, worktrees)
+    launched = runtime.launch_task(
+        task, run_id=plan["run_id"], attempt_id="attempt", generation=1
+    )
+    result = runtime.collect_task(launched)
+
+    assert result["status"] == "failed"
+    assert result["failure_class"] == "acceptance-failed"
+    assert result["detail"] == "AcceptanceFailure"
+    assert result["provider_run_id"] == "provider-acceptance"
+    assert result["provider"] == "cursor"
+    assert result["model_observed"] == "composer-2.5-fast"
+    assert result["model_family"] == "cursor"
+    assert result["session_id"] == "session-acceptance"
+    assert result["provider_duration_ms"] == 12
+    assert Path(result["artifact_path"]).is_file()
+    assert result["process_cleanup"]["residual"] is False
+    assert ledger._lookup(launched.checkpoint_event)["state"] == "closed"
+    assert BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
+        {"tasks": {"writer": {"result": result}}}
+    ) == "task-quality-failure"
+
+
+def test_legacy_writer_scope_violation_stays_unsafe_but_preserves_evidence(
+    tmp_path: Path,
+):
+    repo = _repo(tmp_path)
+    plan = _writer_plan(repo)
+
+    class ScopeViolatingBridge:
+        def run_task(self, task, **_kwargs):
+            Path(task["cwd"]).joinpath("outside.txt").write_text("nope\n")
+            return {
+                "status": "succeeded", "failure_class": "none",
+                "provider_run_id": "provider-scope", "provider": "cursor",
+                "model_observed": "composer-2.5-fast", "model_family": "cursor",
+                "session_id": "session-scope", "session_status": "attributed-stream-json",
+                "provider_duration_ms": 5, "artifact_path": "/private/artifact",
+                "artifact_sha256": "a" * 64,
+                "process_cleanup": {"residual": False},
+            }
+
+    worktrees = tmp_path / "worktrees"
+    runtime = OrchestrationRuntime(
+        plan, artifact_root=tmp_path / "artifacts", worktree_root=worktrees,
+        bridge=ScopeViolatingBridge(), ledger=InMemoryLedger(), live=True,
+    )
+    task = _prepare_writer(runtime, plan, worktrees)
+    result = runtime.run_task(
+        task, run_id=plan["run_id"], attempt_id="attempt", generation=1
+    )
+    assert result["status"] == "failed-unsafe"
+    assert result["failure_class"] == "runtime-safety-error"
+    assert result["detail"] == "ScopeViolation"
+    assert result["provider_run_id"] == "provider-scope"
+    assert result["session_id"] == "session-scope"
+    assert result["process_cleanup"] == {"residual": False}
+
+
+def test_bridge_exception_before_result_remains_fail_closed(tmp_path: Path):
+    repo = _repo(tmp_path)
+    plan = _writer_plan(repo)
+
+    class BrokenBridge:
+        def run_task(self, _task, **_kwargs):
+            raise BridgeError("receipt unavailable")
+
+    worktrees = tmp_path / "worktrees"
+    runtime = OrchestrationRuntime(
+        plan, artifact_root=tmp_path / "artifacts", worktree_root=worktrees,
+        bridge=BrokenBridge(), ledger=InMemoryLedger(), live=True,
+    )
+    task = _prepare_writer(runtime, plan, worktrees)
+    result = runtime.run_task(
+        task, run_id=plan["run_id"], attempt_id="attempt", generation=1
+    )
+    assert result == {
+        "status": "failed-unsafe",
+        "failure_class": "runtime-safety-error",
+        "detail": "BridgeError",
+    }
 
 
 def test_writer_retry_stops_before_new_session_when_prior_attempt_left_dirty_worktree(

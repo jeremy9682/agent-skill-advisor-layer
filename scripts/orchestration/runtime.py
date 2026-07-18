@@ -33,6 +33,7 @@ from .journal import EventJournal
 from .join import JoinDispute, join_candidates
 from .scheduler import Scheduler
 from .worktree import (
+    AcceptanceFailure,
     AcceptanceResult,
     CandidateCommit,
     ResourceOwnership,
@@ -52,6 +53,32 @@ CHECKPOINT_SEAT_RE = re.compile(
 CONTROLLER_SEAT = "codex-orchestrator"
 DEPENDENCY_BUNDLE_MAX_BYTES = 256 * 1024
 MANIFEST_VERSION = 1
+
+# A post-provider controller failure must not turn the provider receipt into a
+# secret-bearing free-form envelope.  These fields are already the bounded
+# scheduler/benchmark evidence surface and are sufficient to prove attribution
+# and safe process teardown after an acceptance or safety failure.
+POST_PROVIDER_EVIDENCE_FIELDS = (
+    "task_id",
+    "orchestration_run_id",
+    "attempt_id",
+    "generation",
+    "provider_run_id",
+    "provider",
+    "model_observed",
+    "model_family",
+    "session_id",
+    "session_status",
+    "exit_code",
+    "artifact_path",
+    "artifact_sha256",
+    "provider_duration_ms",
+    "bridge_wall_ms",
+    "wrapper_pid",
+    "wrapper_start_fingerprint",
+    "launch_manifest_path",
+    "process_cleanup",
+)
 
 
 def _compiled_execution_seat(task: Mapping[str, Any]) -> str:
@@ -853,6 +880,42 @@ class OrchestrationRuntime:
         os.chmod(self.worktree_root, 0o700)
         self.manager = WorktreeManager(self.repo_root, self.worktree_root)
 
+    @staticmethod
+    def _post_provider_failure(
+        result: Mapping[str, Any] | None, exc: Exception
+    ) -> dict[str, Any]:
+        """Classify controller work after a provider result without losing proof.
+
+        A failure before a bridge result remains fail-closed with no claimed
+        provider identity.  Once the bridge has returned a bounded result,
+        preserve only its established evidence fields.  Acceptance is a
+        task-quality verdict; every other controller safety/state failure is
+        still unsafe and never silently downgraded.
+        """
+
+        evidence = (
+            {
+                key: result[key]
+                for key in POST_PROVIDER_EVIDENCE_FIELDS
+                if key in result
+            }
+            if isinstance(result, Mapping)
+            else {}
+        )
+        if isinstance(exc, AcceptanceFailure):
+            return {
+                **evidence,
+                "status": "failed",
+                "failure_class": "acceptance-failed",
+                "detail": "AcceptanceFailure",
+            }
+        return {
+            **evidence,
+            "status": "failed-unsafe",
+            "failure_class": "runtime-safety-error",
+            "detail": type(exc).__name__,
+        }
+
     def _manifest_path(self, run_id: str, category: str, identity: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9._:-]+", identity):
             raise RuntimeErrorSafe("unsafe controller manifest identity")
@@ -1630,6 +1693,7 @@ class OrchestrationRuntime:
     def collect_task(self, launched: RuntimeLaunch) -> Mapping[str, Any]:
         checkpoint = launched.checkpoint_event
         task = launched.task
+        result: dict[str, Any] | None = None
         try:
             result = dict(self.bridge.collect_task(launched.bridge_launch))
             if result.get("status") == "succeeded" and task["workspace"]["kind"] == "isolated-writer":
@@ -1678,11 +1742,7 @@ class OrchestrationRuntime:
                 self.ledger.close(checkpoint, outcome="task failed")
             except Exception:
                 pass
-            return {
-                "status": "failed-unsafe",
-                "failure_class": "runtime-safety-error",
-                "detail": type(exc).__name__,
-            }
+            return self._post_provider_failure(result, exc)
 
     def run_task(self, task: Mapping[str, Any], *, run_id: str, attempt_id: str, generation: int) -> Mapping[str, Any]:
         if not self.live:
@@ -1706,6 +1766,7 @@ class OrchestrationRuntime:
         checkpoint = self.ledger.open(task=task, cwd=cwd, run_id=run_id, attempt_id=attempt_id) if self.ledger else None
         if not checkpoint:
             return {"status": "failed-unsafe", "failure_class": "checkpoint-ledger-unavailable"}
+        result: dict[str, Any] | None = None
         try:
             self.ledger.claim(checkpoint)
             projected = self._project_task(
@@ -1764,7 +1825,7 @@ class OrchestrationRuntime:
                 self.ledger.close(checkpoint, outcome="task failed")
             except Exception:
                 pass
-            return {"status": "failed-unsafe", "failure_class": "runtime-safety-error", "detail": type(exc).__name__}
+            return self._post_provider_failure(result, exc)
 
     def _recover_candidates(
         self,

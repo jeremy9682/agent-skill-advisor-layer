@@ -21,6 +21,16 @@ class WorktreeError(RuntimeError):
     """A Git worktree operation failed without authorizing destructive repair."""
 
 
+class AcceptanceFailure(WorktreeError):
+    """A frozen acceptance argv was malformed or returned a non-zero status.
+
+    This is deliberately distinct from ownership, scope, and state-drift
+    failures.  The provider may already have produced an attributable result;
+    acceptance then supplies a task-quality verdict rather than invalidating
+    the receipt.
+    """
+
+
 class UnsafeWorktreeError(WorktreeError):
     """Observed state does not match the current resource authority."""
 
@@ -191,10 +201,10 @@ def run_acceptance_commands(
     results: list[AcceptanceResult] = []
     for index, raw_command in enumerate(commands):
         if isinstance(raw_command, (str, bytes)) or not raw_command:
-            raise WorktreeError("acceptance commands must be non-empty argv sequences")
+            raise AcceptanceFailure("acceptance commands must be non-empty argv sequences")
         command = tuple(str(part) for part in raw_command)
         if any(not part for part in command):
-            raise WorktreeError("acceptance argv entries must be non-empty")
+            raise AcceptanceFailure("acceptance argv entries must be non-empty")
 
         if runner is None:
             completed = subprocess.run(
@@ -232,7 +242,9 @@ def run_acceptance_commands(
         )
         results.append(result)
         if returncode != 0:
-            raise WorktreeError(f"acceptance command {index} failed with exit {returncode}")
+            raise AcceptanceFailure(
+                f"acceptance command {index} failed with exit {returncode}"
+            )
     return tuple(results)
 
 

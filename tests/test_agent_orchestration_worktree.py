@@ -10,10 +10,12 @@ import pytest
 from scripts.orchestration.join import JoinDispute, join_candidates
 from scripts.orchestration.scheduler import _fencing_token
 from scripts.orchestration.worktree import (
+    AcceptanceFailure,
     ResourceOwnership,
     ScopeViolation,
     UnsafeWorktreeError,
     WorktreeManager,
+    run_acceptance_commands,
     validate_changed_scope,
 )
 
@@ -99,6 +101,13 @@ def test_validate_changed_scope_returns_declared_taxonomy_hits_only():
             do_not_touch=[],
             shared_interface_paths=[],
         )
+
+
+def test_acceptance_failures_are_typed_without_retaining_output(tmp_path: Path):
+    with pytest.raises(AcceptanceFailure, match="non-empty argv"):
+        run_acceptance_commands(tmp_path, [[]])
+    with pytest.raises(AcceptanceFailure, match="exit 9"):
+        run_acceptance_commands(tmp_path, [["check"]], runner=lambda *_args: 9)
 
 
 def create_writer(
