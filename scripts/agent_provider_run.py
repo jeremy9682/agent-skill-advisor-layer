@@ -1724,6 +1724,17 @@ def effective_timeout_seconds(
     return DEFAULT_RUN_TIMEOUT_SECONDS
 
 
+def codex_stream_idle_seconds(provider: dict, timeout_seconds: int) -> int | None:
+    value = provider.get("stream_idle_timeout_seconds")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ProviderRunError(
+            "codex stream_idle_timeout_seconds must be a positive integer"
+        )
+    return min(value, timeout_seconds)
+
+
 def extract_claude_session_from_events(events: list[dict]) -> str | None:
     for event in events:
         if not isinstance(event, dict):
@@ -2592,6 +2603,9 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
                     cwd=cwd,
                     env=env,
                     timeout_seconds=timeout_seconds,
+                    idle_seconds=codex_stream_idle_seconds(
+                        provider, timeout_seconds
+                    ),
                 )
             elif use_claude_stream:
                 proc, run_status, stage_telemetry, stream_events = run_claude_stream_json_process(

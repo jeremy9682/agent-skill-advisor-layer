@@ -3484,6 +3484,17 @@ def test_codex_command_template_includes_json():
     assert cmd[2] == "--json"
 
 
+def test_codex_stream_idle_budget_is_configured_and_capped_by_total_timeout():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    provider = data["providers"]["codex"]
+    assert agent_run.codex_stream_idle_seconds(provider, 300) == 240
+    assert agent_run.codex_stream_idle_seconds(provider, 90) == 90
+    with pytest.raises(agent_run.ProviderRunError, match="positive integer"):
+        agent_run.codex_stream_idle_seconds(
+            {"stream_idle_timeout_seconds": True}, 300
+        )
+
+
 def test_run_codex_json_process_classifies_idle_timeout(monkeypatch):
     class _QueueStream:
         def __init__(self, lines):
