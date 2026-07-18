@@ -10,6 +10,7 @@ import pytest
 
 from scripts.agent_orchestration_benchmark import main
 from scripts.orchestration import benchmark
+from scripts.orchestration import runtime as runtime_module
 from scripts.orchestration.benchmark_lifecycle import LifecycleLaunch
 from scripts.orchestration.runtime import BenchmarkLiveRuntimeAdapter, RuntimeErrorSafe
 
@@ -565,6 +566,54 @@ def test_runtime_adapter_attribution_uses_observed_provider_milliseconds():
     ]
 
 
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (
+            {
+                "status": "timed-out",
+                "failure_class": "timeout_idle",
+                "provider": "cursor",
+                "provider_run_id": "cursor-run-1",
+            },
+            "provider-environment-failure",
+        ),
+        (
+            {
+                "status": "failed",
+                "failure_class": "provider-rate-limit",
+                "provider": "openai",
+            },
+            "provider-environment-failure",
+        ),
+        (
+            {
+                "status": "failed-unsafe",
+                "failure_class": "resource-resume-manifest-unreconciled",
+            },
+            "failed-unsafe",
+        ),
+        (
+            {
+                "status": "failed",
+                "failure_class": "review-verdict-fail",
+            },
+            "task-quality-failure",
+        ),
+        (
+            {
+                "status": "failed",
+                "failure_class": "adapter-transient",
+            },
+            "orchestration-infrastructure-failure",
+        ),
+    ],
+)
+def test_runtime_adapter_maps_scheduler_failures_to_benchmark_allowlist(result, expected):
+    state = {"tasks": {"producer": {"result": result}}}
+    assert BenchmarkLiveRuntimeAdapter._benchmark_failure_class(state) == expected
+
+
 class _ManualRuntimeProbe:
     two_phase_process = True
     owns_deadline = True
@@ -701,6 +750,70 @@ def test_runtime_adapter_manual_arm_rebinds_one_run_and_preserves_real_event_ord
     assert len([name for name in names if name == "review_started"]) == 1
     assert len(outcome["events"][-1]["attributions"]) == 2
     assert probes and probes[0].plan["run_id"].startswith("benchmark-cell-")
+
+
+def test_runtime_adapter_emits_provider_failure_for_observed_provider_timeout(
+    tmp_path: Path, monkeypatch
+):
+    launch = _manual_launch_fixture(tmp_path)
+    contract = benchmark.LaunchContract(
+        task_id="fixture",
+        arm="A",
+        launcher_kind="single-producer",
+        payload={},
+        graph_sha256=launch.graph_sha256,
+        manual_runbook_sha256=launch.manual_runbook_sha256,
+    )
+
+    class _FailedScheduler:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self):
+            return {
+                "status": "failed",
+                "tasks": {
+                    "producer": {
+                        "result": {
+                            "status": "timed-out",
+                            "failure_class": "timeout_idle",
+                            "provider": "cursor",
+                            "provider_run_id": "cursor-run-1",
+                        }
+                    }
+                },
+            }
+
+    adapter = BenchmarkLiveRuntimeAdapter(
+        Path(__file__).parents[1],
+        runtime_factory=lambda plan, artifact_root, *_args: _ManualRuntimeProbe(
+            dict(plan), artifact_root
+        ),
+    )
+    protocol = {"fixture": True}
+    adapter._inspection = {
+        "protocol": protocol,
+        "protocol_sha256": benchmark.sha256_value(protocol),
+        "evaluator_root": tmp_path,
+        "manifest_sha256": "b" * 64,
+        "config_fingerprint": adapter._config_fingerprint,
+    }
+    monkeypatch.setattr(benchmark, "compile_governed_lifecycle", lambda *_args, **_kwargs: launch)
+    monkeypatch.setattr(runtime_module, "Scheduler", _FailedScheduler)
+    cell = tmp_path / "provider-timeout-cell"
+    cell.mkdir(mode=0o700)
+
+    outcome = adapter.launch_benchmark_arm(
+        contract,
+        cell_root=cell,
+        reviewer={"route": "review"},
+        block_id="block-fixture",
+    )
+
+    terminal = outcome["events"][-1]
+    assert terminal["event"] == "trial_completed"
+    assert terminal["accepted"] is False
+    assert terminal["failure_class"] == "provider-environment-failure"
 
 
 def test_live_runner_rejects_preregistration_protocol_drift(tmp_path: Path):

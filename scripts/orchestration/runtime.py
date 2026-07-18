@@ -581,9 +581,15 @@ class BenchmarkLiveRuntimeAdapter:
             }
             self._events_from_journal(events, journal.read(), plan)
         events.sort(key=lambda row: float(row["at"]))
-        terminal = "succeeded" if outcome.get("status") == "succeeded" else "failed-unsafe"
-        accepted = terminal == "succeeded"
-        now("trial_completed", accepted=accepted, failure_class="none" if accepted else "failed-unsafe", attributions=self._attributions(state))
+        accepted = outcome.get("status") == "succeeded"
+        now(
+            "trial_completed",
+            accepted=accepted,
+            failure_class=(
+                "none" if accepted else self._benchmark_failure_class(state)
+            ),
+            attributions=self._attributions(state),
+        )
         artifacts = self._private_artifacts(root)
         return {
             "launcher_kind": contract.launcher_kind,
@@ -628,6 +634,70 @@ class BenchmarkLiveRuntimeAdapter:
                     }
                 )
         return rows
+
+    @staticmethod
+    def _benchmark_failure_class(state: Mapping[str, Any]) -> str:
+        """Map internal scheduler detail into the benchmark's public allowlist.
+
+        The scheduler state deliberately retains precise failure detail for
+        operators.  A benchmark receipt is public/evaluable and only permits
+        its fixed failure-class vocabulary, so never forward that raw detail.
+        """
+
+        results: list[Mapping[str, Any]] = []
+        tasks = state.get("tasks")
+        if isinstance(tasks, Mapping):
+            for task in tasks.values():
+                result = task.get("result") if isinstance(task, Mapping) else None
+                if isinstance(result, Mapping):
+                    results.append(result)
+
+        def failure_class(result: Mapping[str, Any]) -> str:
+            value = result.get("failure_class")
+            return value.lower() if isinstance(value, str) else ""
+
+        classes = [failure_class(result) for result in results]
+        statuses = {
+            str(result.get("status") or "").lower()
+            for result in results
+        }
+
+        # Fail closed before considering provider evidence.  A provider can
+        # be named in a result which is nevertheless unsafe to trust.
+        if "failed-unsafe" in statuses or any(
+            "unsafe" in value or "unreconciled" in value or "safety" in value
+            for value in classes
+        ):
+            return "failed-unsafe"
+
+        if any(
+            value == "task-quality-failure"
+            or value.startswith("review-verdict-")
+            or value.startswith("acceptance-")
+            for value in classes
+        ):
+            return "task-quality-failure"
+
+        provider_tokens = (
+            "timeout",
+            "rate-limit",
+            "rate_limit",
+            "auth",
+            "upstream",
+            "overload",
+            "provider",
+        )
+        for result, value in zip(results, classes):
+            has_provider_identity = any(
+                isinstance(result.get(key), str) and bool(result.get(key))
+                for key in ("provider", "provider_run_id", "model_observed")
+            )
+            if has_provider_identity and any(token in value for token in provider_tokens):
+                return "provider-environment-failure"
+
+        # A non-success with no explicit safety, quality, or provider signal
+        # is a runtime/scheduler concern, not a made-up task verdict.
+        return "orchestration-infrastructure-failure"
 
     @staticmethod
     def _private_artifacts(root: Path) -> list[Path]:
