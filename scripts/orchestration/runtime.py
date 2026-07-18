@@ -333,10 +333,21 @@ class _BenchmarkManualWrapper:
 
     def __init__(self, runtime: ManualEventLifecycleAdapter, worktree_root: Path) -> None:
         self.runtime, self.worktree_root = runtime, worktree_root
+        # B's lifecycle creates resources with a deterministic fence.  Keep
+        # that exact authority for terminal cleanup; inventing a benchmark-only
+        # token would make ownership validation fail closed (or, worse, tempt a
+        # future caller to bypass it).
+        self._cleanup_fences: dict[str, str] = {}
 
     def prepare_resource(self, task: Mapping[str, Any], *, ownership: Mapping[str, Any]) -> Mapping[str, Any]:
         owned = dict(ownership)
         run_id = str(owned["created_by_run_id"])
+        fencing_token = owned.get("fencing_token")
+        if not isinstance(fencing_token, str) or not fencing_token:
+            raise RuntimeErrorSafe("manual resource intent is missing cleanup authority")
+        previous = self._cleanup_fences.setdefault(run_id, fencing_token)
+        if previous != fencing_token:
+            raise RuntimeErrorSafe("manual resource cleanup authority drift")
         owned["resource_id"] = f"benchmark-{task['id']}"
         owned["path"] = str((self.worktree_root / run_id / str(task["id"])).resolve())
         return self.runtime.prepare_resource(task, ownership=owned)
@@ -367,7 +378,31 @@ class _BenchmarkManualWrapper:
     def cleanup_terminal(self, state: Mapping[str, Any], *, preserve: bool) -> Mapping[str, Any]:
         if preserve:
             return {"status": "preserved", "reason": "benchmark-default"}
-        return self.runtime.terminal_cleanup(self.runtime.runtime.plan, state, run_id=self.runtime.runtime.plan["run_id"], generation=1, fencing_token="benchmark-manual")
+        plan = self.runtime.runtime.plan
+        writers = [
+            task
+            for task in plan["tasks"]
+            if task["workspace"]["kind"] == "isolated-writer"
+        ]
+        # A read-only-only benchmark cell owns no worktree and therefore has
+        # nothing to clean.  Treat the empty seam as complete rather than
+        # supplying made-up authority to the runtime.
+        if not writers:
+            return {}
+        run_id = str(plan["run_id"])
+        fencing_token = self._cleanup_fences.get(run_id)
+        if fencing_token is None:
+            return {
+                "status": "failed",
+                "reason": "manual-cleanup-authority-unavailable",
+            }
+        return self.runtime.terminal_cleanup(
+            plan,
+            state,
+            run_id=run_id,
+            generation=1,
+            fencing_token=fencing_token,
+        )
 
 
 class _BenchmarkRuntimeRecorder:
@@ -547,7 +582,7 @@ class BenchmarkLiveRuntimeAdapter:
         block_id: str,
     ) -> Mapping[str, Any]:
         from . import benchmark
-        from .benchmark_lifecycle import cleanup_terminal, run_manual_ready_sets
+        from .benchmark_lifecycle import run_manual_ready_sets
 
         binding = self._inspection
         if binding is None:
@@ -595,7 +630,12 @@ class BenchmarkLiveRuntimeAdapter:
                 launch, wrapper, event_sink=events.append
             )
             state = dict(outcome.get("state") or {})
-            cleanup_terminal(wrapper, state, preserve=True)
+            cleanup = self._manual_terminal_cleanup(
+                wrapper,
+                state,
+                preserve=outcome.get("status") != "succeeded",
+            )
+            state["cleanup"] = cleanup
             trusted_acceptance_failure = self._trusted_acceptance_failure_from_events(
                 events
             )
@@ -616,6 +656,14 @@ class BenchmarkLiveRuntimeAdapter:
             trusted_acceptance_failure = self._events_from_journal(
                 events, journal.read(), plan
             )
+        if (
+            outcome.get("status") == "succeeded"
+            and not self._terminal_cleanup_complete(plan, state.get("cleanup") or {})
+        ):
+            # Cleanup is part of every benchmark arm's measured trial.  A
+            # scheduler's folded state is the same authority B records here.
+            # Do not emit a green receipt when an owned worktree remains.
+            outcome = {"status": "partial-failure", "state": state}
         events.sort(key=lambda row: float(row["at"]))
         accepted = outcome.get("status") == "succeeded"
         now(
@@ -640,8 +688,52 @@ class BenchmarkLiveRuntimeAdapter:
             "config_fingerprint": self._config_fingerprint,
             "review_binding": dict(reviewer),
             "events": events,
+            "cleanup": state.get("cleanup"),
             "artifact_paths": [str(path) for path in artifacts],
         }
+
+    @staticmethod
+    def _manual_terminal_cleanup(
+        wrapper: _BenchmarkManualWrapper,
+        state: Mapping[str, Any],
+        *,
+        preserve: bool,
+    ) -> Mapping[str, Any]:
+        """Record terminal cleanup failure as evidence instead of faking green."""
+
+        try:
+            return dict(wrapper.cleanup_terminal(state, preserve=preserve))
+        except (RuntimeErrorSafe, OSError, TypeError, ValueError) as exc:
+            return {
+                "status": "failed",
+                "reason": type(exc).__name__,
+                "preserve": preserve,
+            }
+
+    @staticmethod
+    def _terminal_cleanup_complete(
+        plan: Mapping[str, Any], cleanup: Mapping[str, Any],
+    ) -> bool:
+        """Require a successful owned cleanup for every benchmark writer/join."""
+
+        writers = [
+            str(task["id"])
+            for task in plan["tasks"]
+            if task["workspace"]["kind"] == "isolated-writer"
+        ]
+        if not writers:
+            return not (cleanup.get("status") == "failed")
+        if cleanup.get("status") == "failed":
+            return False
+        for resource_id in [*writers, "integration"]:
+            resource = cleanup.get(resource_id)
+            if (
+                not isinstance(resource, Mapping)
+                or not isinstance(resource.get("worktree"), Mapping)
+                or resource["worktree"].get("status") != "succeeded"
+            ):
+                return False
+        return True
 
     def _make_runtime(self, plan: Mapping[str, Any], artifact_root: Path, worktree_root: Path, evaluator_root: Path) -> Any:
         if self._runtime_factory is not None:
@@ -690,6 +782,20 @@ class BenchmarkLiveRuntimeAdapter:
         operators.  A benchmark receipt is public/evaluable and only permits
         its fixed failure-class vocabulary, so never forward that raw detail.
         """
+
+        cleanup = state.get("cleanup")
+        if (
+            isinstance(cleanup, Mapping)
+            and BenchmarkLiveRuntimeAdapter._cleanup_has_unsafe_reason(cleanup)
+        ):
+            return "failed-unsafe"
+        if isinstance(cleanup, Mapping) and cleanup.get("status") == "failed":
+            reason = str(cleanup.get("reason") or "").lower()
+            # B cannot safely claim a completed trial when the proof of
+            # ownership itself is unavailable.  Other cleanup residuals are
+            # infrastructure failures, but these identity failures are unsafe.
+            if any(token in reason for token in ("authority", "ownership", "fenc", "manifest", "path")):
+                return "failed-unsafe"
 
         results: list[Mapping[str, Any]] = []
         tasks = state.get("tasks")
@@ -751,6 +857,24 @@ class BenchmarkLiveRuntimeAdapter:
         # A non-success with no explicit safety, quality, or provider signal
         # is a runtime/scheduler concern, not a made-up task verdict.
         return "orchestration-infrastructure-failure"
+
+    @staticmethod
+    def _cleanup_has_unsafe_reason(value: Any) -> bool:
+        """Recognise a runtime's nested ownership-safety cleanup residual."""
+
+        if isinstance(value, Mapping):
+            if value.get("reason") == "UnsafeWorktreeError":
+                return True
+            return any(
+                BenchmarkLiveRuntimeAdapter._cleanup_has_unsafe_reason(child)
+                for child in value.values()
+            )
+        if isinstance(value, (list, tuple)):
+            return any(
+                BenchmarkLiveRuntimeAdapter._cleanup_has_unsafe_reason(child)
+                for child in value
+            )
+        return False
 
     @staticmethod
     def _trusted_acceptance_failure_from_events(

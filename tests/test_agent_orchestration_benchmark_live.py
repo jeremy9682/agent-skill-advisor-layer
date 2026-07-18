@@ -823,11 +823,20 @@ class _ManualRuntimeProbe:
     def __init__(self, plan: dict, artifact_root: Path):
         self.plan = plan
         self.calls: list[tuple[str, float]] = []
+        self.ownership: dict | None = None
+        self.residual_worktree = (
+            Path(plan["repo_root"]).parent
+            / ".agent-run-worktrees"
+            / plan["run_id"]
+            / "producer"
+        )
+        self.residual_worktree.mkdir(parents=True)
         artifact = artifact_root / "observed.json"
         artifact.write_text("{}\n", encoding="utf-8")
         os.chmod(artifact, 0o600)
 
-    def prepare_resource(self, _task, **_kwargs):
+    def prepare_resource(self, _task, *, ownership, **_kwargs):
+        self.ownership = dict(ownership)
         return {"status": "created"}
 
     def prepare_dependencies(self, _task, _state, **_kwargs):
@@ -856,8 +865,15 @@ class _ManualRuntimeProbe:
         self.calls.append(("prepare-review", time.time()))
         return {"status": "succeeded"}
 
-    def terminal_cleanup(self, *_args, **_kwargs):
-        return {}
+    def terminal_cleanup(self, *_args, fencing_token, **_kwargs):
+        assert self.ownership is not None
+        assert fencing_token == self.ownership["fencing_token"]
+        self.calls.append(("cleanup", time.time()))
+        shutil.rmtree(self.residual_worktree)
+        return {
+            "producer": {"worktree": {"status": "succeeded"}},
+            "integration": {"worktree": {"status": "succeeded"}},
+        }
 
 
 def _manual_launch_fixture(tmp_path: Path) -> LifecycleLaunch:
@@ -874,7 +890,7 @@ def _manual_launch_fixture(tmp_path: Path) -> LifecycleLaunch:
                 "id": "producer",
                 "depends_on": [],
                 "reviewer_for": [],
-                "workspace": {"kind": "read-only"},
+                "workspace": {"kind": "isolated-writer"},
                 "family": "openai",
             },
             {
@@ -952,6 +968,90 @@ def test_runtime_adapter_manual_arm_rebinds_one_run_and_preserves_real_event_ord
     assert len([name for name in names if name == "review_started"]) == 1
     assert len(outcome["events"][-1]["attributions"]) == 2
     assert probes and probes[0].plan["run_id"].startswith("benchmark-cell-")
+    assert probes[0].calls[-1][0] == "cleanup"
+    assert not probes[0].residual_worktree.exists()
+    assert outcome["events"][-1]["accepted"] is True
+
+
+def test_success_cleanup_requires_every_owned_worktree(tmp_path: Path):
+    plan = _manual_launch_fixture(tmp_path).plan
+
+    assert not BenchmarkLiveRuntimeAdapter._terminal_cleanup_complete(plan, {})
+    assert not BenchmarkLiveRuntimeAdapter._terminal_cleanup_complete(
+        plan,
+        {"producer": {"worktree": {"status": "succeeded"}}},
+    )
+    assert not BenchmarkLiveRuntimeAdapter._terminal_cleanup_complete(
+        plan,
+        {
+            "producer": {"worktree": {"status": "failed"}},
+            "integration": {"worktree": {"status": "succeeded"}},
+        },
+    )
+    assert BenchmarkLiveRuntimeAdapter._terminal_cleanup_complete(
+        plan,
+        {
+            "producer": {"worktree": {"status": "succeeded"}},
+            "integration": {"worktree": {"status": "succeeded"}},
+        },
+    )
+
+    read_only = dict(plan)
+    read_only["tasks"] = [
+        {**task, "workspace": {"kind": "read-only"}}
+        for task in plan["tasks"]
+    ]
+    assert BenchmarkLiveRuntimeAdapter._terminal_cleanup_complete(read_only, {})
+
+
+def test_manual_cleanup_authority_failure_is_unsafe_not_green():
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
+            {
+                "cleanup": {
+                    "status": "failed",
+                    "reason": "manual-cleanup-authority-unavailable",
+                }
+            }
+        )
+        == "failed-unsafe"
+    )
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
+            {"cleanup": {"status": "failed", "reason": "WorktreeError"}}
+        )
+        == "orchestration-infrastructure-failure"
+    )
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
+            {
+                "cleanup": {
+                    "producer": {
+                        "worktree": {
+                            "status": "failed",
+                            "reason": "UnsafeWorktreeError",
+                        }
+                    }
+                }
+            }
+        )
+        == "failed-unsafe"
+    )
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(
+            {
+                "cleanup": {
+                    "producer": {
+                        "worktree": {
+                            "status": "failed",
+                            "reason": "WorktreeError",
+                        }
+                    }
+                }
+            }
+        )
+        == "orchestration-infrastructure-failure"
+    )
 
 
 def test_runtime_adapter_emits_provider_failure_for_observed_provider_timeout(
@@ -1016,6 +1116,73 @@ def test_runtime_adapter_emits_provider_failure_for_observed_provider_timeout(
     assert terminal["event"] == "trial_completed"
     assert terminal["accepted"] is False
     assert terminal["failure_class"] == "provider-environment-failure"
+
+
+def test_scheduler_arm_success_with_residual_cleanup_is_not_green(
+    tmp_path: Path, monkeypatch
+):
+    launch = _manual_launch_fixture(tmp_path)
+    contract = benchmark.LaunchContract(
+        task_id="fixture",
+        arm="A",
+        launcher_kind="single-producer",
+        payload={},
+        graph_sha256=launch.graph_sha256,
+        manual_runbook_sha256=launch.manual_runbook_sha256,
+    )
+
+    class _ResidualScheduler:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self):
+            return {
+                "status": "completed",
+                "tasks": {
+                    "producer": {"status": "succeeded", "result": {}},
+                    "review": {"status": "succeeded", "result": {}},
+                },
+                "integration": {"status": "succeeded"},
+                # The scheduler folded a successful producer cleanup but has
+                # no integration cleanup receipt.  It cannot be benchmark
+                # success merely because its primary work was complete.
+                "cleanup": {
+                    "producer": {"worktree": {"status": "succeeded"}}
+                },
+            }
+
+    adapter = BenchmarkLiveRuntimeAdapter(
+        Path(__file__).parents[1],
+        runtime_factory=lambda plan, artifact_root, *_args: _ManualRuntimeProbe(
+            dict(plan), artifact_root
+        ),
+    )
+    protocol = {"fixture": True}
+    adapter._inspection = {
+        "protocol": protocol,
+        "protocol_sha256": benchmark.sha256_value(protocol),
+        "evaluator_root": tmp_path,
+        "manifest_sha256": "b" * 64,
+        "config_fingerprint": adapter._config_fingerprint,
+    }
+    monkeypatch.setattr(
+        benchmark, "compile_governed_lifecycle", lambda *_args, **_kwargs: launch
+    )
+    monkeypatch.setattr(runtime_module, "Scheduler", _ResidualScheduler)
+    cell = tmp_path / "scheduler-residual-cell"
+    cell.mkdir(mode=0o700)
+
+    outcome = adapter.launch_benchmark_arm(
+        contract,
+        cell_root=cell,
+        reviewer={"route": "review"},
+        block_id="block-fixture",
+    )
+
+    terminal = outcome["events"][-1]
+    assert terminal["event"] == "trial_completed"
+    assert terminal["accepted"] is False
+    assert terminal["failure_class"] == "orchestration-infrastructure-failure"
 
 
 def test_live_runner_rejects_preregistration_protocol_drift(tmp_path: Path):
