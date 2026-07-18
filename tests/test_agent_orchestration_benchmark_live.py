@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import time
 
 import pytest
@@ -678,6 +679,38 @@ def test_blocked_unstarted_reviewer_does_not_emit_a_completed_review():
     BenchmarkLiveRuntimeAdapter._events_from_journal(events, journal, plan)
 
     assert [event["event"] for event in events] == ["producer_started"]
+
+
+def test_benchmark_runtime_uses_no_skills_bridge_for_every_arm_seat(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    adapter = BenchmarkLiveRuntimeAdapter(Path(__file__).resolve().parents[1])
+    runtime = adapter._make_runtime(
+        {"repo_root": str(repo), "ledger_slug": "benchmark-fixture"},
+        tmp_path / "artifacts",
+        tmp_path / "worktrees",
+        tmp_path / "evaluator",
+    )
+
+    assert runtime.bridge.no_skills is True
+    for task_shape, mode in (
+        ("ordinary_bug_fix", "execute"),  # A
+        ("mechanical", "execute"),  # B/C Composer producer
+        ("mechanical_grok", "execute"),  # B/C Grok producer
+        ("claude_final_review", "read-only"),  # every arm reviewer
+    ):
+        command = runtime.bridge.build_command(
+            {
+                "task_shape": task_shape,
+                "checkpoint_event": "evt-benchmark-no-skills",
+                "cwd": str(repo),
+                "mode": mode,
+                "deadline_seconds": 60,
+            },
+            "benchmark-only prompt",
+        )
+        assert "--no-skills" in command
 
 
 def test_scheduler_acceptance_failure_projects_failed_acceptance_only():

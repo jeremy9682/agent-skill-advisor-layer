@@ -647,7 +647,11 @@ class BenchmarkLiveRuntimeAdapter:
         if self._runtime_factory is not None:
             return self._runtime_factory(plan, artifact_root, worktree_root, evaluator_root)
         ledger = AgentLedgerCLI(slug=str(plan["ledger_slug"]), intent_ref="benchmark-live", repo_root=Path(str(plan["repo_root"])))
-        return OrchestrationRuntime(plan, artifact_root=artifact_root, worktree_root=worktree_root, evaluator_root=evaluator_root, ledger=ledger, live=True)
+        # Benchmark arms must receive identical managed-skill treatment.  This
+        # adapter is benchmark-only; normal governed runtime construction
+        # retains its existing route-specific skill behaviour.
+        bridge = NativeAgentRunBridge(artifact_root=artifact_root, no_skills=True)
+        return OrchestrationRuntime(plan, artifact_root=artifact_root, worktree_root=worktree_root, evaluator_root=evaluator_root, bridge=bridge, ledger=ledger, live=True)
 
     @staticmethod
     def _attributions(state: Mapping[str, Any]) -> list[dict[str, Any]]:
