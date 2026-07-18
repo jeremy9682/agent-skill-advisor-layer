@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,14 +17,15 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(benchmark)
 
 
-H = "a" * 64
+H = hashlib.sha256(b"benchmark-test-fixture").hexdigest()
+BASE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
 def task(task_id: str, task_class: str) -> dict:
     return {
         "task_id": task_id,
         "task_class": task_class,
-        "base_commit": "abc1234",
+        "base_commit": BASE_COMMIT,
         "intent_sha256": H,
         "prompt_sha256": H,
         "route_policy_sha256": H,

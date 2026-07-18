@@ -13,6 +13,7 @@ import json
 import math
 import os
 import random
+import re
 import stat
 import statistics
 from collections import Counter, defaultdict
@@ -82,6 +83,40 @@ SENSITIVE_KEY_PARTS = (
     "session",
     "token",
 )
+ATTESTED_EVIDENCE_VERSION = 1
+ATTESTED_EVIDENCE_MAX_FRESHNESS_SECONDS = 900.0
+ATTESTED_EVIDENCE_DEFAULT_FUTURE_SKEW_SECONDS = 30.0
+_ATTESTED_EVIDENCE_KEYS = frozenset(
+    {
+        "version",
+        "observed_at",
+        "expires_at",
+        "freshness_window_seconds",
+        "attested_by",
+        "required_provider_families",
+        "provider_families",
+        "config_fingerprint",
+        "provider_category",
+        "host_identity",
+        "checkout_identity",
+        "route_policy_sha256",
+    }
+)
+_ATTESTED_FAMILY_KEYS = frozenset(
+    {
+        "auth_ok",
+        "host_healthy",
+        "provider_incident",
+        "headroom_fraction",
+        "cooldown_elapsed_seconds",
+        "retry_after_seconds",
+    }
+)
+_ATTESTED_EVIDENCE_ALL_KEYS = _ATTESTED_EVIDENCE_KEYS | _ATTESTED_FAMILY_KEYS
+_SENSITIVE_VALUE_PATTERN = re.compile(
+    r"(?:\b(?:api[_-]?key|authorization|bearer|cookie|credential|password|secret|session|token)\b|sk-[a-z0-9_-]{8,}|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})",
+    re.IGNORECASE,
+)
 
 
 class BenchmarkProtocolError(ValueError):
@@ -144,6 +179,18 @@ def _is_sha256(value: Any) -> bool:
     return len(text) == 64 and all(char in "0123456789abcdef" for char in text)
 
 
+def _is_nonplaceholder_sha256(value: Any) -> bool:
+    """Recognise a digest that cannot be a repeated-character test placeholder."""
+
+    text = str(value or "")
+    return _is_sha256(text) and len(set(text)) > 1
+
+
+def _is_full_git_commit(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) == 40 and all(char in "0123456789abcdef" for char in text) and len(set(text)) > 1
+
+
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise BenchmarkProtocolError(message)
@@ -162,6 +209,166 @@ def _require_number(value: Any, label: str, *, minimum: float = 0.0) -> float:
 def _sensitive_key(key: str) -> bool:
     folded = key.lower().replace("-", "_")
     return any(part in folded for part in SENSITIVE_KEY_PARTS)
+
+
+def _contains_sensitive_material(value: Any) -> bool:
+    """Reject credential-shaped evidence before it is returned to a caller."""
+
+    if isinstance(value, Mapping):
+        return any(
+            (_sensitive_key(str(key)) and str(key) not in _ATTESTED_EVIDENCE_ALL_KEYS)
+            or _contains_sensitive_material(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_sensitive_material(item) for item in value)
+    return isinstance(value, str) and bool(_SENSITIVE_VALUE_PATTERN.search(value))
+
+
+def _parse_attested_timestamp(value: Any, label: str) -> dt.datetime:
+    _require(isinstance(value, str) and value.endswith("Z"), f"{label} must be an RFC3339 UTC timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise BenchmarkProtocolError(f"{label} must be an RFC3339 UTC timestamp") from exc
+    _require(parsed.tzinfo is not None, f"{label} must be timezone-aware")
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _frozen_route_policy_digest(protocol: Mapping[str, Any]) -> str:
+    digests = {str(task.get("route_policy_sha256") or "") for task in protocol["tasks"]}
+    _require(len(digests) == 1, "executable protocol must pin one route policy digest")
+    digest = next(iter(digests))
+    _require(_is_nonplaceholder_sha256(digest), "route_policy_sha256 must be a non-placeholder SHA-256")
+    return digest
+
+
+def validate_attested_evidence_bundle(
+    raw: Mapping[str, Any],
+    protocol: Mapping[str, Any],
+    *,
+    now: dt.datetime | None = None,
+    expected_host_identity: str | None = None,
+    expected_checkout_identity: str | None = None,
+    expected_config_fingerprint: str | None = None,
+    future_skew_seconds: float = ATTESTED_EVIDENCE_DEFAULT_FUTURE_SKEW_SECONDS,
+) -> dict[str, Any]:
+    """Validate one credential-free, local-only live-pilot evidence bundle.
+
+    This is intentionally a pure validator.  ``load_attested_evidence`` adds
+    the file-system trust boundary.  Callers must supply the current host,
+    checkout, and stripped-config fingerprints; omitting any of those bindings
+    fails closed instead of allowing evidence to travel between runs.
+    """
+
+    frozen = validate_executable_protocol(protocol)
+    _require(isinstance(raw, Mapping), "attested evidence must be an object")
+    _require(not _contains_sensitive_material(raw), "attested evidence contains sensitive key or value")
+    _require(set(raw) == _ATTESTED_EVIDENCE_KEYS, "attested evidence has unexpected or missing fields")
+    _require(raw.get("version") == ATTESTED_EVIDENCE_VERSION, "attested evidence version is unsupported")
+    _require(isinstance(raw.get("attested_by"), str) and raw["attested_by"].strip(), "attested evidence attested_by is required")
+    _require(_is_sha256(raw.get("host_identity")), "host identity must be a SHA-256")
+    _require(_is_sha256(raw.get("checkout_identity")), "checkout identity must be a SHA-256")
+    _require(_is_sha256(raw.get("config_fingerprint")), "config fingerprint must be a SHA-256")
+    _require(raw.get("provider_category") in {"official", "proxy"}, "provider category is invalid")
+    _require(_is_nonplaceholder_sha256(raw.get("route_policy_sha256")), "route policy hash must be a non-placeholder SHA-256")
+
+    current = now or dt.datetime.now(tz=dt.timezone.utc)
+    _require(current.tzinfo is not None, "evidence validation clock must be timezone-aware")
+    current = current.astimezone(dt.timezone.utc)
+    skew = _require_number(future_skew_seconds, "future_skew_seconds")
+    observed = _parse_attested_timestamp(raw.get("observed_at"), "observed_at")
+    expires = _parse_attested_timestamp(raw.get("expires_at"), "expires_at")
+    freshness = _require_number(raw.get("freshness_window_seconds"), "freshness_window_seconds", minimum=1)
+    _require(freshness <= ATTESTED_EVIDENCE_MAX_FRESHNESS_SECONDS, "freshness_window_seconds exceeds maximum")
+    _require(expires > observed, "evidence expiry must follow observation")
+    _require(abs((expires - observed).total_seconds() - freshness) < 1e-6, "evidence freshness window does not match expiry")
+    _require(observed <= current + dt.timedelta(seconds=skew), "evidence observation is future-dated")
+    _require(expires >= current, "attested evidence is expired")
+
+    families = raw.get("required_provider_families")
+    _require(isinstance(families, list) and families == frozen["required_provider_families"], "attested evidence provider families do not exactly match protocol")
+    rows = raw.get("provider_families")
+    _require(isinstance(rows, Mapping) and set(rows) == set(families), "attested evidence provider family set mismatch")
+    preflight_evidence: dict[str, dict[str, Any]] = {}
+    for family in families:
+        row = rows[family]
+        _require(isinstance(row, Mapping) and set(row) == _ATTESTED_FAMILY_KEYS, f"{family}: attested provider family schema is invalid")
+        _require(row.get("auth_ok") is True, f"{family}: auth evidence is not healthy")
+        _require(row.get("host_healthy") is True, f"{family}: host evidence is not healthy")
+        _require(row.get("provider_incident") is False, f"{family}: provider incident is present")
+        headroom = _require_number(row.get("headroom_fraction"), f"{family}: headroom_fraction")
+        _require(headroom <= 1.0, f"{family}: headroom_fraction exceeds one")
+        cooldown = _require_number(row.get("cooldown_elapsed_seconds"), f"{family}: cooldown_elapsed_seconds")
+        retry_after = _require_number(row.get("retry_after_seconds"), f"{family}: retry_after_seconds")
+        rule = frozen["quota_rules"][family]
+        _require(headroom >= float(rule["min_headroom_fraction"]), f"{family}: headroom is insufficient")
+        required_cooldown = float(rule["minimum_cooldown_seconds"])
+        if rule["retry_after_formula"] == "max(retry_after,minimum_cooldown)":
+            required_cooldown = max(required_cooldown, retry_after)
+        _require(cooldown >= required_cooldown, f"{family}: cooldown is insufficient")
+        preflight_evidence[family] = dict(row)
+
+    _require(isinstance(expected_host_identity, str) and _is_sha256(expected_host_identity), "expected host identity is required")
+    _require(isinstance(expected_checkout_identity, str) and _is_sha256(expected_checkout_identity), "expected checkout identity is required")
+    _require(isinstance(expected_config_fingerprint, str) and _is_sha256(expected_config_fingerprint), "expected config fingerprint is required")
+    _require(raw["host_identity"] == expected_host_identity, "attested evidence host identity mismatch")
+    _require(raw["checkout_identity"] == expected_checkout_identity, "attested evidence checkout identity mismatch")
+    _require(raw["config_fingerprint"] == expected_config_fingerprint, "attested evidence config fingerprint mismatch")
+    _require(raw["route_policy_sha256"] == _frozen_route_policy_digest(frozen), "attested evidence route policy drift")
+    return {
+        "observed_at": raw["observed_at"],
+        "expires_at": raw["expires_at"],
+        "attested_by": raw["attested_by"],
+        "preflight_evidence": preflight_evidence,
+        "config_fingerprint": raw["config_fingerprint"],
+        "provider_category": raw["provider_category"],
+        "host_identity": raw["host_identity"],
+        "checkout_identity": raw["checkout_identity"],
+        "route_policy_sha256": raw["route_policy_sha256"],
+    }
+
+
+def load_attested_evidence(
+    path: Path | None,
+    protocol: Mapping[str, Any],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Load only a strict mode-0600 regular evidence file, then validate it."""
+
+    _require(path is not None, "attested evidence is unavailable")
+    candidate = path.expanduser()
+    _require(not candidate.is_symlink(), "attested evidence must not be a symlink")
+    try:
+        fd = os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            metadata = os.fstat(handle.fileno())
+            _require(stat.S_ISREG(metadata.st_mode), "attested evidence must be a regular file")
+            _require(stat.S_IMODE(metadata.st_mode) == 0o600, "attested evidence must have exact mode 0600")
+            raw = json.load(handle)
+    except BenchmarkProtocolError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BenchmarkProtocolError("attested evidence is invalid JSON") from exc
+    return validate_attested_evidence_bundle(raw, protocol, **kwargs)
+
+
+def attested_pre_block_gate(
+    path: Path | None,
+    protocol: Mapping[str, Any],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Reload and gate evidence for exactly one paired block.
+
+    Call this immediately before every block.  It deliberately performs no
+    caching: a bundle that expires between two blocks is rejected on the next
+    call rather than being carried forward from initial preflight.
+    """
+
+    evidence = load_attested_evidence(path, protocol, **kwargs)
+    gate = pre_block_gate(protocol, evidence["preflight_evidence"])
+    _require(gate["eligible"], "attested evidence did not satisfy paired-block gate")
+    return {"evidence": evidence, "pre_block_gate": gate}
 
 
 def credential_stripped_config(value: Any) -> Any:
@@ -301,6 +508,14 @@ def _validate_execution_protocol(protocol: Mapping[str, Any]) -> None:
     )
     for task in protocol["tasks"]:
         task_id = str(task["task_id"])
+        _require(
+            _is_full_git_commit(task.get("base_commit")),
+            f"{task_id}: base_commit must be a full non-placeholder Git SHA-1",
+        )
+        _require(
+            _is_nonplaceholder_sha256(task.get("route_policy_sha256")),
+            f"{task_id}: route_policy_sha256 must be a non-placeholder SHA-256",
+        )
         _require(
             _is_sha256(task.get("private_task_sha256")),
             f"{task_id}: private_task_sha256 must be SHA-256",
@@ -1453,12 +1668,33 @@ def run_live_experiment(
     root.mkdir(parents=True, mode=0o700)
     os.chmod(root, 0o700)
     trials: list[dict[str, Any]] = []
+    block_preflights: dict[str, dict[str, Any]] = {}
     try:
+        active_block_id: str | None = None
+        active_preflight: dict[str, Any] | None = None
         for cell in counterbalanced_order(protocol):
             task_id, arm = str(cell["task_id"]), str(cell["arm"])
+            block_id = f"block-{task_id}"
+            if block_id != active_block_id:
+                # Re-inspect at every paired-block boundary.  In the production
+                # adapter this reloads the mode-0600 evidence file, so an
+                # expired or changed attestation cannot be reused by later
+                # blocks.  It is deliberately once per block, never per arm.
+                active_preflight = live_launch_preflight(
+                    protocol, adapter=adapter, evaluator_root=evaluator_root
+                )
+                _require(
+                    active_preflight["eligible"],
+                    f"live benchmark preflight is not eligible for {block_id}",
+                )
+                _require(
+                    active_preflight["config_fingerprint"] == preflight["config_fingerprint"],
+                    f"live config drift before {block_id}",
+                )
+                active_block_id = block_id
+                block_preflights[block_id] = active_preflight
             contract = build_launch_contract(protocol, evaluator_root, task_id, arm)
             public = _public_task(protocol, task_id)
-            block_id = f"block-{task_id}"
             cell_root = root / "cells" / task_id / arm
             cell_root.mkdir(parents=True, mode=0o700)
             os.chmod(cell_root, 0o700)
@@ -1470,11 +1706,11 @@ def run_live_experiment(
             )
             events, artifacts = _live_outcome(
                 contract, outcome, public_task=public,
-                expected_fingerprint=str(preflight["config_fingerprint"]), block_id=block_id,
+                expected_fingerprint=str(active_preflight["config_fingerprint"]), block_id=block_id,
             )
             receipt = derive_trial_receipt(
                 contract, events, block_id=block_id,
-                config_fingerprint_value=str(preflight["config_fingerprint"]), artifact_paths=artifacts,
+                config_fingerprint_value=str(active_preflight["config_fingerprint"]), artifact_paths=artifacts,
             )
             receipt["live"] = True
             write_private_json(cell_root / "trial-receipt.json", receipt)
@@ -1490,6 +1726,7 @@ def run_live_experiment(
         "synthetic": False,
         "cell_count": len(trials),
         "pre_block_gate": preflight["pre_block_gate"],
+        "block_preflight_count": len(block_preflights),
         "config_fingerprint": preflight["config_fingerprint"],
         "evaluation": evaluation,
     }

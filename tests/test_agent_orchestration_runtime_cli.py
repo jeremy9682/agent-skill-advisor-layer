@@ -6,6 +6,7 @@ import sys
 import pytest
 
 import scripts.agent_orchestrate as orchestrate_cli
+import scripts.agent_orchestration_benchmark as benchmark_cli
 from scripts.agent_orchestrate import _compiled, canonical_ledger_slug, main
 from scripts.orchestration.bridge import NativeAgentRunBridge
 from scripts.orchestration.journal import EventJournal, read_cancel_file, write_replaceable_manifest
@@ -261,6 +262,94 @@ def test_benchmark_live_adapter_attests_checkout_but_blocks_unknown_headroom(tmp
         adapter.launch_benchmark_arm(
             object(), cell_root=tmp_path / "cell", reviewer={}, block_id="block"
         )
+
+
+def test_benchmark_cli_preflight_is_launch_free_and_redacts_observed_detail(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """The preflight command must not create an output root or launch a cell."""
+
+    prereg = tmp_path / "frozen.json"
+    evaluator = tmp_path / "evaluator"
+    evidence = tmp_path / "attested-evidence.json"
+    output = tmp_path / "must-not-exist"
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        benchmark_cli,
+        "load_preregistration",
+        lambda _path: {"protocol": {"required_provider_families": ["cursor"]}},
+    )
+    monkeypatch.setattr(benchmark_cli, "verify_evaluator_root", lambda *_args: {"tasks": {}})
+    monkeypatch.setattr(
+        benchmark_cli,
+        "_live_adapter",
+        lambda *, evidence_path=None: seen.setdefault("evidence_path", evidence_path) or object(),
+    )
+    monkeypatch.setattr(
+        benchmark_cli,
+        "live_launch_preflight",
+        lambda *_args, **_kwargs: {
+            "eligible": False,
+            "action": "block-live-before-first-cell",
+            "blockers": [{"code": "whole-block-headroom-unknown", "detail": "token=must-not-leak"}],
+            "pre_block_gate": {
+                "eligible": False,
+                "action": "postpone-whole-block",
+                "reasons": [{"provider_family": "cursor", "reason": "headroom-unknown"}],
+            },
+            "config_fingerprint": "a" * 64,
+            "raw_provider_payload": "token=must-not-leak",
+        },
+    )
+    from scripts.orchestration import benchmark as benchmark_module
+
+    monkeypatch.setattr(
+        benchmark_module,
+        "run_live_experiment",
+        lambda *_args, **_kwargs: pytest.fail("preflight must never launch a live experiment"),
+    )
+
+    assert benchmark_cli.main([
+        "preflight", "--prereg", str(prereg), "--evaluator-root", str(evaluator),
+        "--preflight-evidence", str(evidence),
+    ]) == 3
+    assert seen["evidence_path"] == evidence
+    assert not output.exists()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "blocked"
+    assert payload["live"] is True
+    rendered = json.dumps(payload)
+    assert "token=must-not-leak" not in rendered
+    assert "raw_provider_payload" not in payload
+
+
+def test_benchmark_cli_live_run_passes_attested_evidence_to_runtime_adapter(
+    tmp_path: Path, monkeypatch, capsys
+):
+    prereg, evaluator, evidence, output = (tmp_path / name for name in ("frozen.json", "evaluator", "evidence.json", "output"))
+    seen: dict[str, object] = {}
+    envelope = {"protocol": {"required_provider_families": ["cursor"]}, "frozen": True}
+    monkeypatch.setattr(benchmark_cli, "load_preregistration", lambda _path: envelope)
+    monkeypatch.setattr(benchmark_cli, "verify_evaluator_root", lambda *_args: {"tasks": {}})
+    monkeypatch.setattr(
+        benchmark_cli, "_live_adapter", lambda *, evidence_path=None: seen.setdefault("evidence_path", evidence_path) or object()
+    )
+    monkeypatch.setattr(
+        benchmark_cli, "live_launch_preflight", lambda *_args, **_kwargs: {"eligible": True, "config_fingerprint": "a" * 64}
+    )
+    from scripts.orchestration import benchmark as benchmark_module
+
+    monkeypatch.setattr(
+        benchmark_module, "run_live_experiment", lambda *_args, **_kwargs: {"cell_count": 9}
+    )
+
+    assert benchmark_cli.main([
+        "run", "--live", "--prereg", str(prereg), "--evaluator-root", str(evaluator),
+        "--output-root", str(output), "--preflight-evidence", str(evidence),
+    ]) == 0
+    assert seen["evidence_path"] == evidence
+    assert json.loads(capsys.readouterr().out)["status"] == "completed"
 
 
 def test_cli_validate_start_status_and_collect_are_offline(tmp_path: Path, capsys):

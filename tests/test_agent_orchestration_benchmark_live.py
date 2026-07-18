@@ -116,10 +116,10 @@ def _public(private: dict, task_class: str) -> dict:
     return {
         "task_id": private["task_id"],
         "task_class": task_class,
-        "base_commit": "abc1234",
+        "base_commit": "0123456789abcdef0123456789abcdef01234567",
         "intent_sha256": benchmark.sha256_value(private["intent"]),
         "prompt_sha256": benchmark.sha256_value(private["task_input"]),
-        "route_policy_sha256": "a" * 64,
+        "route_policy_sha256": "0123456789abcdef" * 4,
         "manual_runbook_sha256": benchmark.sha256_value(private["manual_runbook"]),
         "graph_sha256": benchmark.sha256_value(private["graph"]),
         "acceptance_commands": ["python -m pytest -q"],
@@ -454,6 +454,80 @@ def test_runtime_adapter_binds_verified_inspection_and_keeps_production_quota_un
     cell.mkdir(mode=0o700)
     with pytest.raises(RuntimeErrorSafe, match="config drift"):
         adapter.launch_benchmark_arm(contract, cell_root=cell, reviewer=benchmark._public_task(envelope["protocol"], "sep-1")["reviewer"], block_id="block-sep-1")
+
+
+def test_runtime_adapter_uses_only_attested_evidence_path_for_launch_preflight(
+    tmp_path: Path, monkeypatch
+):
+    evaluator = tmp_path / "evaluator"
+    evaluator.mkdir(mode=0o700)
+    protocol = {
+        "required_provider_families": ["openai", "cursor", "anthropic"],
+        "quota_rules": {
+            family: {
+                "min_headroom_fraction": 0.25,
+                "minimum_cooldown_seconds": 60,
+                "retry_after_formula": "max(retry_after,minimum_cooldown)",
+            }
+            for family in ("openai", "cursor", "anthropic")
+        },
+    }
+    evidence_path = tmp_path / "attested-provider-state.json"
+    evidence_path.write_text('{"opaque":"not provider configuration"}\n', encoding="utf-8")
+    os.chmod(evidence_path, 0o600)
+    supplied = {
+        family: {
+            "auth_ok": True,
+            "host_healthy": True,
+            "provider_incident": False,
+            "headroom_fraction": 1.0,
+            "cooldown_elapsed_seconds": 10**9,
+            "retry_after_seconds": 0,
+            "evidence_status": "attested",
+            "credential": "must-not-be-returned",
+        }
+        for family in protocol["required_provider_families"]
+    }
+    calls: list[tuple[Path, dict]] = []
+
+    def load(path, protocol, **_kwargs):
+        calls.append((path, dict(protocol)))
+        return {"preflight_evidence": supplied}
+
+    monkeypatch.setattr(benchmark, "validate_executable_protocol", lambda value: dict(value))
+    monkeypatch.setattr(benchmark, "verify_evaluator_root", lambda *_args: {"manifest_sha256": "m" * 64})
+    monkeypatch.setattr(benchmark, "load_attested_evidence", load, raising=False)
+    adapter = BenchmarkLiveRuntimeAdapter(Path(__file__).parents[1], evidence_path=evidence_path)
+    observed = adapter.inspect_benchmark_live(protocol, evaluator_root=evaluator)
+    assert calls and calls[0][0] == evidence_path
+    assert observed["preflight_evidence"] == supplied
+    assert benchmark.live_launch_preflight(
+        protocol, adapter=adapter, evaluator_root=evaluator
+    )["eligible"] is True
+
+
+def test_runtime_adapter_does_not_resolve_attested_evidence_symlink_before_loader(
+    tmp_path: Path, monkeypatch
+):
+    evaluator = tmp_path / "evaluator"
+    evaluator.mkdir(mode=0o700)
+    target = tmp_path / "attested-provider-state.json"
+    target.write_text("{}\n", encoding="utf-8")
+    os.chmod(target, 0o600)
+    link = tmp_path / "attested-provider-state-link.json"
+    link.symlink_to(target)
+    protocol = {"required_provider_families": ["openai"]}
+
+    def reject_symlink(path, _protocol, **_kwargs):
+        assert path == link and path.is_symlink()
+        raise benchmark.BenchmarkProtocolError("attested evidence must not be a symlink")
+
+    monkeypatch.setattr(benchmark, "validate_executable_protocol", lambda value: dict(value))
+    monkeypatch.setattr(benchmark, "verify_evaluator_root", lambda *_args: {"manifest_sha256": "m" * 64})
+    monkeypatch.setattr(benchmark, "load_attested_evidence", reject_symlink)
+    adapter = BenchmarkLiveRuntimeAdapter(Path(__file__).parents[1], evidence_path=link)
+    with pytest.raises(RuntimeErrorSafe, match="attested preflight evidence was rejected"):
+        adapter.inspect_benchmark_live(protocol, evaluator_root=evaluator)
 
 
 def test_runtime_adapter_attribution_uses_observed_provider_milliseconds():

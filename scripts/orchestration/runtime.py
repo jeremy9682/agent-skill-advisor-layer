@@ -381,19 +381,34 @@ class BenchmarkLiveRuntimeAdapter:
         *,
         runtime_factory: Any | None = None,
         evidence_factory: Any | None = None,
+        evidence_path: Path | None = None,
     ) -> None:
         self.checkout_root = checkout_root.expanduser().resolve()
         self._config_fingerprint = self._fingerprint()
         self._runtime_factory = runtime_factory
         self._evidence_factory = evidence_factory
+        # Do not resolve here: resolving a final-component symlink before the
+        # attested-evidence loader sees it would bypass that loader's explicit
+        # non-symlink/O_NOFOLLOW trust boundary.
+        self._evidence_path = evidence_path.expanduser() if evidence_path else None
         self._inspection: dict[str, Any] | None = None
         self._launched_cells: set[str] = set()
 
     def _fingerprint(self) -> str:
         digest = hashlib.sha256()
+        for relative in ("routing-policy.yaml", "agent-providers.yaml"):
+            path = self.checkout_root / relative
+            if not path.is_file() or path.is_symlink():
+                raise RuntimeErrorSafe(f"benchmark runtime input unavailable: {relative}")
+            digest.update(relative.encode())
+            digest.update(b"\0")
+            # Preflight deliberately does not parse provider configuration.
+            # Attested route/config digests are validated by the strict
+            # evidence loader; here only local replacement is observable.
+            state = path.stat()
+            digest.update(f"{state.st_dev}:{state.st_ino}:{state.st_size}:{state.st_mtime_ns}".encode())
+            digest.update(b"\0")
         for relative in (
-            "routing-policy.yaml",
-            "agent-providers.yaml",
             "scripts/agent_orchestrate.py",
             "scripts/agent_provider_run.py",
             "scripts/orchestration/runtime.py",
@@ -406,6 +421,12 @@ class BenchmarkLiveRuntimeAdapter:
             digest.update(path.read_bytes())
             digest.update(b"\0")
         return digest.hexdigest()
+
+    def _host_identity(self) -> str:
+        return hashlib.sha256(os.uname().nodename.encode("utf-8")).hexdigest()
+
+    def _checkout_identity(self) -> str:
+        return hashlib.sha256(str(self.checkout_root).encode("utf-8")).hexdigest()
 
     def inspect_benchmark_live(
         self, protocol: Mapping[str, Any], *, evaluator_root: Path
@@ -446,6 +467,23 @@ class BenchmarkLiveRuntimeAdapter:
             supplied = self._evidence_factory(frozen, evaluator)
             if isinstance(supplied, Mapping):
                 evidence = dict(supplied)
+        elif self._evidence_path is not None:
+            if frozen is None:
+                raise RuntimeErrorSafe("attested preflight evidence requires a frozen executable protocol")
+            try:
+                attested = benchmark.load_attested_evidence(
+                    self._evidence_path,
+                    frozen,
+                    expected_host_identity=self._host_identity(),
+                    expected_checkout_identity=self._checkout_identity(),
+                    expected_config_fingerprint=self._config_fingerprint,
+                )
+            except benchmark.BenchmarkProtocolError as exc:
+                raise RuntimeErrorSafe("attested preflight evidence was rejected") from exc
+            supplied = attested.get("preflight_evidence") if isinstance(attested, Mapping) else None
+            if not isinstance(supplied, Mapping):
+                raise RuntimeErrorSafe("attested preflight evidence has no provider observations")
+            evidence = dict(supplied)
         entrypoint = self.checkout_root / "scripts" / "agent_orchestrate.py"
         observed = {
             "capabilities": {
@@ -676,8 +714,9 @@ class BenchmarkLiveRuntimeAdapter:
 def benchmark_live_adapter(
     *,
     checkout_root: Path,
+    evidence_path: Path | None = None,
 ) -> BenchmarkLiveRuntimeAdapter:
-    return BenchmarkLiveRuntimeAdapter(checkout_root)
+    return BenchmarkLiveRuntimeAdapter(checkout_root, evidence_path=evidence_path)
 
 
 def _safe_input_path(repo_root: Path, ref: str) -> Path:
