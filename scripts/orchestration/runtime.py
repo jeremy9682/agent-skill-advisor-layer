@@ -596,6 +596,9 @@ class BenchmarkLiveRuntimeAdapter:
             )
             state = dict(outcome.get("state") or {})
             cleanup_terminal(wrapper, state, preserve=True)
+            trusted_acceptance_failure = self._trusted_acceptance_failure_from_events(
+                events
+            )
         else:
             journal = EventJournal(root / "scheduler.jsonl", str(plan["run_id"]))
             scheduler = Scheduler(
@@ -613,8 +616,6 @@ class BenchmarkLiveRuntimeAdapter:
             trusted_acceptance_failure = self._events_from_journal(
                 events, journal.read(), plan
             )
-        if contract.arm == "B":
-            trusted_acceptance_failure = False
         events.sort(key=lambda row: float(row["at"]))
         accepted = outcome.get("status") == "succeeded"
         now(
@@ -746,6 +747,19 @@ class BenchmarkLiveRuntimeAdapter:
         # A non-success with no explicit safety, quality, or provider signal
         # is a runtime/scheduler concern, not a made-up task verdict.
         return "orchestration-infrastructure-failure"
+
+    @staticmethod
+    def _trusted_acceptance_failure_from_events(
+        events: Sequence[Mapping[str, Any]],
+    ) -> bool:
+        """Recognise only a controller-observed writer acceptance failure."""
+
+        return any(
+            event.get("event") == "acceptance_completed"
+            and event.get("accepted") is False
+            and event.get("failure_class") == "acceptance-failed"
+            for event in events
+        )
 
     @staticmethod
     def _private_artifacts(root: Path) -> list[Path]:

@@ -513,6 +513,22 @@ def run_manual_ready_sets(
                         "result": result,
                         "current_attempt_id": _attempt_id(run_id, task_id),
                     }
+                    if (
+                        result.get("status") == "failed"
+                        and result.get("failure_class") == "acceptance-failed"
+                    ):
+                        # Collect returned a concrete controller acceptance
+                        # result. It proves only failed acceptance, never a
+                        # candidate commit or integration success.
+                        emit(
+                            {
+                                "event": "acceptance_completed",
+                                "at": time.time(),
+                                "task_id": task_id,
+                                "accepted": False,
+                                "failure_class": "acceptance-failed",
+                            }
+                        )
         failed = [task_id for task_id in ids if state["tasks"].get(task_id, {}).get("status") != "succeeded"]
         status = "succeeded" if not failed else "partial-failure"
         emit({"event": "coordination_completed", "at": time.time(), "interval_id": interval, "ready_set": ids, "status": status})

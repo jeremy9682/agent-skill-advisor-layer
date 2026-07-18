@@ -758,6 +758,19 @@ def test_acceptance_failure_needs_trusted_scheduler_projection_for_quality_mappi
     )
 
 
+def test_manual_acceptance_event_is_trusted_only_with_explicit_failure_class():
+    assert BenchmarkLiveRuntimeAdapter._trusted_acceptance_failure_from_events([
+        {
+            "event": "acceptance_completed",
+            "accepted": False,
+            "failure_class": "acceptance-failed",
+        }
+    ]) is True
+    assert BenchmarkLiveRuntimeAdapter._trusted_acceptance_failure_from_events([
+        {"event": "acceptance_completed", "accepted": False}
+    ]) is False
+
+
 def test_integration_failure_class_is_not_lost_from_scheduler_state():
     state = {
         "tasks": {},

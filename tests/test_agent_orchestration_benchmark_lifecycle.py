@@ -153,9 +153,10 @@ def test_compiler_binds_per_writer_acceptance_in_frozen_graph(tmp_path: Path):
 
 
 class _ManualLifecycle:
-    def __init__(self, *, fail: str | None = None):
+    def __init__(self, *, fail: str | None = None, failure_class: str = "failed-unsafe"):
         self.calls: list[str] = []
         self.fail = fail
+        self.failure_class = failure_class
         self.active = 0
         self.max_active = 0
         self.lock = threading.Lock()
@@ -176,7 +177,12 @@ class _ManualLifecycle:
         self.calls.append(f"collect:{launched['id']}")
         with self.lock:
             self.active -= 1
-        return {"status": "failed-unsafe" if self.fail == launched["id"] else "succeeded"}
+        if self.fail == launched["id"]:
+            return {
+                "status": "failed" if self.failure_class == "acceptance-failed" else "failed-unsafe",
+                "failure_class": self.failure_class,
+            }
+        return {"status": "succeeded"}
 
     def finalize_run(self, _plan, _state, **_kwargs):
         self.calls.append("integration")
@@ -219,6 +225,26 @@ def test_b_manual_ready_set_never_uses_scheduler_and_preserves_partial_failure(t
         for event in interval_events
     )
     failed = _ManualLifecycle(fail="writer-b")
-    partial = run_manual_ready_sets(launch, failed)
+    partial_events: list[dict] = []
+    partial = run_manual_ready_sets(launch, failed, event_sink=partial_events.append)
     assert partial["status"] == "partial-failure"
     assert "integration" not in failed.calls and "prepare-review" not in failed.calls
+    assert "acceptance_completed" not in [event["event"] for event in partial_events]
+
+    acceptance_failed = _ManualLifecycle(
+        fail="writer-b", failure_class="acceptance-failed"
+    )
+    acceptance_events: list[dict] = []
+    accepted_partial = run_manual_ready_sets(
+        launch, acceptance_failed, event_sink=acceptance_events.append
+    )
+    assert accepted_partial["status"] == "partial-failure"
+    assert [
+        event for event in acceptance_events if event["event"] == "acceptance_completed"
+    ] == [{
+        "event": "acceptance_completed",
+        "at": pytest.approx(acceptance_events[-2]["at"]),
+        "task_id": "writer-b",
+        "accepted": False,
+        "failure_class": "acceptance-failed",
+    }]
