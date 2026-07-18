@@ -1648,8 +1648,6 @@ def classify_failure(
     stdout: str = "",
 ) -> str:
     combined = f"{stdout}\n{stderr}".lower()
-    if run_status == "timed-out":
-        return timeout_class or "timeout"
     if run_status == "interrupted":
         return "interrupted"
     if run_status in {
@@ -1659,26 +1657,43 @@ def classify_failure(
         "serial-lock-timeout",
     }:
         return run_status
-    if exit_code != 0 and (
+    # A provider can report an explicit terminal failure just before the local
+    # wall-clock/idle deadline fires.  That provider evidence is more specific
+    # than the local timeout and must not be erased by it.  This is
+    # classification of an observed run result only; it is deliberately not a
+    # quota probe or admission gate.
+    # `provider-failed` is set only by the parsed terminal `turn.failed`
+    # event. A bare timeout stderr string is not evidence that the provider
+    # actually failed before the local deadline.
+    provider_failed = run_status != "timed-out" and (
+        exit_code != 0 or run_status == "provider-failed"
+    )
+    if provider_failed and (
         "402" in combined
         or "spending-limit" in combined
+        or "usage limit" in combined
+        or "usage-limit" in combined
+        or "usage_limit" in combined
         or "run out of credits" in combined
+        or "out of credits" in combined
+        or "credit limit" in combined
         or "quota exceeded" in combined
         or "quota exhausted" in combined
         or "insufficient credits" in combined
+        or "credits exhausted" in combined
     ):
         return "quota-exhausted"
-    if exit_code != 0 and "429" in combined and "free-usage-exhausted" in combined:
+    if provider_failed and "429" in combined and "free-usage-exhausted" in combined:
         return "quota-exhausted"
-    if exit_code != 0 and "429" in combined:
+    if provider_failed and "429" in combined:
         return "rate-limited"
-    if exit_code != 0 and (
+    if provider_failed and (
         "529" in combined
         or "overloaded" in combined
         or "upstream overload" in combined
     ):
         return "upstream-overload"
-    if exit_code != 0 and (
+    if provider_failed and (
         "401" in combined
         or "unauthorized" in combined
         or "authentication required" in combined
@@ -1689,17 +1704,19 @@ def classify_failure(
         or "not logged in" in combined
     ):
         return "auth-expired"
+    if provider_failed and (
+        "review data policy" in combined
+        or ("actionrequirederror" in combined and "retention policy" in combined)
+    ):
+        return "action-required-data-policy"
+    if run_status == "timed-out":
+        return timeout_class or "timeout"
     if exit_code != 0 and (
         "timed out" in combined
         or "timeout" in combined
         or "deadline exceeded" in combined
     ):
         return "timeout"
-    if exit_code != 0 and (
-        "review data policy" in combined
-        or ("actionrequirederror" in combined and "retention policy" in combined)
-    ):
-        return "action-required-data-policy"
     if exit_code != 0:
         return "provider-error"
     return "none"
@@ -2411,6 +2428,7 @@ def run_codex_json_process(
         stdout_open = True
         stderr_open = True
         while stdout_open or stderr_open or proc.poll() is None:
+            terminal_turn_observed = False
             now = time.monotonic()
             elapsed = now - started
             if telemetry["first_provider_event_at"] is None and elapsed >= first_budget:
@@ -2477,9 +2495,14 @@ def run_codex_json_process(
                 mark_progress(time.monotonic())
                 telemetry["_last_progress_mono"] = time.monotonic()
                 event_type = str(event.get("type") or "")
-                if event_type == "turn.completed":
+                if event_type in {"turn.completed", "turn.failed"}:
                     telemetry["turn_completed_at"] = utc_now()
-                    # Final answer observed; stop streaming and reap the process.
+                    if event_type == "turn.failed":
+                        # A provider-declared failure is terminal evidence. Do
+                        # not keep waiting until a local deadline overwrites
+                        # its more specific failure class.
+                        run_status = "provider-failed"
+                    # Terminal turn event observed; stop streaming and reap the process.
                     stdout_open = False
                     stderr_open = False
                     try:
@@ -2490,15 +2513,32 @@ def run_codex_json_process(
                         selector.unregister(proc.stderr)
                     except Exception:
                         pass
+                    terminal_turn_observed = True
                     break
+            if terminal_turn_observed:
+                break
         if run_status == "timed-out":
             kill_process_tree(proc)
         elif proc.poll() is None:
             try:
-                proc.wait(timeout=max(1.0, total_budget - (time.monotonic() - started)))
+                remaining_budget = max(1.0, total_budget - (time.monotonic() - started))
+                # A parsed terminal provider failure has already supplied the
+                # authoritative outcome. Give a possibly misbehaving CLI only
+                # a short grace to reap itself; never keep the caller hostage
+                # until the route's full deadline.
+                reap_grace = (
+                    min(2.0, remaining_budget)
+                    if run_status == "provider-failed"
+                    else remaining_budget
+                )
+                proc.wait(timeout=reap_grace)
             except subprocess.TimeoutExpired:
-                run_status = "timed-out"
-                telemetry["timeout_class"] = "timeout_total"
+                # Preserve an already observed provider terminal failure over
+                # a later local reaping deadline. The process is still killed
+                # so this cannot leak a worker.
+                if run_status != "provider-failed":
+                    run_status = "timed-out"
+                    telemetry["timeout_class"] = "timeout_total"
                 kill_process_tree(proc)
         # Drain remaining stderr
         if proc.stderr is not None:
@@ -2509,6 +2549,10 @@ def run_codex_json_process(
             except ValueError:
                 pass
         returncode = 124 if run_status == "timed-out" else int(proc.returncode or 0)
+        if run_status == "provider-failed" and returncode == 0:
+            # A JSON terminal failure is authoritative even if a buggy or
+            # wrapped CLI exits zero after emitting it.
+            returncode = 1
         display = extract_codex_agent_message(events)
         raw = "".join(stdout_chunks)
         completed = subprocess.CompletedProcess(
@@ -3185,9 +3229,12 @@ def latest_provider_evidence(
         failure = str(row.get("failure_class") or "none")
         if failure == "quota-exhausted":
             return {
-                "status": "quota-exhausted",
+                # A journal receipt is historical outcome evidence, not a
+                # subscription/credit state. Keep the real in-run failure
+                # visible without inventing a cooldown or changing readiness.
+                "status": "recent-in-run-provider-outcome",
                 "observed_at": observed_at,
-                "cooldown": str(row.get("quota_cooldown") or "unknown"),
+                "failure_class": failure,
             }
         if row.get("run_status") == "completed" and row.get("exit_code") == 0:
             health_status = str(
@@ -3223,9 +3270,8 @@ def latest_provider_evidence(
         return {
             "status": failure if failure != "none" else "provider-error",
             "observed_at": observed_at,
-            "cooldown": "unknown",
         }
-    return {"status": "no-live-evidence", "cooldown": "not-applicable"}
+    return {"status": "no-live-evidence"}
 
 
 def provider_model_evidence(config: dict, repo: str, provider_id: str) -> dict:
@@ -3356,11 +3402,11 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
                     }
                 )
             live = latest_provider_evidence(config, repo, provider_id, binding["model"])
-            if live["status"] == "quota-exhausted":
-                blockers.append(
+            if live["status"] == "recent-in-run-provider-outcome":
+                warnings.append(
                     {
-                        "code": "live-quota-exhausted",
-                        "detail": f"cooldown:{live.get('cooldown', 'unknown')}",
+                        "code": "recent-in-run-provider-outcome",
+                        "detail": str(live.get("failure_class") or "unknown"),
                     }
                 )
             elif live["status"] in {

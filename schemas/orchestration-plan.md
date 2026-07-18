@@ -65,8 +65,10 @@ ownership. Read-only tasks cannot claim paths.
 
 An omitted deadline inherits the governed route timeout (or the V1 default of
 300 seconds). An explicit deadline cannot exceed it. Retry count is `1..3` and
-the only retryable classes are `provider-transient`, `provider-rate-limit`, and
-`adapter-transient`.
+the only retryable classes are `provider-transient`, `provider-rate-limit`,
+`provider-preflight-transient`, and `adapter-transient`. The preflight class
+is for a bounded provider-wrapper failure before a provider run is established;
+it is not a quota/usage probe and does not make quota exhaustion retryable.
 
 Review tasks use a governed task shape containing `review`, depend on every
 task in `reviewer_for`, and cannot share one reviewed target with another

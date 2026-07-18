@@ -254,6 +254,11 @@ Failure receipts inspect both stdout and stderr. Auth expiry, quota exhaustion,
 rate limiting and provider overload are separated as `auth-expired`,
 `quota-exhausted`, `rate-limited`, and `upstream-overload`; textual deadline or
 timeout failures remain `timeout` rather than generic `provider-error`.
+When a provider emits a terminal failure before a local wall-clock or idle
+deadline, that observed provider failure wins over the later timeout. In
+particular, a real in-run usage-limit/credits response is recorded as
+`quota-exhausted`; this is result classification, not quota monitoring or a
+preflight probe.
 
 `agent-run routes` and `agent-run doctor` expose effective route timeout and
 serial group. Doctor emits `serial-lock-disabled` when no lock group can be
@@ -309,6 +314,9 @@ timestamps more than five minutes in the future, while tolerating minor host
 clock skew. Subscription quota/cooldown is deliberately outside the pilot
 preflight contract: it is neither collected nor inferred, and an in-run rate
 limit is recorded as an execution outcome rather than a preflight blocker.
+Likewise, a historical journal `quota-exhausted` receipt is presented only as
+the neutral `recent-in-run-provider-outcome` warning; doctor does not infer a
+cooldown or turn it into a readiness blocker.
 
 `model_observed` is honest audit metadata for every provider: when adapters still
 report `unknown`, the journal records `run-succeeded-health-unverified` rather

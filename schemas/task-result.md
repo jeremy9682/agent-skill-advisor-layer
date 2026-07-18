@@ -9,8 +9,11 @@ Required fields:
 - `status`: `succeeded`, `failed`, `timed-out`, or `failed-unsafe`.
 
 Failure results also carry a stable `failure_class`. The only scheduler retry
-classes are `provider-transient`, `provider-rate-limit`, and
-`adapter-transient`; all other failures are terminal. Result evidence may carry
+classes are `provider-transient`, `provider-rate-limit`,
+`provider-preflight-transient`, and `adapter-transient`; all other failures are
+terminal. `provider-preflight-transient` is limited to a bounded wrapper
+failure before a provider run exists; it is not quota/usage monitoring and
+does not make observed quota exhaustion retryable. Result evidence may carry
 IDs, timestamps, receipt/artifact hashes and privacy-safe artifact pointers. It
 must not contain prompts, responses, transcripts, credentials, cookies,
 account identifiers, full commands or provider configuration bodies.

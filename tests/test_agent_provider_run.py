@@ -781,7 +781,7 @@ def test_run_public_seam_named_cursor_health_unverified_exits_three(
     assert row["provider_health_evidence"]["status"] == "unverified"
 
 
-def test_route_doctor_explains_catalog_quota_evidence_and_blockers(
+def test_route_doctor_keeps_historical_quota_outcome_as_nonblocking_warning(
     tmp_path,
     monkeypatch,
 ):
@@ -854,25 +854,29 @@ def test_route_doctor_explains_catalog_quota_evidence_and_blockers(
     assert cursor["catalog_model_count"] == 3
     assert len(cursor["catalog_sha256"]) == 64
     grok = next(row for row in report["providers"] if row["provider_id"] == "grok")
-    assert grok["live_evidence"]["status"] == "quota-exhausted"
-    assert grok["live_evidence"]["cooldown"] == "unknown"
-    assert grok["model_evidence"]["grok-4.5"]["status"] == "quota-exhausted"
+    assert grok["live_evidence"] == {
+        "status": "recent-in-run-provider-outcome",
+        "observed_at": active_now,
+        "failure_class": "quota-exhausted",
+    }
+    assert grok["model_evidence"]["grok-4.5"]["status"] == "recent-in-run-provider-outcome"
 
     route = report["routes"][0]
     assert route["route"] == "fable_final_review"
     assert route["status"] == "ready"
     assert route["blockers"] == []
-    assert report["reviewer_graph"]["anthropic"] == ["openai"]
-    assert report["reviewer_graph"]["google"] == ["anthropic", "openai"]
+    assert report["reviewer_graph"]["anthropic"] == ["openai", "xai"]
+    assert report["reviewer_graph"]["google"] == ["anthropic", "openai", "xai"]
 
     quota_report = agent_run.build_route_doctor(
         data, route_name="final_review", repo="agent-skill-advisor-layer"
     )
-    assert quota_report["routes"][0]["status"] == "blocked"
-    assert quota_report["routes"][0]["blockers"] == [
+    assert quota_report["routes"][0]["status"] == "ready"
+    assert quota_report["routes"][0]["blockers"] == []
+    assert quota_report["routes"][0]["warnings"] == [
         {
-            "code": "live-quota-exhausted",
-            "detail": "cooldown:unknown",
+            "code": "recent-in-run-provider-outcome",
+            "detail": "quota-exhausted",
         }
     ]
 
@@ -3579,12 +3583,6 @@ def test_classify_route_status_ready_degraded_blocked_disabled():
     )
     assert (
         agent_run.classify_route_status(
-            [{"code": "live-quota-exhausted", "detail": "cooldown:unknown"}]
-        )
-        == "blocked"
-    )
-    assert (
-        agent_run.classify_route_status(
             [
                 {"code": "route-policy-disabled", "detail": "x"},
                 {"code": "live-evidence-unverified", "detail": "y"},
@@ -3730,6 +3728,19 @@ def test_classify_failure_uses_timeout_class():
             "timed-out", 124, "", timeout_class="timeout_first_event"
         )
         == "timeout_first_event"
+    )
+
+
+def test_classify_failure_preserves_observed_usage_limit_over_timeout():
+    assert (
+        agent_run.classify_failure(
+            "provider-failed",
+            1,
+            "provider-timeout",
+            timeout_class="timeout_total",
+            stdout='{"message":"You have hit your usage limit. Try again later."}',
+        )
+        == "quota-exhausted"
     )
 
 
@@ -4061,6 +4072,128 @@ def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypat
     assert agent_run.extract_codex_model_from_events(
         [{"type": "x", "model": "gpt-5.6-sol"}]
     ) == "gpt-5.6-sol"
+
+
+def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limit(
+    monkeypatch,
+):
+    # This is shaped like the V12 failure stream: Codex begins the thread and
+    # turn, reports an item-level error and top-level error, then emits its
+    # terminal turn.failed event. It is a replay only; no provider is called.
+    lines = [
+        json.dumps({"type": "thread.started", "thread_id": "v12-thread"}) + "\n",
+        json.dumps({"type": "turn.started"}) + "\n",
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "error",
+                    "message": "You have hit your usage limit. Try again later.",
+                },
+            }
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "error",
+                "message": "You have hit your usage limit. Try again later.",
+            }
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "turn.failed",
+                "error": {"message": "You have hit your usage limit. Try again later."},
+            }
+        )
+        + "\n",
+    ]
+
+    class _QueueStream:
+        def __init__(self, queued):
+            self._lines = list(queued)
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = _QueueStream(lines)
+            self.stderr = _QueueStream([])
+            self.returncode = None
+            self.wait_timeouts = []
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.wait_timeouts.append(timeout)
+            raise subprocess.TimeoutExpired("codex", timeout)
+
+    fake_proc = FakeProc()
+    monkeypatch.setattr(agent_run.subprocess, "Popen", lambda *a, **k: fake_proc)
+
+    class RecordingSelector:
+        def __init__(self):
+            self._streams = []
+
+        def register(self, stream, _mask, label):
+            self._streams.append((stream, label))
+
+        def unregister(self, stream):
+            self._streams = [
+                (registered_stream, label)
+                for registered_stream, label in self._streams
+                if registered_stream is not stream
+            ]
+
+        def select(self, timeout=None):
+            for stream, label in list(self._streams):
+                if label == "stdout" and stream._lines:
+                    return [((type("K", (), {"fileobj": stream, "data": label})()), None)]
+            return []
+
+    import selectors as _selectors
+
+    monkeypatch.setattr(_selectors, "DefaultSelector", RecordingSelector)
+    proc, status, telemetry, events = agent_run.run_codex_json_process(
+        ["codex", "exec", "--json", "hi"],
+        cwd=Path("."),
+        env={},
+        timeout_seconds=10,
+    )
+
+    assert status == "provider-failed"
+    # Reaping can still hit its local deadline, but it cannot overwrite the
+    # already observed terminal provider failure.
+    assert proc.returncode == -9
+    assert fake_proc.wait_timeouts
+    assert 0 < fake_proc.wait_timeouts[0] <= 2.0
+    assert telemetry["turn_completed_at"]
+    assert telemetry["timeout_class"] is None
+    assert [event["type"] for event in events] == [
+        "thread.started",
+        "turn.started",
+        "item.completed",
+        "error",
+        "turn.failed",
+    ]
+    assert (
+        agent_run.classify_failure(
+            status,
+            proc.returncode,
+            proc.stderr,
+            timeout_class=telemetry["timeout_class"],
+            stdout=proc.stdout,
+        )
+        == "quota-exhausted"
+    )
 
 
 def test_doctor_task_focus_and_reviewer_graph_gaps(tmp_path, monkeypatch):
