@@ -39,6 +39,7 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 REVIEW_VERDICT_PREFIX = "AGENT_RUN_REVIEW_VERDICT:"
 REVIEW_VERDICT_PASS = "AGENT_RUN_REVIEW_VERDICT: PASS"
 REVIEW_VERDICT_FAIL = "AGENT_RUN_REVIEW_VERDICT: FAIL"
+MAX_NATURAL_EXIT_SETTLE_SECONDS = 0.25
 
 
 def _sha256(data: bytes) -> str:
@@ -266,6 +267,7 @@ class NativeAgentRunBridge:
         no_skills: bool = False,
         terminate_grace_seconds: float = 2.0,
         poll_seconds: float = 0.05,
+        natural_exit_settle_seconds: float = 0.20,
     ) -> None:
         self.artifact_root = artifact_root.expanduser().resolve()
         # Never dispatch through a host-global ``agent-run`` symlink: it may
@@ -278,6 +280,15 @@ class NativeAgentRunBridge:
         self.no_skills = no_skills
         self.terminate_grace_seconds = terminate_grace_seconds
         self.poll_seconds = poll_seconds
+        if (
+            isinstance(natural_exit_settle_seconds, bool)
+            or not isinstance(natural_exit_settle_seconds, (int, float))
+            or not 0 < natural_exit_settle_seconds <= MAX_NATURAL_EXIT_SETTLE_SECONDS
+        ):
+            raise BridgeError(
+                "natural_exit_settle_seconds must be a positive bounded duration"
+            )
+        self.natural_exit_settle_seconds = float(natural_exit_settle_seconds)
 
     def prepare_prompt(self, task: Mapping[str, Any]) -> tuple[str, dict[str, int]]:
         started = time.perf_counter_ns()
@@ -506,6 +517,24 @@ class NativeAgentRunBridge:
             "residual": residual,
         }
 
+    def _group_persists_after_natural_exit_settle(self, launch: BridgeLaunch) -> bool:
+        """Give a just-exited wrapper's descendants a tiny bounded exit window.
+
+        The group identity is the PGID captured from the launched wrapper.  This
+        method only delays cleanup; it never turns a still-live group into a
+        success and it never widens the process target beyond that recorded PGID.
+        """
+
+        if not _group_alive(launch.process_group_id):
+            return False
+        deadline = time.monotonic() + self.natural_exit_settle_seconds
+        while _group_alive(launch.process_group_id):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(remaining, max(0.001, self.poll_seconds)))
+        return _group_alive(launch.process_group_id)
+
     def _wait(self, launch: BridgeLaunch) -> tuple[int | None, bool, dict[str, Any]]:
         timed_out = False
         if launch.process is not None:
@@ -535,8 +564,10 @@ class NativeAgentRunBridge:
                 timed_out = True
                 return None, timed_out, self._terminate_group(launch)
             returncode = None
-        residual = _group_alive(launch.process_group_id)
-        if residual:
+        # ``wait``/the PID-fingerprint loop established that this exact wrapper
+        # has exited.  Before sending a signal to its recorded PGID, tolerate a
+        # short-lived provider child that is already naturally shutting down.
+        if self._group_persists_after_natural_exit_settle(launch):
             # Clean up a leaked descendant, but retain failed-unsafe semantics.
             cleanup = self._terminate_group(launch)
             cleanup["unexpected_residual"] = True

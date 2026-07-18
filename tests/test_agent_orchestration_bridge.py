@@ -5,6 +5,7 @@ import json
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -355,6 +356,68 @@ def test_unexpected_descendant_is_cleaned_but_attempt_stays_failed_unsafe(tmp_pa
     assert result["failure_class"] == "residual-provider-process"
     assert result["process_cleanup"]["unexpected_residual"] is True
     assert result["process_cleanup"]["residual"] is False
+
+
+def test_short_lived_descendant_naturally_exits_before_residual_cleanup(
+    tmp_path, monkeypatch
+):
+    """A child that exits just after its wrapper must not be killed or blamed."""
+
+    line = json.dumps({"agent_run": receipt()})
+    wrapper = executable_wrapper(
+        tmp_path,
+        "import subprocess,sys,time\n"
+        "subprocess.Popen([sys.executable,'-c','import time; time.sleep(0.03)'])\n"
+        f"print({line!r})\nprint('answer')\nsys.stdout.flush()",
+    )
+    bridge = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", binary=str(wrapper),
+        natural_exit_settle_seconds=0.15, terminate_grace_seconds=0.01,
+        poll_seconds=0.005,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_terminate_group",
+        lambda _launch: (_ for _ in ()).throw(AssertionError("must not send TERM")),
+    )
+
+    launch = bridge.launch_task(
+        base_task(tmp_path), run_id="orch-short-child", attempt_id="attempt-short-child",
+        generation=1,
+    )
+    result = bridge.collect_task(launch)
+
+    assert result["status"] == "succeeded"
+    assert result["process_cleanup"] == {"status": "succeeded", "residual": False}
+
+
+def test_persistent_descendant_waits_briefly_then_keeps_failed_unsafe_cleanup(tmp_path):
+    """The settle window is bounded; a real descendant remains a safety failure."""
+
+    line = json.dumps({"agent_run": receipt()})
+    wrapper = executable_wrapper(
+        tmp_path,
+        "import subprocess,sys,time\n"
+        "subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'])\n"
+        f"print({line!r})\nprint('answer')\nsys.stdout.flush()",
+    )
+    bridge = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", binary=str(wrapper),
+        natural_exit_settle_seconds=0.12, terminate_grace_seconds=0.01,
+        poll_seconds=0.005,
+    )
+    launch = bridge.launch_task(
+        base_task(tmp_path), run_id="orch-persistent-child", attempt_id="attempt-persistent-child",
+        generation=1,
+    )
+    started = time.monotonic()
+    result = bridge.collect_task(launch)
+
+    assert time.monotonic() - started >= 0.08
+    assert result["status"] == "failed-unsafe"
+    assert result["failure_class"] == "residual-provider-process"
+    assert result["process_cleanup"]["unexpected_residual"] is True
+    assert result["process_cleanup"]["term_sent"] is True
 
 
 def test_reconcile_terminal_attempt_from_private_streams_never_relaunches(tmp_path):
