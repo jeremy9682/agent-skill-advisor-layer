@@ -2138,6 +2138,37 @@ def extract_codex_agent_message(events: list[dict]) -> str:
     return texts[-1] if texts else ""
 
 
+def extract_codex_terminal_failure_evidence(events: list[dict]) -> str:
+    """Return in-memory-only JSON evidence from Codex terminal error events.
+
+    The caller uses this solely for stable failure classification. It is kept
+    separate from user-facing stdout and is never copied into the journal.
+    """
+    failure_events: list[dict] = []
+    for event in events:
+        event_type = str(event.get("type") or "")
+        if event_type in {"error", "turn.failed"}:
+            failure_events.append(event)
+            continue
+        if event_type != "item.completed":
+            continue
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "error":
+            failure_events.append(event)
+    return "\n".join(
+        json.dumps(event, ensure_ascii=False, sort_keys=True)
+        for event in failure_events
+    )
+
+
+def codex_failure_classification_stdout(
+    display_stdout: str, events: list[dict]
+) -> str:
+    """Prefer terminal error evidence over potentially unrelated display text."""
+    terminal_evidence = extract_codex_terminal_failure_evidence(events)
+    return terminal_evidence if terminal_evidence else display_stdout
+
+
 def extract_claude_agent_message(events: list[dict]) -> str:
     results: list[str] = []
     assistant_texts: list[str] = []
@@ -2986,12 +3017,17 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         )
     stdout = proc.stdout or ""
     stderr = proc.stderr or ""
+    classification_stdout = stdout
+    if provider_id == "codex" and run_status == "provider-failed":
+        classification_stdout = codex_failure_classification_stdout(
+            stdout, stream_events
+        )
     failure_class = classify_failure(
         run_status,
         proc.returncode,
         stderr,
         timeout_class=stage_telemetry.get("timeout_class"),
-        stdout=stdout,
+        stdout=classification_stdout,
     )
     if (
         provider_id in {"claude", "codex"}

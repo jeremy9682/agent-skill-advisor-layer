@@ -4087,6 +4087,16 @@ def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limi
             {
                 "type": "item.completed",
                 "item": {
+                    "type": "agent_message",
+                    "text": "Partial result before the provider failure.",
+                },
+            }
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
                     "type": "error",
                     "message": "You have hit your usage limit. Try again later.",
                 },
@@ -4173,6 +4183,8 @@ def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limi
     # Reaping can still hit its local deadline, but it cannot overwrite the
     # already observed terminal provider failure.
     assert proc.returncode == -9
+    assert proc.stdout == "Partial result before the provider failure."
+    assert "usage limit" not in proc.stdout.lower()
     assert fake_proc.wait_timeouts
     assert 0 < fake_proc.wait_timeouts[0] <= 2.0
     assert telemetry["turn_completed_at"]
@@ -4181,18 +4193,128 @@ def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limi
         "thread.started",
         "turn.started",
         "item.completed",
+        "item.completed",
         "error",
         "turn.failed",
     ]
+    classification_evidence = agent_run.extract_codex_terminal_failure_evidence(events)
+    assert "usage limit" in classification_evidence.lower()
     assert (
         agent_run.classify_failure(
             status,
             proc.returncode,
             proc.stderr,
             timeout_class=telemetry["timeout_class"],
-            stdout=proc.stdout,
+            stdout=f"{proc.stdout}\n{classification_evidence}",
         )
         == "quota-exhausted"
+    )
+
+
+def test_codex_terminal_failure_classification_evidence_is_not_journaled(
+    tmp_path, monkeypatch, capsys
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(agent_run, "binary_version", lambda *_args: "test-codex")
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    private_error = "You have hit your usage limit. private-terminal-marker"
+    stream_events = [
+        {"type": "thread.started", "thread_id": "terminal-evidence-thread"},
+        {"type": "turn.started"},
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "Visible partial result.",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {"type": "error", "message": private_error},
+        },
+        {"type": "error", "message": private_error},
+        {"type": "turn.failed", "error": {"message": private_error}},
+    ]
+
+    def fake_codex_stream(command, **_kwargs):
+        telemetry = agent_run.empty_stage_telemetry()
+        telemetry["turn_completed_at"] = agent_run.utc_now()
+        telemetry["stream_mode"] = "codex-json"
+        return (
+            subprocess.CompletedProcess(
+                command, -9, stdout="Visible partial result.", stderr=""
+            ),
+            "provider-failed",
+            telemetry,
+            stream_events,
+        )
+
+    monkeypatch.setattr(agent_run, "run_codex_json_process", fake_codex_stream)
+    args = SimpleNamespace(
+        provider="codex",
+        task_shape=None,
+        model="gpt-5.6-terra",
+        effort="medium",
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=False,
+        prompt="terminal evidence replay",
+    )
+
+    assert agent_run.run_provider(args, data) == -9
+    captured = capsys.readouterr()
+    assert "Visible partial result." in captured.out
+    assert private_error not in captured.out
+    assert private_error not in captured.err
+    journal_path = next((tmp_path / "journal").glob("*.jsonl"))
+    journal_text = journal_path.read_text()
+    assert private_error not in journal_text
+    row = json.loads(journal_text.splitlines()[-1])
+    assert row["failure_class"] == "quota-exhausted"
+    assert row["run_status"] == "provider-failed"
+    assert row["stdout_sha256"] == agent_run.sha256_text("Visible partial result.")
+    assert row["stdout_length"] == len("Visible partial result.")
+
+
+def test_codex_terminal_error_evidence_outranks_misleading_agent_message():
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "The UI label says usage limit, but this is not the failure.",
+            },
+        },
+        {
+            "type": "turn.failed",
+            "error": {"message": "HTTP 401 Unauthorized: token expired"},
+        },
+    ]
+    classification_stdout = agent_run.codex_failure_classification_stdout(
+        "The UI label says usage limit, but this is not the failure.", events
+    )
+
+    assert "usage limit" not in classification_stdout.lower()
+    assert "401 unauthorized" in classification_stdout.lower()
+    assert (
+        agent_run.classify_failure(
+            "provider-failed", 1, "", stdout=classification_stdout
+        )
+        == "auth-expired"
     )
 
 
