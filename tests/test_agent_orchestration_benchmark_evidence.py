@@ -302,7 +302,11 @@ def test_live_runner_rechecks_each_block_and_keeps_prior_receipts_when_later_gat
     )
     monkeypatch.setattr(benchmark, "build_launch_contract", fake_contract)
     monkeypatch.setattr(benchmark, "_public_task", lambda *_args: {"reviewer": {}})
-    monkeypatch.setattr(benchmark, "_live_outcome", lambda *_args, **_kwargs: ([], []))
+    monkeypatch.setattr(
+        benchmark,
+        "_live_outcome",
+        lambda *_args, **_kwargs: ([], [], {}),
+    )
     monkeypatch.setattr(
         benchmark,
         "derive_trial_receipt",
