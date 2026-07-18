@@ -851,6 +851,26 @@ def provider_family(provider_id: str, config: dict, model_id: str | None = None)
     return str(provider.get("family") or provider_id)
 
 
+def journal_model_family(
+    provider_id: str,
+    config: dict,
+    model_requested: str,
+    session: dict,
+    health_evidence: dict,
+) -> str:
+    family = provider_family(provider_id, config, str(model_requested))
+    if family != "undisclosed":
+        return family
+    if provider_id not in {"cursor", "grok"}:
+        return family
+    observed = str(session.get("model_observed") or "unknown")
+    if observed in {"", "unknown", "auto", "auto-undisclosed"}:
+        return family
+    if not str(health_evidence.get("status") or "").startswith("verified-"):
+        return family
+    return provider_family(provider_id, config, observed)
+
+
 def find_run_record(run_id: str, config: dict, expected_repo: str) -> dict:
     path = journal_path(config, expected_repo)
     try:
@@ -932,7 +952,7 @@ def validate_review_independence(
                 )
         observed_family = provider_family(producer_id, config, producer_observed)
         if (
-            producer_family not in {"", "unknown"}
+            producer_family not in {"", "unknown", "undisclosed"}
             and producer_family != observed_family
         ):
             raise ProviderRunError(
@@ -2155,7 +2175,9 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         "risk_overlay": risk_overlay,
         "mode": args.mode,
         "model_requested": model,
-        "model_family": provider_family(provider_id, config, str(model)),
+        "model_family": journal_model_family(
+            provider_id, config, str(model), session, health_evidence
+        ),
         "model_catalog_status": model_catalog["status"],
         "effort_requested": effort or "provider-default",
         "governance_effort": governance_effort,
