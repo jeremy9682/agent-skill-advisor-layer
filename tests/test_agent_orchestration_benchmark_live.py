@@ -27,9 +27,6 @@ class _LiveAdapter:
                 "auth_ok": True,
                 "host_healthy": True,
                 "provider_incident": False,
-                "headroom_fraction": 1.0,
-                "cooldown_elapsed_seconds": 10**9,
-                "retry_after_seconds": 0,
             }
             for family in protocol["required_provider_families"]
         }
@@ -191,13 +188,13 @@ def _fixture(
         "invalid_trial_rules": benchmark.expected_invalid_trial_rules(),
         "review_warning_rule": benchmark.expected_review_warning_rule(),
         "required_provider_families": ["openai", "cursor", "anthropic"],
-        "quota_rules": {
-            family: {
-                "min_headroom_fraction": 0.25,
-                "minimum_cooldown_seconds": 60,
-                "retry_after_formula": "max(retry_after,minimum_cooldown)",
-            }
-            for family in ("openai", "cursor", "anthropic")
+        "provider_preflight_policy": {
+            "mode": "auth-host-incident-v1",
+            "quota_monitoring": False,
+            "inside_block_rate_limit": "treatment-outcome",
+            "evidence_schema_version": 2,
+            "max_freshness_seconds": 3600,
+            "future_skew_seconds": 30.0,
         },
         "tasks": public_rows,
         "reserve_tasks": reserve_rows,
@@ -234,24 +231,42 @@ def test_private_evaluator_root_requires_exact_mode_and_hash(tmp_path: Path):
         benchmark.verify_evaluator_root(envelope["protocol"], evaluator)
 
 
-def test_pre_block_unknown_or_insufficient_postpones_whole_block(tmp_path: Path):
+def test_pre_block_missing_or_unhealthy_evidence_postpones_whole_block(tmp_path: Path):
     envelope, _, _ = _fixture(tmp_path)
     protocol = envelope["protocol"]
     assert benchmark.pre_block_gate(protocol, {})["action"] == "postpone-whole-block"
     evidence = {
         family: {
-            "auth_ok": True,
+            "auth_ok": False,
             "host_healthy": True,
             "provider_incident": False,
-            "headroom_fraction": 0.1,
-            "cooldown_elapsed_seconds": 999,
-            "retry_after_seconds": 0,
         }
         for family in protocol["required_provider_families"]
     }
     result = benchmark.pre_block_gate(protocol, evidence)
     assert result["eligible"] is False
-    assert {row["reason"] for row in result["reasons"]} == {"headroom-insufficient"}
+    assert {row["reason"] for row in result["reasons"]} == {"auth-failure"}
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_pre_block_requires_explicit_no_incident(tmp_path: Path, missing: bool):
+    envelope, _, _ = _fixture(tmp_path)
+    protocol = envelope["protocol"]
+    evidence = {
+        family: {
+            "auth_ok": True,
+            "host_healthy": True,
+            "provider_incident": False,
+        }
+        for family in protocol["required_provider_families"]
+    }
+    if missing:
+        evidence["cursor"].pop("provider_incident")
+    else:
+        evidence["cursor"]["provider_incident"] = None
+    result = benchmark.pre_block_gate(protocol, evidence)
+    assert result["eligible"] is False
+    assert {row["reason"] for row in result["reasons"]} == {"provider-incident"}
 
 
 @pytest.mark.parametrize(
@@ -384,11 +399,11 @@ def test_live_cli_fails_closed_without_matching_checkout_adapter(tmp_path: Path,
     ]) == 3
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "blocked" and result["live"] is True
-    # The checkout-local adapter now exists, but an unobserved quota/headroom
-    # state must still postpone the whole block without synthetic evidence.
-    assert "whole-block-headroom-unknown" in {
-        row["code"] for row in result["blockers"]
-    }
+    # The checkout-local adapter needs healthy provider evidence before launch;
+    # no quota-derived blocker may be emitted.
+    codes = {row["code"] for row in result["blockers"]}
+    assert codes & {"whole-block-auth-failure", "whole-block-host-unhealthy"}
+    assert not any("headroom" in code or "quota" in code for code in codes)
     assert not output.exists()
 
 
@@ -422,30 +437,30 @@ def test_live_runner_records_failed_unsafe_without_replacement(tmp_path: Path):
     assert report["evaluation"]["evaluation"]["decision"] == "pilot-failed-unsafe"
 
 
-def test_live_preflight_unknown_quota_fails_closed(tmp_path: Path):
+def test_live_preflight_missing_provider_evidence_fails_closed(tmp_path: Path):
     envelope, evaluator, _ = _fixture(tmp_path)
 
-    class MissingQuota(_LiveAdapter):
+    class MissingEvidence(_LiveAdapter):
         def inspect_benchmark_live(self, protocol, *, evaluator_root):
             observed = super().inspect_benchmark_live(protocol, evaluator_root=evaluator_root)
             observed["preflight_evidence"] = {}
             return observed
 
     preflight = benchmark.live_launch_preflight(
-        envelope["protocol"], adapter=MissingQuota(), evaluator_root=evaluator
+        envelope["protocol"], adapter=MissingEvidence(), evaluator_root=evaluator
     )
     assert preflight["eligible"] is False
-    assert any("headroom-unknown" in row["code"] for row in preflight["blockers"])
+    assert any("provider-evidence-missing" in row["code"] for row in preflight["blockers"])
 
 
-def test_runtime_adapter_binds_verified_inspection_and_keeps_production_quota_unknown(tmp_path: Path, monkeypatch):
+def test_runtime_adapter_binds_verified_inspection_and_keeps_production_evidence_missing(tmp_path: Path, monkeypatch):
     envelope, evaluator, _ = _fixture(tmp_path)
     checkout = Path(__file__).parents[1]
     adapter = BenchmarkLiveRuntimeAdapter(checkout)
     observed = adapter.inspect_benchmark_live(envelope["protocol"], evaluator_root=evaluator)
     assert all(row["evidence_status"] == "unknown-blocked" for row in observed["preflight_evidence"].values())
     assert adapter._inspection is not None
-    # No CLI switch can turn this production adapter's unknown headroom into a
+    # No CLI switch can turn this production adapter's missing provider evidence into a
     # launchable observation; tests must opt in through its injected factory.
     assert benchmark.live_launch_preflight(envelope["protocol"], adapter=adapter, evaluator_root=evaluator)["eligible"] is False
     monkeypatch.setattr(adapter, "_fingerprint", lambda: "0" * 64)
@@ -463,13 +478,13 @@ def test_runtime_adapter_uses_only_attested_evidence_path_for_launch_preflight(
     evaluator.mkdir(mode=0o700)
     protocol = {
         "required_provider_families": ["openai", "cursor", "anthropic"],
-        "quota_rules": {
-            family: {
-                "min_headroom_fraction": 0.25,
-                "minimum_cooldown_seconds": 60,
-                "retry_after_formula": "max(retry_after,minimum_cooldown)",
-            }
-            for family in ("openai", "cursor", "anthropic")
+        "provider_preflight_policy": {
+            "mode": "auth-host-incident-v1",
+            "quota_monitoring": False,
+            "inside_block_rate_limit": "treatment-outcome",
+            "evidence_schema_version": 2,
+            "max_freshness_seconds": 3600,
+            "future_skew_seconds": 30.0,
         },
     }
     evidence_path = tmp_path / "attested-provider-state.json"
@@ -480,9 +495,6 @@ def test_runtime_adapter_uses_only_attested_evidence_path_for_launch_preflight(
             "auth_ok": True,
             "host_healthy": True,
             "provider_incident": False,
-            "headroom_fraction": 1.0,
-            "cooldown_elapsed_seconds": 10**9,
-            "retry_after_seconds": 0,
             "evidence_status": "attested",
             "credential": "must-not-be-returned",
         }

@@ -47,9 +47,8 @@ INVALID_TRIAL_REASONS = {
 PRE_BLOCK_POSTPONE_REASONS = {
     "auth-failure",
     "config-unavailable",
-    "headroom-insufficient",
-    "headroom-unknown",
     "host-unhealthy",
+    "provider-evidence-missing",
     "provider-incident",
 }
 REVIEW_SLOW_ABSOLUTE_SECONDS = 300.0
@@ -83,8 +82,8 @@ SENSITIVE_KEY_PARTS = (
     "session",
     "token",
 )
-ATTESTED_EVIDENCE_VERSION = 1
-ATTESTED_EVIDENCE_MAX_FRESHNESS_SECONDS = 900.0
+ATTESTED_EVIDENCE_VERSION = 2
+ATTESTED_EVIDENCE_MAX_FRESHNESS_SECONDS = 3600.0
 ATTESTED_EVIDENCE_DEFAULT_FUTURE_SKEW_SECONDS = 30.0
 _ATTESTED_EVIDENCE_KEYS = frozenset(
     {
@@ -107,9 +106,6 @@ _ATTESTED_FAMILY_KEYS = frozenset(
         "auth_ok",
         "host_healthy",
         "provider_incident",
-        "headroom_fraction",
-        "cooldown_elapsed_seconds",
-        "retry_after_seconds",
     }
 )
 _ATTESTED_EVIDENCE_ALL_KEYS = _ATTESTED_EVIDENCE_KEYS | _ATTESTED_FAMILY_KEYS
@@ -251,7 +247,7 @@ def validate_attested_evidence_bundle(
     expected_host_identity: str | None = None,
     expected_checkout_identity: str | None = None,
     expected_config_fingerprint: str | None = None,
-    future_skew_seconds: float = ATTESTED_EVIDENCE_DEFAULT_FUTURE_SKEW_SECONDS,
+    future_skew_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Validate one credential-free, local-only live-pilot evidence bundle.
 
@@ -265,7 +261,11 @@ def validate_attested_evidence_bundle(
     _require(isinstance(raw, Mapping), "attested evidence must be an object")
     _require(not _contains_sensitive_material(raw), "attested evidence contains sensitive key or value")
     _require(set(raw) == _ATTESTED_EVIDENCE_KEYS, "attested evidence has unexpected or missing fields")
-    _require(raw.get("version") == ATTESTED_EVIDENCE_VERSION, "attested evidence version is unsupported")
+    preflight_policy = frozen["provider_preflight_policy"]
+    _require(
+        raw.get("version") == preflight_policy["evidence_schema_version"],
+        "attested evidence version is unsupported",
+    )
     _require(isinstance(raw.get("attested_by"), str) and raw["attested_by"].strip(), "attested evidence attested_by is required")
     _require(_is_sha256(raw.get("host_identity")), "host identity must be a SHA-256")
     _require(_is_sha256(raw.get("checkout_identity")), "checkout identity must be a SHA-256")
@@ -276,11 +276,18 @@ def validate_attested_evidence_bundle(
     current = now or dt.datetime.now(tz=dt.timezone.utc)
     _require(current.tzinfo is not None, "evidence validation clock must be timezone-aware")
     current = current.astimezone(dt.timezone.utc)
+    frozen_skew = float(preflight_policy["future_skew_seconds"])
+    if future_skew_seconds is None:
+        future_skew_seconds = frozen_skew
     skew = _require_number(future_skew_seconds, "future_skew_seconds")
+    _require(skew == frozen_skew, "future_skew_seconds must match frozen provider preflight policy")
     observed = _parse_attested_timestamp(raw.get("observed_at"), "observed_at")
     expires = _parse_attested_timestamp(raw.get("expires_at"), "expires_at")
     freshness = _require_number(raw.get("freshness_window_seconds"), "freshness_window_seconds", minimum=1)
-    _require(freshness <= ATTESTED_EVIDENCE_MAX_FRESHNESS_SECONDS, "freshness_window_seconds exceeds maximum")
+    _require(
+        freshness <= float(preflight_policy["max_freshness_seconds"]),
+        "freshness_window_seconds exceeds maximum",
+    )
     _require(expires > observed, "evidence expiry must follow observation")
     _require(abs((expires - observed).total_seconds() - freshness) < 1e-6, "evidence freshness window does not match expiry")
     _require(observed <= current + dt.timedelta(seconds=skew), "evidence observation is future-dated")
@@ -297,16 +304,6 @@ def validate_attested_evidence_bundle(
         _require(row.get("auth_ok") is True, f"{family}: auth evidence is not healthy")
         _require(row.get("host_healthy") is True, f"{family}: host evidence is not healthy")
         _require(row.get("provider_incident") is False, f"{family}: provider incident is present")
-        headroom = _require_number(row.get("headroom_fraction"), f"{family}: headroom_fraction")
-        _require(headroom <= 1.0, f"{family}: headroom_fraction exceeds one")
-        cooldown = _require_number(row.get("cooldown_elapsed_seconds"), f"{family}: cooldown_elapsed_seconds")
-        retry_after = _require_number(row.get("retry_after_seconds"), f"{family}: retry_after_seconds")
-        rule = frozen["quota_rules"][family]
-        _require(headroom >= float(rule["min_headroom_fraction"]), f"{family}: headroom is insufficient")
-        required_cooldown = float(rule["minimum_cooldown_seconds"])
-        if rule["retry_after_formula"] == "max(retry_after,minimum_cooldown)":
-            required_cooldown = max(required_cooldown, retry_after)
-        _require(cooldown >= required_cooldown, f"{family}: cooldown is insufficient")
         preflight_evidence[family] = dict(row)
 
     _require(isinstance(expected_host_identity, str) and _is_sha256(expected_host_identity), "expected host identity is required")
@@ -434,6 +431,19 @@ def expected_review_warning_rule() -> dict[str, float]:
     }
 
 
+def expected_provider_preflight_policy() -> dict[str, Any]:
+    """Return the exact quota-independent policy frozen by preregistration."""
+
+    return {
+        "mode": "auth-host-incident-v1",
+        "quota_monitoring": False,
+        "inside_block_rate_limit": "treatment-outcome",
+        "evidence_schema_version": ATTESTED_EVIDENCE_VERSION,
+        "max_freshness_seconds": int(ATTESTED_EVIDENCE_MAX_FRESHNESS_SECONDS),
+        "future_skew_seconds": ATTESTED_EVIDENCE_DEFAULT_FUTURE_SKEW_SECONDS,
+    }
+
+
 def _validate_execution_protocol(protocol: Mapping[str, Any]) -> None:
     """Validate fields needed before a frozen protocol can execute.
 
@@ -466,10 +476,9 @@ def _validate_execution_protocol(protocol: Mapping[str, Any]) -> None:
         and len(families) == len(set(families)),
         "required_provider_families must be unique non-empty strings",
     )
-    quota = protocol.get("quota_rules", {})
     _require(
-        set(families) <= set(quota),
-        "quota_rules must cover every required provider family",
+        protocol.get("provider_preflight_policy") == expected_provider_preflight_policy(),
+        "provider_preflight_policy must exactly match the frozen quota-independent policy",
     )
     reserves = protocol.get("reserve_tasks")
     _require(
@@ -553,25 +562,7 @@ def validate_protocol(raw: Mapping[str, Any], *, strict_counts: bool = True) -> 
         "thresholds must exactly match the preregistered V1 constants",
     )
 
-    quota_rules = protocol.get("quota_rules")
-    _require(isinstance(quota_rules, Mapping) and quota_rules, "quota_rules are required")
-    for provider, rule in quota_rules.items():
-        _require(isinstance(provider, str) and provider, "quota provider id is invalid")
-        _require(isinstance(rule, Mapping), f"quota rule for {provider} must be an object")
-        headroom = _require_number(
-            rule.get("min_headroom_fraction"),
-            f"quota_rules.{provider}.min_headroom_fraction",
-        )
-        _require(headroom <= 1.0, f"quota headroom for {provider} must be <= 1")
-        _require_number(
-            rule.get("minimum_cooldown_seconds"),
-            f"quota_rules.{provider}.minimum_cooldown_seconds",
-        )
-        retry_formula = rule.get("retry_after_formula")
-        _require(
-            retry_formula in {"max(retry_after,minimum_cooldown)", "minimum_cooldown"},
-            f"quota retry formula for {provider} is not frozen",
-        )
+    _require("quota_rules" not in protocol, "quota_rules are not supported by the quota-independent pilot")
 
     tasks = protocol.get("tasks")
     _require(isinstance(tasks, list) and tasks, "tasks must be a non-empty list")
@@ -790,9 +781,9 @@ def pre_block_gate(
 ) -> dict[str, Any]:
     """Decide whether an entire paired block may start.
 
-    Unknown/insufficient evidence postpones all arms.  This function is never
-    called after an arm has started; inside-block rate limits remain observed
-    treatment outcomes.
+    Missing evidence or an unhealthy provider postpones all arms. This function
+    is never called after an arm has started; inside-block rate limits remain
+    observed treatment outcomes and are not a launch gate.
     """
 
     frozen = validate_executable_protocol(protocol)
@@ -800,33 +791,14 @@ def pre_block_gate(
     for family in frozen["required_provider_families"]:
         row = evidence.get(family)
         if not isinstance(row, Mapping):
-            reasons.append({"provider_family": family, "reason": "headroom-unknown"})
+            reasons.append({"provider_family": family, "reason": "provider-evidence-missing"})
             continue
         if row.get("auth_ok") is not True:
             reasons.append({"provider_family": family, "reason": "auth-failure"})
         if row.get("host_healthy") is not True:
             reasons.append({"provider_family": family, "reason": "host-unhealthy"})
-        if row.get("provider_incident") is True:
+        if row.get("provider_incident") is not False:
             reasons.append({"provider_family": family, "reason": "provider-incident"})
-        rule = frozen["quota_rules"][family]
-        headroom = row.get("headroom_fraction")
-        if not isinstance(headroom, (int, float)) or isinstance(headroom, bool):
-            reasons.append({"provider_family": family, "reason": "headroom-unknown"})
-        elif float(headroom) < float(rule["min_headroom_fraction"]):
-            reasons.append({"provider_family": family, "reason": "headroom-insufficient"})
-        cooldown = row.get("cooldown_elapsed_seconds")
-        retry_after = row.get("retry_after_seconds", 0)
-        if not isinstance(cooldown, (int, float)) or isinstance(cooldown, bool):
-            reasons.append({"provider_family": family, "reason": "headroom-unknown"})
-        else:
-            required = float(rule["minimum_cooldown_seconds"])
-            if rule["retry_after_formula"] == "max(retry_after,minimum_cooldown)":
-                if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
-                    required = max(required, float(retry_after))
-                else:
-                    reasons.append({"provider_family": family, "reason": "headroom-unknown"})
-            if float(cooldown) < required:
-                reasons.append({"provider_family": family, "reason": "headroom-insufficient"})
     deduped = sorted(
         {tuple(sorted(item.items())) for item in reasons},
         key=lambda item: tuple(item),
@@ -1547,8 +1519,8 @@ def live_launch_preflight(
     """Fail closed on actual lifecycle and whole-block readiness evidence.
 
     It is intentionally *not* a provider probe.  The runtime adapter supplies
-    a credential-free observation of its own seams plus provider health/quota
-    evidence.  An absent adapter, missing fields, or unknown quota remains a
+    a credential-free observation of its own seams plus provider auth, host,
+    and incident evidence. An absent adapter or missing evidence remains a
     pre-block postponement; there is no synthetic fallback.
     """
 
@@ -1582,13 +1554,13 @@ def live_launch_preflight(
     ]
     evidence = observed.get("preflight_evidence")
     if not isinstance(evidence, Mapping):
-        blockers.append({"code": "whole-block-preflight-unavailable", "detail": "credential-free provider/doctor/quota evidence is missing"})
-        gate = {"eligible": False, "action": "postpone-whole-block", "reasons": [{"reason": "headroom-unknown"}]}
+        blockers.append({"code": "whole-block-preflight-unavailable", "detail": "credential-free provider health evidence is missing"})
+        gate = {"eligible": False, "action": "postpone-whole-block", "reasons": [{"reason": "provider-evidence-missing"}]}
     else:
         gate = pre_block_gate(protocol, evidence)
         if not gate["eligible"]:
             blockers.extend(
-                {"code": f"whole-block-{row['reason']}", "detail": "provider preflight did not satisfy frozen quota/health policy"}
+                {"code": f"whole-block-{row['reason']}", "detail": "provider preflight did not satisfy frozen auth/host/incident policy"}
                 for row in gate["reasons"]
             )
     fingerprint = observed.get("config_fingerprint")
@@ -1815,9 +1787,6 @@ def run_fake_experiment(
                 "auth_ok": True,
                 "host_healthy": True,
                 "provider_incident": False,
-                "headroom_fraction": 1.0,
-                "cooldown_elapsed_seconds": 10**9,
-                "retry_after_seconds": 0,
             }
             for family in protocol["required_provider_families"]
         }

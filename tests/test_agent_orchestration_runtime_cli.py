@@ -243,7 +243,7 @@ def test_runtime_prepares_bounded_private_dependency_bundle_and_reverifies_dispa
         )
 
 
-def test_benchmark_live_adapter_attests_checkout_but_blocks_unknown_headroom(tmp_path: Path):
+def test_benchmark_live_adapter_attests_checkout_but_blocks_missing_provider_evidence(tmp_path: Path):
     evaluator = tmp_path / "evaluator"
     evaluator.mkdir(mode=0o700)
     adapter = benchmark_live_adapter(checkout_root=Path(__file__).resolve().parents[1])
@@ -292,11 +292,11 @@ def test_benchmark_cli_preflight_is_launch_free_and_redacts_observed_detail(
         lambda *_args, **_kwargs: {
             "eligible": False,
             "action": "block-live-before-first-cell",
-            "blockers": [{"code": "whole-block-headroom-unknown", "detail": "token=must-not-leak"}],
+            "blockers": [{"code": "whole-block-provider-evidence-missing", "detail": "token=must-not-leak"}],
             "pre_block_gate": {
                 "eligible": False,
                 "action": "postpone-whole-block",
-                "reasons": [{"provider_family": "cursor", "reason": "headroom-unknown"}],
+                "reasons": [{"provider_family": "cursor", "reason": "provider-evidence-missing"}],
             },
             "config_fingerprint": "a" * 64,
             "raw_provider_payload": "token=must-not-leak",

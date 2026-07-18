@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         "--provider-observation",
         action="append",
         required=True,
-        metavar="FAMILY:HEADROOM:AUTH:HOST:INCIDENT:COOLDOWN:RETRY_AFTER",
+        metavar="FAMILY:AUTH:HOST:INCIDENT",
         help="explicit observation; every required family must appear once",
     )
     args = parser.parse_args(argv)

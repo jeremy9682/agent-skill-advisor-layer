@@ -62,7 +62,14 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
     }
 
     assert protocol["required_provider_families"] == ["openai", "cursor", "anthropic"]
-    assert set(protocol["quota_rules"]) == {"openai", "cursor", "anthropic"}
+    assert protocol["provider_preflight_policy"] == {
+        "mode": "auth-host-incident-v1",
+        "quota_monitoring": False,
+        "inside_block_rate_limit": "treatment-outcome",
+        "evidence_schema_version": 2,
+        "max_freshness_seconds": 3600,
+        "future_skew_seconds": 30.0,
+    }
     assert {family for task in protocol["tasks"] for family in task["producer_families"]} == {
         "openai", "cursor"
     }

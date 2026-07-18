@@ -19,6 +19,7 @@ from typing import Any, Iterable, Mapping
 from .benchmark import (
     canonical_json,
     expected_invalid_trial_rules,
+    expected_provider_preflight_policy,
     expected_review_warning_rule,
     expected_thresholds,
     preregister,
@@ -411,14 +412,10 @@ def build_pilot_fixture(root: Path) -> PilotFixture:
         "invalid_trial_rules": expected_invalid_trial_rules(),
         "review_warning_rule": expected_review_warning_rule(),
         "required_provider_families": ["openai", "cursor", "anthropic"],
-        "quota_rules": {
-            family: {
-                "min_headroom_fraction": 0.25,
-                "minimum_cooldown_seconds": 60,
-                "retry_after_formula": "max(retry_after,minimum_cooldown)",
-            }
-            for family in ("openai", "cursor", "anthropic")
-        },
+        # A live pilot gates only on observable execution safety. It neither
+        # collects nor infers subscription/quota state; a rate limit reached
+        # while an arm runs is a measured treatment outcome.
+        "provider_preflight_policy": expected_provider_preflight_policy(),
         "tasks": public_active,
         "reserve_tasks": public_reserve,
     }

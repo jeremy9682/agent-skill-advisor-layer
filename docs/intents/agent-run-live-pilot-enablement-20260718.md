@@ -27,7 +27,8 @@ new repository is created.
 - `routing-policy.yaml` remains the only routing canon.
 - The benchmark pins its real SHA-256 and never copies or edits provider
   configuration.
-- Provider credentials, account identifiers, raw configuration, quota pages,
+- Provider credentials, account identifiers, raw configuration, subscription or
+  quota pages,
   run/session receipts, evaluator tasks, worktrees, and evidence remain local.
 - Git stores only schemas, validators, launch-free control code, tests, and
   redacted aggregate conclusions.
@@ -56,18 +57,27 @@ allowlisted schema:
 
 - schema version, observation time, expiry/freshness window, attesting actor;
 - exact required provider-family keys;
-- per-family `auth_ok`, `host_healthy`, `provider_incident`, numeric
-  `headroom_fraction`, cooldown elapsed, and retry-after seconds;
+- per-family `auth_ok`, `host_healthy`, and `provider_incident`;
 - credential-stripped configuration fingerprint and coarse
   `official|proxy` category;
 - host/check-out identity needed to prevent cross-run reuse.
 
-Unknown headroom, missing families, stale or future-dated observations,
-world-readable files, symlinks, unexpected keys, credential-shaped keys or
-values, identity mismatch, policy drift, or configuration drift fail closed.
-There is no override flag. Numeric headroom may be an explicit operator
-attestation when a provider exposes no machine-readable residual fraction; the
-software must never invent one from a successful call.
+The evidence remains short lived, but its maximum freshness window is one hour
+because the nine cells execute sequentially. Each paired block still reloads
+the file and revalidates expiry, host, checkout, configuration, and route-policy
+identity before launching. Preregistration freezes evidence schema version 2,
+the 3600-second maximum freshness window, and the 30-second future-skew allowance
+inside the exact provider-preflight policy.
+
+Missing families, stale or future-dated observations, world-readable files,
+symlinks, unexpected keys, credential-shaped keys or values, identity mismatch,
+policy drift, or configuration drift fail closed. There is no override flag.
+
+On 2026-07-18 the user explicitly removed quota monitoring from the pilot
+contract: the system must not collect, request, infer, or use provider quota,
+headroom, cooldown, or subscription usage as a precondition. A rate limit or
+quota-related failure observed while an arm is running is retained as that arm's
+treatment outcome.
 
 ## Launch and fixture boundaries
 
@@ -85,7 +95,7 @@ software must never invent one from a successful call.
 ## Required tests and stopping rules
 
 - rejection matrix for permissions, symlinks, schema, freshness, identity,
-  privacy, headroom, cooldown, policy/config drift, and unexpected fields;
+  privacy, policy/config drift, and unexpected fields;
 - proof that `preflight` creates no output root and cannot reach launch code;
 - absent evidence preserves today's blocked production default;
 - per-block evidence expiry prevents later blocks from launching;

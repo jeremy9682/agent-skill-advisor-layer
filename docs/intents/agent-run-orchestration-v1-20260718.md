@@ -88,11 +88,16 @@ was eligible owned-resource cleanup performed.
 This establishes capability and a small, controlled latency observation; it
 does not establish general quality or total-workflow superiority. The local
 synthetic pilot (9 cells) and confirmation (36 cells) prove the benchmark
-harness only. The live preflight stopped with exit 3 before its first cell
-because `whole-block-headroom-unknown` and missing authentication/host proof
-failed closed. It produced no live benchmark output. Daily-default changes
-therefore remain blocked pending a properly evidenced, preregistered live
-benchmark. Evidence summaries remain local under `~/.agent-runs/`.
+harness only. The former live preflight stopped with exit 3 before its first
+cell because it required `whole-block-headroom-unknown` alongside missing
+authentication/host proof. On 2026-07-18 the user removed quota/headroom from
+the pilot's scope. The replacement policy is `auth-host-incident-v1`: it does
+not collect, infer, or block on quota, headroom, cooldown, or subscription
+state; it retains auth, host, incident, route, and exact-model-attribution
+checks. In-run rate limits remain measured treatment outcomes. It produced no
+live benchmark output. Daily-default changes therefore remain blocked pending a
+properly evidenced, preregistered live benchmark. Evidence summaries remain
+local under `~/.agent-runs/`.
 
 ## 3. Independent model reviews and reconciliation
 
@@ -695,10 +700,13 @@ Deliverables:
   but it cannot change after results are visible. A fast governed reviewer is
   used for benchmark cells; Fable Max is reserved for explicit phase/rollout
   gates, not the daily or per-cell hot path.
-- Freeze a numeric/provider-specific quota-headroom threshold and minimum
-  cooldown or `Retry-After` formula before confirmation. Insufficient headroom
-  before any arm postpones the whole paired block; a rate limit caused inside a
-  running B/C arm remains a treatment outcome.
+- Freeze the quota-independent provider preflight policy before confirmation:
+  `auth-host-incident-v1`, `quota_monitoring=false`, and
+  `inside_block_rate_limit=treatment-outcome`, plus evidence schema version 2,
+  a 3600-second maximum freshness window, and 30-second future-skew allowance.
+  Do not collect, infer, or block on provider quota, headroom, cooldown, or
+  subscription state. A rate limit caused while any arm runs remains a
+  treatment outcome.
 - Freeze deterministic definitions of first-pass acceptance, rework, manual-B
   coordination intervals, and provider configuration drift. First pass is the
   first candidate entering common acceptance, with no prior rework, that passes
@@ -719,11 +727,12 @@ Gate:
 
 - offline fixtures reproduce wins, ties, regressions, infrastructure failures,
   attribution exclusions, and misleading-fast-but-wrong cases;
-- fixtures reproduce controller/config drift, insufficient pre-block headroom,
-  inside-block rate limits, first-pass/rework boundaries, slow reviewer
+- fixtures reproduce controller/config drift, inside-block rate limits,
+  first-pass/rework boundaries, slow reviewer
   warnings, and unavailable cache telemetry;
-- all numeric headroom/cooldown values and exact reviewer bindings are present;
-  placeholders or operator judgment at dispatch time fail preregistration;
+- the exact quota-independent preflight policy and reviewer bindings are
+  present; placeholders or operator judgment at dispatch time fail
+  preregistration;
 - the report distinguishes provider noise from orchestration defects.
 
 ### Phase 6 - Explicit live three-arm benchmark
@@ -796,16 +805,15 @@ Fairness controls:
 - the primary clock starts at task handoff. A's in-agent planning is therefore
   included naturally; B/C graph preparation is timed and charged in full to
   each arm. Execution-only timing is reported only as a secondary diagnostic;
-- before each paired block, collect the provider health/doctor snapshot,
-  preregistered quota/headroom evidence, cooldown state, and a canonicalized,
-  credential-stripped provider configuration fingerprint plus coarse
+- before each paired block, collect the provider health/doctor snapshot and a
+  canonicalized, credential-stripped provider configuration fingerprint plus coarse
   `official|proxy` category. Store no base URL, token, account, or config body.
   Any configuration drift within the block invalidates the whole block;
 - an auth failure, known provider incident, base/acceptance drift, or host outage
-  detected before a paired block, or insufficient preregistered headroom for
-  any arm, invalidates and reschedules the whole block.
-  Rate limits or quota pressure caused by B/C concurrency remain treatment
-  outcomes and are never excluded;
+  detected before a paired block invalidates and reschedules the whole block.
+  The pilot does not collect, infer, or block on quota, headroom, cooldown, or
+  subscription state. Rate limits or quota pressure caused while an arm runs
+  remain treatment outcomes and are never excluded;
 - deterministic acceptance is primary; blinded human preference and independent
   review findings are secondary.
 
@@ -899,7 +907,7 @@ Decision:
 | Privacy | journal mode `0600`, no prompt/response/credentials/full command, path redaction, credential-stripped config fingerprint, no live provider-config mutation |
 | Reference adoption | unique stable pattern IDs; pinned source/license evidence; no runtime parser; every promoted contract maps to its owning schema/module plus positive and fail-closed fixtures; every deferred/forbidden row preserves zero dependency or an explicit guard; runtime packages contain no import/read of this Markdown or `REF-*` IDs, and fake scheduling still works when the document is unavailable |
 | Regression | complete pytest, Agent Run functional QA, orchestration functional QA, py_compile, `git diff --check` |
-| Value | non-decisional training pilot, private evaluator fixtures plus committed hashes, preregistered H1/H2 confirmation, fixed per-task blind reviewer binding, quota/headroom protocol, config-drift invalidation, context diagnostics, fixed invalid-trial rules |
+| Value | non-decisional training pilot, private evaluator fixtures plus committed hashes, preregistered H1/H2 confirmation, fixed per-task blind reviewer binding, quota-independent auth/host/incident policy, config-drift invalidation, context diagnostics, fixed invalid-trial rules |
 
 Verification commands after the implementation files exist:
 
@@ -958,8 +966,9 @@ Each phase must leave a reversible boundary:
 - Phase 3 stays read-only until receipts and resume are proven.
 - Phase 4 writer worktrees never mutate the main checkout automatically and are
   retained on failure for inspection.
-- Phase 5 cannot freeze with placeholder reviewer bindings, headroom/cooldown
-  values, configuration-fingerprint rules, first-pass/rework definitions, or
+- Phase 5 cannot freeze with placeholder reviewer bindings, the
+  quota-independent provider-preflight policy, configuration-fingerprint rules,
+  first-pass/rework definitions, or
   context-measurement methods.
 - Phase 6 cannot change defaults until its preregistered report is reviewed.
 

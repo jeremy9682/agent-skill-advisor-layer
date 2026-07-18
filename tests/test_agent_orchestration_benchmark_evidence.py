@@ -58,13 +58,13 @@ def _protocol() -> dict:
         "invalid_trial_rules": benchmark.expected_invalid_trial_rules(),
         "review_warning_rule": benchmark.expected_review_warning_rule(),
         "required_provider_families": ["openai", "cursor", "anthropic"],
-        "quota_rules": {
-            family: {
-                "min_headroom_fraction": 0.25,
-                "minimum_cooldown_seconds": 60,
-                "retry_after_formula": "max(retry_after,minimum_cooldown)",
-            }
-            for family in ("openai", "cursor", "anthropic")
+        "provider_preflight_policy": {
+            "mode": "auth-host-incident-v1",
+            "quota_monitoring": False,
+            "inside_block_rate_limit": "treatment-outcome",
+            "evidence_schema_version": 2,
+            "max_freshness_seconds": 3600,
+            "future_skew_seconds": 30.0,
         },
         "tasks": [_task("sep", "separable"), _task("neg", "negative_control"), _task("read", "read_only")],
         "reserve_tasks": [_task("reserve-sep", "separable"), _task("reserve-neg", "negative_control"), _task("reserve-read", "read_only")],
@@ -76,7 +76,7 @@ def _bundle(protocol: dict, **overrides: object) -> dict:
     expires = (NOW + dt.timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
     policy = protocol["tasks"][0]["route_policy_sha256"]
     bundle = {
-        "version": 1,
+        "version": 2,
         "observed_at": observed,
         "expires_at": expires,
         "freshness_window_seconds": 300,
@@ -87,9 +87,6 @@ def _bundle(protocol: dict, **overrides: object) -> dict:
                 "auth_ok": True,
                 "host_healthy": True,
                 "provider_incident": False,
-                "headroom_fraction": 0.80,
-                "cooldown_elapsed_seconds": 120,
-                "retry_after_seconds": 0,
             }
             for family in protocol["required_provider_families"]
         },
@@ -126,6 +123,32 @@ def test_attested_evidence_accepts_exact_private_bundle_and_returns_gate_rows(tm
     assert benchmark.pre_block_gate(protocol, loaded["preflight_evidence"])["eligible"] is True
 
 
+def test_attested_evidence_freshness_accepts_one_hour_and_rejects_one_second_more(tmp_path: Path):
+    protocol = _protocol()
+    path = tmp_path / "attested-evidence.json"
+    one_hour = _bundle(
+        protocol,
+        expires_at=(NOW + dt.timedelta(seconds=3600)).isoformat().replace("+00:00", "Z"),
+        freshness_window_seconds=3600,
+    )
+    _write(path, one_hour)
+    bindings = {
+        "expected_host_identity": _sha("host"),
+        "expected_checkout_identity": _sha("checkout"),
+        "expected_config_fingerprint": _sha("credential-stripped-config"),
+    }
+    assert benchmark.load_attested_evidence(path, protocol, now=NOW, **bindings)["expires_at"] == one_hour["expires_at"]
+
+    too_long = _bundle(
+        protocol,
+        expires_at=(NOW + dt.timedelta(seconds=3601)).isoformat().replace("+00:00", "Z"),
+        freshness_window_seconds=3601,
+    )
+    _write(path, too_long)
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="exceeds maximum"):
+        benchmark.load_attested_evidence(path, protocol, now=NOW, **bindings)
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -138,8 +161,8 @@ def test_attested_evidence_accepts_exact_private_bundle_and_returns_gate_rows(tm
         (lambda b: b.update({"host_identity": _sha("other-host")}), "host identity"),
         (lambda b: b.update({"route_policy_sha256": _sha("other-policy")}), "route policy"),
         (lambda b: b.update({"config_fingerprint": _sha("other-config")}), "config fingerprint"),
-        (lambda b: b["provider_families"]["cursor"].update({"headroom_fraction": None}), "headroom"),
-        (lambda b: b["provider_families"]["cursor"].update({"cooldown_elapsed_seconds": 1}), "cooldown"),
+        (lambda b: b.update({"version": 1}), "version"),
+        (lambda b: b["provider_families"]["cursor"].update({"headroom_fraction": 0.8}), "schema"),
     ],
 )
 def test_attested_evidence_rejects_contract_and_gate_failures(tmp_path: Path, mutate, message: str):
@@ -194,6 +217,35 @@ def test_executable_protocol_rejects_short_or_placeholder_commit_and_route_polic
     bad_hash["tasks"][0]["route_policy_sha256"] = "a" * 64
     with pytest.raises(benchmark.BenchmarkProtocolError, match="route_policy_sha256"):
         benchmark.validate_executable_protocol(bad_hash)
+
+
+def test_executable_protocol_requires_frozen_quota_independent_preflight_policy():
+    missing = _protocol()
+    missing.pop("provider_preflight_policy")
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="provider_preflight_policy"):
+        benchmark.validate_executable_protocol(missing)
+    legacy = _protocol()
+    legacy["quota_rules"] = {}
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="quota_rules"):
+        benchmark.validate_executable_protocol(legacy)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("mode", "different-mode"),
+        ("quota_monitoring", True),
+        ("inside_block_rate_limit", "preflight-blocker"),
+        ("evidence_schema_version", 3),
+        ("max_freshness_seconds", 3599),
+        ("future_skew_seconds", 31.0),
+    ],
+)
+def test_executable_protocol_rejects_preflight_policy_mutation(field: str, value: object):
+    protocol = _protocol()
+    protocol["provider_preflight_policy"][field] = value
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="provider_preflight_policy"):
+        benchmark.validate_executable_protocol(protocol)
 
 
 def test_live_runner_rechecks_each_block_and_keeps_prior_receipts_when_later_gate_expires(

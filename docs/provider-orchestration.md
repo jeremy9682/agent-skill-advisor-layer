@@ -302,7 +302,9 @@ daily-work or ship gate: missing / stale / health-unverified evidence may show a
 evidence ages out after `live_evidence_max_age_seconds` (currently six hours) as
 `stale-live-evidence` for honesty of that diagnostic view; it also rejects
 timestamps more than five minutes in the future, while tolerating minor host
-clock skew. Quota cooldown stays unknown unless a structured reset was observed.
+clock skew. Subscription quota/cooldown is deliberately outside the pilot
+preflight contract: it is neither collected nor inferred, and an in-run rate
+limit is recorded as an execution outcome rather than a preflight blocker.
 
 `model_observed` is honest audit metadata for every provider: when adapters still
 report `unknown`, the journal records `run-succeeded-health-unverified` rather

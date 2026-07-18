@@ -25,9 +25,6 @@ _OBSERVATION_KEYS = frozenset(
         "auth_ok",
         "host_healthy",
         "provider_incident",
-        "headroom_fraction",
-        "cooldown_elapsed_seconds",
-        "retry_after_seconds",
     }
 )
 
@@ -45,37 +42,25 @@ def _operator_token(value: str) -> str:
 def parse_provider_observation(value: str) -> tuple[str, dict[str, Any]]:
     """Parse an explicit, credential-free CLI row.
 
-    Format: ``family:headroom:auth_ok:host_healthy:provider_incident:cooldown:retry_after``.
+    Format: ``family:auth_ok:host_healthy:provider_incident``.
     Bool fields must be literal ``true`` or ``false``.  There are intentionally
     no defaults: an operator needs to attest every field they observed.
     """
 
     pieces = value.split(":")
-    if len(pieces) != 7 or not pieces[0]:
+    if len(pieces) != 4 or not pieces[0]:
         raise benchmark.BenchmarkProtocolError("provider observation has invalid shape")
-    family, headroom, auth, host, incident, cooldown, retry_after = pieces
+    family, auth, host, incident = pieces
 
     def boolean(raw: str, label: str) -> bool:
         if raw not in {"true", "false"}:
             raise benchmark.BenchmarkProtocolError(f"{family}: {label} must be true or false")
         return raw == "true"
 
-    def number(raw: str, label: str) -> float:
-        try:
-            parsed = float(raw)
-        except ValueError as exc:
-            raise benchmark.BenchmarkProtocolError(f"{family}: {label} must be numeric") from exc
-        if not parsed >= 0:
-            raise benchmark.BenchmarkProtocolError(f"{family}: {label} must be non-negative")
-        return parsed
-
     return family, {
         "auth_ok": boolean(auth, "auth_ok"),
         "host_healthy": boolean(host, "host_healthy"),
         "provider_incident": boolean(incident, "provider_incident"),
-        "headroom_fraction": number(headroom, "headroom_fraction"),
-        "cooldown_elapsed_seconds": number(cooldown, "cooldown_elapsed_seconds"),
-        "retry_after_seconds": number(retry_after, "retry_after_seconds"),
     }
 
 
@@ -92,10 +77,18 @@ def build_attested_evidence(
     """Build and validate an exact-schema, current-checkout attestation."""
 
     frozen = benchmark.validate_executable_protocol(protocol)
+    preflight_policy = frozen["provider_preflight_policy"]
+    max_freshness = int(preflight_policy["max_freshness_seconds"])
     if provider_category not in {"official", "proxy"}:
         raise benchmark.BenchmarkProtocolError("provider category is invalid")
-    if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or not 1 <= ttl_seconds <= 900:
-        raise benchmark.BenchmarkProtocolError("ttl_seconds must be an integer from 1 to 900")
+    if (
+        not isinstance(ttl_seconds, int)
+        or isinstance(ttl_seconds, bool)
+        or not 1 <= ttl_seconds <= max_freshness
+    ):
+        raise benchmark.BenchmarkProtocolError(
+            f"ttl_seconds must be an integer from 1 to {max_freshness}"
+        )
     attester = _operator_token(attested_by)
     families = frozen["required_provider_families"]
     if set(observations) != set(families):
@@ -109,7 +102,7 @@ def build_attested_evidence(
         raise benchmark.BenchmarkProtocolError("attestation clock must be timezone-aware")
     observed = observed.astimezone(dt.timezone.utc)
     bundle = {
-        "version": benchmark.ATTESTED_EVIDENCE_VERSION,
+        "version": preflight_policy["evidence_schema_version"],
         "observed_at": _utc_stamp(observed),
         "expires_at": _utc_stamp(observed + dt.timedelta(seconds=ttl_seconds)),
         "freshness_window_seconds": ttl_seconds,

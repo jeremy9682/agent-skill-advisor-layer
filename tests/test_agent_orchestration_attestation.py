@@ -46,13 +46,20 @@ def _protocol() -> dict:
         "invalid_trial_rules": benchmark.expected_invalid_trial_rules(),
         "review_warning_rule": benchmark.expected_review_warning_rule(),
         "required_provider_families": families,
-        "quota_rules": {family: {"min_headroom_fraction": 0.25, "minimum_cooldown_seconds": 60, "retry_after_formula": "max(retry_after,minimum_cooldown)"} for family in families},
+        "provider_preflight_policy": {
+            "mode": "auth-host-incident-v1",
+            "quota_monitoring": False,
+            "inside_block_rate_limit": "treatment-outcome",
+            "evidence_schema_version": 2,
+            "max_freshness_seconds": 3600,
+            "future_skew_seconds": 30.0,
+        },
         "tasks": tasks, "reserve_tasks": reserves,
     }
 
 
 def _rows() -> dict[str, dict]:
-    return {family: {"auth_ok": True, "host_healthy": True, "provider_incident": False, "headroom_fraction": 0.8, "cooldown_elapsed_seconds": 120, "retry_after_seconds": 0} for family in ("openai", "cursor", "anthropic")}
+    return {family: {"auth_ok": True, "host_healthy": True, "provider_incident": False} for family in ("openai", "cursor", "anthropic")}
 
 
 def _bindings() -> tuple[BenchmarkLiveRuntimeAdapter, dict[str, str]]:
@@ -82,6 +89,28 @@ def test_builder_refuses_missing_family_and_identity_drift(tmp_path: Path):
     bindings["expected_checkout_identity"] = _sha("other-checkout")
     with pytest.raises(benchmark.BenchmarkProtocolError, match="checkout identity"):
         benchmark.load_attested_evidence(output, protocol, **bindings)
+
+
+def test_builder_accepts_one_hour_evidence_and_rejects_longer_ttl():
+    protocol = _protocol()
+    bundle = build_attested_evidence(
+        protocol,
+        checkout_root=REPO,
+        observations=_rows(),
+        attested_by="operator-1",
+        provider_category="official",
+        ttl_seconds=3600,
+    )
+    assert bundle["freshness_window_seconds"] == 3600
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="3600"):
+        build_attested_evidence(
+            protocol,
+            checkout_root=REPO,
+            observations=_rows(),
+            attested_by="operator-1",
+            provider_category="official",
+            ttl_seconds=3601,
+        )
 
 
 def test_writer_refuses_overwrite_and_symlink(tmp_path: Path):
@@ -120,14 +149,13 @@ def test_cli_is_privacy_preserving_and_requires_explicit_rows(tmp_path: Path):
     command = [
         sys.executable, str(REPO / "scripts" / "build_agent_orchestration_evidence.py"),
         "--prereg", str(prereg), "--output", str(output), "--attested-by", "operator-1",
-        "--provider-observation", "openai:0.8:true:true:false:120:0",
-        "--provider-observation", "cursor:0.8:true:true:false:120:0",
-        "--provider-observation", "anthropic:0.8:true:true:false:120:0",
+        "--provider-observation", "openai:true:true:false",
+        "--provider-observation", "cursor:true:true:false",
+        "--provider-observation", "anthropic:true:true:false",
     ]
     completed = subprocess.run(command, cwd=REPO, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr
     emitted = json.loads(completed.stdout)
     assert set(emitted) == {"status", "bundle_path", "bundle_sha256", "expires_at", "required_provider_families"}
-    assert "0.8" not in completed.stdout
     assert "operator-1" not in completed.stdout
     assert "token" not in output.read_text().lower()

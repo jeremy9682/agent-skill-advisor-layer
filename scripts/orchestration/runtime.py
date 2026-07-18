@@ -371,7 +371,7 @@ class BenchmarkLiveRuntimeAdapter:
 
     Benchmark arm construction stays in the benchmark harness.  This adapter
     attests the core lifecycle and refuses launch until the caller supplies
-    independently observed quota/headroom evidence and a complete governed
+    independently observed provider-health evidence and a complete governed
     plan contract.
     """
 
@@ -411,6 +411,8 @@ class BenchmarkLiveRuntimeAdapter:
         for relative in (
             "scripts/agent_orchestrate.py",
             "scripts/agent_provider_run.py",
+            "scripts/orchestration/attestation.py",
+            "scripts/orchestration/benchmark.py",
             "scripts/orchestration/runtime.py",
         ):
             path = self.checkout_root / relative
@@ -449,16 +451,13 @@ class BenchmarkLiveRuntimeAdapter:
         except benchmark.BenchmarkProtocolError:
             frozen = None
             verified = None
-        # Unknown is an intentional value. Never turn login presence or a
-        # successful canary into a fabricated quota fraction.
+        # Missing provider-health evidence is intentional. Login presence or a
+        # successful canary never silently authorizes a live benchmark block.
         evidence = {
             str(family): {
                 "auth_ok": False,
                 "host_healthy": False,
                 "provider_incident": False,
-                "headroom_fraction": None,
-                "cooldown_elapsed_seconds": None,
-                "retry_after_seconds": None,
                 "evidence_status": "unknown-blocked",
             }
             for family in families

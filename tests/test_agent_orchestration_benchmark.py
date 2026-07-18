@@ -75,13 +75,13 @@ def protocol(stage: str = "pilot") -> dict:
         "invalid_trial_rules": benchmark.expected_invalid_trial_rules(),
         "review_warning_rule": benchmark.expected_review_warning_rule(),
         "required_provider_families": ["openai", "cursor", "anthropic"],
-        "quota_rules": {
-            provider: {
-                "min_headroom_fraction": 0.25,
-                "minimum_cooldown_seconds": 60,
-                "retry_after_formula": "max(retry_after,minimum_cooldown)",
-            }
-            for provider in ("openai", "cursor", "anthropic")
+        "provider_preflight_policy": {
+            "mode": "auth-host-incident-v1",
+            "quota_monitoring": False,
+            "inside_block_rate_limit": "treatment-outcome",
+            "evidence_schema_version": 2,
+            "max_freshness_seconds": 3600,
+            "future_skew_seconds": 30.0,
         },
         "tasks": tasks,
         "reserve_tasks": reserves,
