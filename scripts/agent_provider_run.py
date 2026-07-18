@@ -1532,6 +1532,17 @@ def scrub_environment(provider: dict) -> tuple[dict[str, str], list[str]]:
         if key in env:
             stripped.append(key)
             env.pop(key, None)
+    # Provider processes can invoke Python directly or through their child
+    # shells.  Suppress bytecode at the process boundary so those diagnostics
+    # cannot pollute an otherwise owned candidate diff.  This is an override,
+    # not a default: a polluted caller environment must not weaken it.
+    forced = provider.get("force_environment", {})
+    if not isinstance(forced, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in forced.items()
+    ):
+        raise ProviderRunError("provider force_environment must be a string mapping")
+    env.update(forced)
     return env, stripped
 
 

@@ -45,6 +45,9 @@ class PilotFixture:
 
 _REPO_FILES = {
     ".gitignore": "__pycache__/\n.pytest_cache/\n*.py[cod]\n",
+    # Providers often run plain ``pytest`` as a diagnostic.  Keep that
+    # provider-owned command cache-free as well as controller acceptance.
+    "pytest.ini": "[pytest]\naddopts = -p no:cacheprovider\n",
     "pilot_app/__init__.py": "",
     "pilot_app/alpha.py": "def label() -> str:\n    return 'pending-alpha'\n",
     "pilot_app/beta.py": "def label() -> str:\n    return 'pending-beta'\n",

@@ -221,6 +221,10 @@ def test_manifest_has_safe_existing_login_providers():
     assert data["provider_aliases"]["cursor-auto"] == "cursor"
     assert "XAI_API_KEY" in data["providers"]["grok"]["strip_environment"]
     assert "CURSOR_API_KEY" in data["providers"]["cursor"]["strip_environment"]
+    assert {
+        provider["force_environment"]["PYTHONDONTWRITEBYTECODE"]
+        for provider in data["providers"].values()
+    } == {"1"}
     assert data["journal"]["live_evidence_max_age_seconds"] == 21600
     assert data["journal"]["live_evidence_future_skew_seconds"] == 300
 
@@ -293,9 +297,11 @@ def test_model_discovery_strips_provider_billing_environment(monkeypatch):
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     provider = data["providers"]["cursor"]
     monkeypatch.setenv("CURSOR_API_KEY", "must-not-reach-child")
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "0")
 
     def fake_run(_command, **kwargs):
         assert "CURSOR_API_KEY" not in kwargs["env"]
+        assert kwargs["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
         return subprocess.CompletedProcess(
             [], 0, stdout="Available models\n\nauto - Auto\n", stderr=""
         )
@@ -1745,6 +1751,18 @@ def test_environment_strips_api_billing_keys(monkeypatch):
     env, stripped = agent_run.scrub_environment({"strip_environment": ["XAI_API_KEY"]})
     assert "XAI_API_KEY" not in env
     assert stripped == ["XAI_API_KEY"]
+
+
+def test_provider_environment_forces_bytecode_suppression_over_caller_value(monkeypatch):
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "0")
+    env, stripped = agent_run.scrub_environment(
+        {
+            "strip_environment": [],
+            "force_environment": {"PYTHONDONTWRITEBYTECODE": "1"},
+        }
+    )
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert stripped == []
 
 
 def test_failure_classifies_quota_without_storing_error_body():

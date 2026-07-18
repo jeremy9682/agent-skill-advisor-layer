@@ -167,10 +167,16 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
             cwd=fixture.repo_root,
             check=False,
             capture_output=True,
-            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+            env={
+                **os.environ,
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
         )
+    assert not list(fixture.repo_root.rglob("__pycache__"))
+    assert not (fixture.repo_root / ".pytest_cache").exists()
     assert not subprocess.run(
-        ["git", "-C", str(fixture.repo_root), "status", "--porcelain=v1"],
+        ["git", "-C", str(fixture.repo_root), "ls-files", "--others", "--exclude-standard"],
         check=True,
         capture_output=True,
         text=True,
