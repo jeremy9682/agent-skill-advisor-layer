@@ -898,14 +898,15 @@ def select_skills(prompt: str, cwd: Path, requested: list[str], config: dict) ->
 
 def augment_prompt(prompt: str, skill_selection: dict, max_bytes: int) -> str:
     blocks: list[str] = []
+    embedded: list[dict] = []
     total = 0
+    trusted_roots = [
+        expand(raw).resolve()
+        for raw in skill_selection.get("trusted_content_roots", [])
+    ]
     for row in skill_selection["chosen"]:
         entry = skill_selection["entries"][row["name"]]
         skill_path = Path(entry["skill_md"]).expanduser().resolve()
-        trusted_roots = [
-            expand(raw).resolve()
-            for raw in skill_selection.get("trusted_content_roots", [])
-        ]
         if not trusted_roots or not any(
             skill_path == root or root in skill_path.parents for root in trusted_roots
         ):
@@ -918,14 +919,27 @@ def augment_prompt(prompt: str, skill_selection: dict, max_bytes: int) -> str:
             raise ProviderRunError(f"cannot expose skill {row['name']}: {exc}") from exc
         encoded = content.encode("utf-8")
         if total + len(encoded) > max_bytes:
+            if row.get("selection_source") == "auto":
+                deferred = dict(row)
+                deferred.pop("content_sha256", None)
+                deferred["deferred_reason"] = (
+                    "managed-skill-content-exceeds-max-embedded-bytes"
+                )
+                skill_selection.setdefault("deferred", []).append(deferred)
+                continue
             raise ProviderRunError("managed skill content exceeds max_embedded_bytes")
         total += len(encoded)
         row["content_sha256"] = sha256_bytes(encoded)
+        embedded.append(row)
         blocks.append(
             f'<managed-skill name="{row["name"]}" tree_sha256="{row["digest"]}" '
             f'content_sha256="{row["content_sha256"]}">\n'
             f"{content}\n</managed-skill>"
         )
+    # The selection is evidence for the actual prompt, not the candidates seen
+    # before budget enforcement.  Auto candidates that do not fit are retained
+    # in deferred with their reason above, while explicit candidates fail closed.
+    skill_selection["chosen"] = embedded
     if not blocks:
         return prompt
     return (
@@ -1977,6 +1991,7 @@ def sanitized_skill_evidence(selection: dict) -> dict:
             "source_group",
             "call_policy",
             "selection_source",
+            "deferred_reason",
         )
         return {key: row[key] for key in keys if key in row}
 

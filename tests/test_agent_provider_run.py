@@ -3124,6 +3124,88 @@ def test_augment_prompt_hashes_exact_skill_bytes(tmp_path):
     assert f'content_sha256="{expected}"' in delivered
 
 
+def test_augment_prompt_defers_oversized_auto_skill_and_embeds_later_candidate(tmp_path):
+    large = tmp_path / "large" / "SKILL.md"
+    small = tmp_path / "small" / "SKILL.md"
+    large.parent.mkdir()
+    small.parent.mkdir()
+    large.write_text("x" * 100)
+    small.write_text("small")
+    selection = {
+        "chosen": [
+            {
+                "name": "large",
+                "digest": "large-digest",
+                "selection_source": "auto",
+            },
+            {
+                "name": "small",
+                "digest": "small-digest",
+                "selection_source": "auto",
+            },
+        ],
+        "deferred": [],
+        "entries": {
+            "large": {"skill_md": str(large)},
+            "small": {"skill_md": str(small)},
+        },
+        "trusted_content_roots": [str(tmp_path)],
+    }
+
+    delivered = agent_run.augment_prompt("task", selection, 20)
+
+    assert "name=\"large\"" not in delivered
+    assert "name=\"small\"" in delivered
+    assert [row["name"] for row in selection["chosen"]] == ["small"]
+    assert selection["deferred"] == [
+        {
+            "name": "large",
+            "digest": "large-digest",
+            "selection_source": "auto",
+            "deferred_reason": "managed-skill-content-exceeds-max-embedded-bytes",
+        }
+    ]
+
+
+def test_augment_prompt_rejects_oversized_explicit_skill(tmp_path):
+    skill = tmp_path / "explicit" / "SKILL.md"
+    skill.parent.mkdir()
+    skill.write_text("x" * 100)
+    selection = {
+        "chosen": [
+            {"name": "explicit", "digest": "tree", "selection_source": "explicit"}
+        ],
+        "deferred": [],
+        "entries": {"explicit": {"skill_md": str(skill)}},
+        "trusted_content_roots": [str(tmp_path)],
+    }
+
+    with pytest.raises(agent_run.ProviderRunError, match="max_embedded_bytes"):
+        agent_run.augment_prompt("task", selection, 20)
+
+
+def test_skill_evidence_includes_auto_budget_deferral_reason():
+    selection = {
+        "manifest_sha256": "m",
+        "available_count": 1,
+        "chosen": [],
+        "deferred": [
+            {
+                "name": "large",
+                "digest": "d",
+                "selection_source": "auto",
+                "deferred_reason": "managed-skill-content-exceeds-max-embedded-bytes",
+            }
+        ],
+    }
+
+    evidence = agent_run.sanitized_skill_evidence(selection)
+
+    assert evidence["deferred_by_policy"][0]["deferred_reason"] == (
+        "managed-skill-content-exceeds-max-embedded-bytes"
+    )
+
+
 def test_augment_prompt_rejects_skill_outside_trusted_roots(tmp_path):
     trusted = tmp_path / "trusted"
     trusted.mkdir()
