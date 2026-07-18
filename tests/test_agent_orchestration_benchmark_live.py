@@ -66,6 +66,15 @@ class _LiveAdapter:
             ]},
         ]
         binding = dict(reviewer)
+        expected_cleanup = benchmark._expected_cleanup_resource_ids(contract)
+        cleanup_core = {
+            "version": benchmark.CLEANUP_RECEIPT_VERSION,
+            "expected_resource_ids": expected_cleanup,
+            "resources": [
+                {"id": resource_id, "worktree_status": "succeeded"}
+                for resource_id in expected_cleanup
+            ],
+        }
         outcome = {
             "launcher_kind": contract.launcher_kind,
             "graph_sha256": contract.graph_sha256,
@@ -74,6 +83,10 @@ class _LiveAdapter:
             "config_fingerprint": "c" * 64,
             "review_binding": binding,
             "events": events,
+            "cleanup_receipt": {
+                **cleanup_core,
+                "sha256": benchmark.sha256_value(cleanup_core),
+            },
             "artifact_paths": [str(artifact)],
         }
         if self.bad == "review":
@@ -418,6 +431,72 @@ def test_live_runner_executes_frozen_pilot_through_adapter(tmp_path: Path):
     assert report["live"] is True and report["synthetic"] is False
     assert report["cell_count"] == 9
     assert (tmp_path / "live-output" / "raw-trials.json").is_file()
+    rows = json.loads((tmp_path / "live-output" / "raw-trials.json").read_text())
+    manual = next(row for row in rows if row["arm"] == "B")
+    receipt = manual["cleanup_receipt"]
+    assert receipt["version"] == benchmark.CLEANUP_RECEIPT_VERSION
+    assert receipt["expected_resource_ids"] == ["producer", "integration"]
+    assert receipt["resources"] == [
+        {"id": "producer", "worktree_status": "succeeded"},
+        {"id": "integration", "worktree_status": "succeeded"},
+    ]
+    assert receipt["sha256"] == benchmark.sha256_value({
+        "version": receipt["version"],
+        "expected_resource_ids": receipt["expected_resource_ids"],
+        "resources": receipt["resources"],
+    })
+
+
+@pytest.mark.parametrize("bad", ["cleanup-missing", "cleanup-malformed", "cleanup-hash-drift"])
+def test_live_runner_rejects_missing_or_malformed_cleanup_receipt(tmp_path: Path, bad: str):
+    class BadCleanup(_LiveAdapter):
+        def launch_benchmark_arm(self, *args, **kwargs):
+            outcome = super().launch_benchmark_arm(*args, **kwargs)
+            if bad == "cleanup-missing":
+                outcome.pop("cleanup_receipt")
+            elif bad == "cleanup-malformed":
+                outcome["cleanup_receipt"]["resources"][0]["worktree_status"] = "missing"
+            else:
+                outcome["cleanup_receipt"]["sha256"] = "0" * 64
+            return outcome
+
+    envelope, evaluator, _ = _fixture(tmp_path)
+    with pytest.raises(benchmark.BenchmarkProtocolError, match="cleanup"):
+        benchmark.run_live_experiment(
+            envelope, evaluator, tmp_path / f"live-{bad}", adapter=BadCleanup()
+        )
+    assert (tmp_path / f"live-{bad}" / "raw-trials.partial.json").is_file()
+
+
+def test_live_runner_retains_preserved_cleanup_for_failed_trial(tmp_path: Path):
+    class FailedTrial(_LiveAdapter):
+        def launch_benchmark_arm(self, *args, **kwargs):
+            outcome = super().launch_benchmark_arm(*args, **kwargs)
+            terminal = outcome["events"][-1]
+            terminal["accepted"] = False
+            terminal["failure_class"] = "provider-environment-failure"
+            resources = outcome["cleanup_receipt"]["resources"]
+            for resource in resources:
+                resource["worktree_status"] = "preserved"
+            core = {
+                "version": outcome["cleanup_receipt"]["version"],
+                "expected_resource_ids": outcome["cleanup_receipt"]["expected_resource_ids"],
+                "resources": resources,
+            }
+            outcome["cleanup_receipt"]["sha256"] = benchmark.sha256_value(core)
+            return outcome
+
+    envelope, evaluator, _ = _fixture(tmp_path)
+    report = benchmark.run_live_experiment(
+        envelope, evaluator, tmp_path / "failed-preserved", adapter=FailedTrial()
+    )
+    assert report["cell_count"] == 9
+    rows = json.loads((tmp_path / "failed-preserved" / "raw-trials.json").read_text())
+    assert all(
+        resource["worktree_status"] == "preserved"
+        for row in rows
+        for resource in row["cleanup_receipt"]["resources"]
+    )
 
 
 @pytest.mark.parametrize("bad", ["review", "manual", "config"])
@@ -925,7 +1004,7 @@ def test_runtime_adapter_manual_arm_rebinds_one_run_and_preserves_real_event_ord
         task_id="fixture",
         arm="B",
         launcher_kind="manual-event-fanout",
-        payload={},
+        payload={"graph": {"nodes": [{"id": "producer"}]}},
         graph_sha256=launch.graph_sha256,
         manual_runbook_sha256=launch.manual_runbook_sha256,
     )
@@ -971,6 +1050,10 @@ def test_runtime_adapter_manual_arm_rebinds_one_run_and_preserves_real_event_ord
     assert probes[0].calls[-1][0] == "cleanup"
     assert not probes[0].residual_worktree.exists()
     assert outcome["events"][-1]["accepted"] is True
+    assert outcome["cleanup_receipt"]["expected_resource_ids"] == [
+        "producer",
+        "integration",
+    ]
 
 
 def test_success_cleanup_requires_every_owned_worktree(tmp_path: Path):
@@ -1116,6 +1199,27 @@ def test_runtime_adapter_emits_provider_failure_for_observed_provider_timeout(
     assert terminal["event"] == "trial_completed"
     assert terminal["accepted"] is False
     assert terminal["failure_class"] == "provider-environment-failure"
+
+
+def test_runtime_adapter_maps_observed_quota_exhaustion_as_provider_environment():
+    # This is a treatment outcome emitted by a provider call, not a quota
+    # probe or a new launch gate.
+    state = {
+        "tasks": {
+            "producer": {
+                "result": {
+                    "status": "failed",
+                    "failure_class": "quota-exhausted",
+                    "provider": "openai",
+                    "provider_run_id": "run-1",
+                }
+            }
+        }
+    }
+    assert (
+        BenchmarkLiveRuntimeAdapter._benchmark_failure_class(state)
+        == "provider-environment-failure"
+    )
 
 
 def test_scheduler_arm_success_with_residual_cleanup_is_not_green(

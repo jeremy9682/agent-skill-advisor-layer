@@ -680,6 +680,7 @@ class BenchmarkLiveRuntimeAdapter:
             attributions=self._attributions(state),
         )
         artifacts = self._private_artifacts(root)
+        cleanup_receipt = self._cleanup_receipt(plan, contract, state.get("cleanup"))
         return {
             "launcher_kind": contract.launcher_kind,
             "graph_sha256": contract.graph_sha256,
@@ -688,7 +689,9 @@ class BenchmarkLiveRuntimeAdapter:
             "config_fingerprint": self._config_fingerprint,
             "review_binding": dict(reviewer),
             "events": events,
-            "cleanup": state.get("cleanup"),
+            # Raw cleanup state can contain operational detail.  The benchmark
+            # persists only this versioned allowlist summary and its hash.
+            "cleanup_receipt": cleanup_receipt,
             "artifact_paths": [str(path) for path in artifacts],
         }
 
@@ -734,6 +737,61 @@ class BenchmarkLiveRuntimeAdapter:
             ):
                 return False
         return True
+
+    @staticmethod
+    def _cleanup_receipt(
+        plan: Mapping[str, Any],
+        contract: Any,
+        cleanup: Any,
+    ) -> Mapping[str, Any]:
+        """Project raw terminal cleanup into a hash-bound benchmark receipt.
+
+        The raw cleanup record remains in private runtime state.  This receipt
+        deliberately carries only stable resource identities and worktree
+        outcomes, so persisted benchmark evidence cannot leak paths, prompts,
+        provider output, or exception detail.
+        """
+
+        from . import benchmark
+
+        expected = benchmark._expected_cleanup_resource_ids(contract)
+        writers = [
+            str(task["id"])
+            for task in plan.get("tasks", [])
+            if isinstance(task, Mapping)
+            and isinstance(task.get("workspace"), Mapping)
+            and task["workspace"].get("kind") == "isolated-writer"
+        ]
+        source_ids = writers if contract.arm in {"B", "C"} else writers[:1]
+        resources: list[dict[str, str]] = []
+        raw_cleanup = cleanup if isinstance(cleanup, Mapping) else {}
+        for index, resource_id in enumerate(expected):
+            if resource_id == "integration":
+                source_id = "integration"
+            elif contract.arm == "A":
+                source_id = source_ids[index] if index < len(source_ids) else ""
+            else:
+                # B/C receipts name graph nodes directly; never silently
+                # relabel a different runtime writer by position.
+                source_id = resource_id
+            raw_resource = raw_cleanup.get(source_id)
+            raw_worktree = (
+                raw_resource.get("worktree")
+                if isinstance(raw_resource, Mapping)
+                else None
+            )
+            status = (
+                raw_worktree.get("status")
+                if isinstance(raw_worktree, Mapping)
+                else "missing"
+            )
+            resources.append({"id": resource_id, "worktree_status": status})
+        core = {
+            "version": benchmark.CLEANUP_RECEIPT_VERSION,
+            "expected_resource_ids": expected,
+            "resources": resources,
+        }
+        return {**core, "sha256": benchmark.sha256_value(core)}
 
     def _make_runtime(self, plan: Mapping[str, Any], artifact_root: Path, worktree_root: Path, evaluator_root: Path) -> Any:
         if self._runtime_factory is not None:
@@ -839,6 +897,7 @@ class BenchmarkLiveRuntimeAdapter:
 
         provider_tokens = (
             "timeout",
+            "quota-exhausted",
             "rate-limit",
             "rate_limit",
             "auth",

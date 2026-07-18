@@ -1055,6 +1055,7 @@ def derive_trial_receipt(
     block_id: str,
     config_fingerprint_value: str,
     artifact_paths: Iterable[Path],
+    cleanup_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Derive metrics from immutable events rather than operator diaries."""
 
@@ -1198,6 +1199,11 @@ def derive_trial_receipt(
         "review_warning_threshold_seconds": warning["threshold_seconds"],
         "event_count": len(rows),
     }
+    if cleanup_receipt is not None:
+        # The live adapter has already bound this to the launch contract.  Do
+        # not use this optional field for synthetic fixtures, whose purpose is
+        # event-metric testing rather than lifecycle cleanup attestation.
+        receipt["cleanup_receipt"] = json.loads(canonical_json(cleanup_receipt))
     return normalize_trial(receipt)
 
 
@@ -1551,6 +1557,79 @@ _LIVE_REQUIRED_CAPABILITIES = frozenset(
 )
 
 
+# This is deliberately a small, allowlisted receipt.  Live benchmark outputs
+# are retained for later audit, so they must not carry runtime paths, prompts,
+# exception text, or provider credentials from the richer runtime state.
+CLEANUP_RECEIPT_VERSION = 1
+_CLEANUP_WORKTREE_STATUSES = frozenset({"succeeded", "preserved", "failed"})
+
+
+def _expected_cleanup_resource_ids(contract: LaunchContract) -> list[str]:
+    """Return the stable public cleanup identities for one benchmark arm."""
+
+    if contract.arm == "A":
+        return ["single-producer", "integration"]
+    graph = contract.payload.get("graph")
+    _require(isinstance(graph, Mapping), "graph cleanup receipt requires a graph")
+    nodes = graph.get("nodes")
+    _require(isinstance(nodes, list) and nodes, "graph cleanup receipt requires nodes")
+    node_ids = [node.get("id") for node in nodes if isinstance(node, Mapping)]
+    _require(
+        len(node_ids) == len(nodes)
+        and all(isinstance(node_id, str) and node_id for node_id in node_ids)
+        and len(set(node_ids)) == len(node_ids),
+        "graph cleanup receipt node identities are invalid",
+    )
+    return [*node_ids, "integration"]
+
+
+def _validate_cleanup_receipt(
+    contract: LaunchContract,
+    value: Any,
+    *,
+    successful: bool,
+) -> dict[str, Any]:
+    """Validate and normalize a durable, non-sensitive cleanup receipt."""
+
+    _require(isinstance(value, Mapping), "live cleanup receipt is required")
+    _require(value.get("version") == CLEANUP_RECEIPT_VERSION, "live cleanup receipt version is invalid")
+    expected = _expected_cleanup_resource_ids(contract)
+    _require(value.get("expected_resource_ids") == expected, "live cleanup receipt resource contract drift")
+    resources = value.get("resources")
+    _require(isinstance(resources, list), "live cleanup receipt resources are required")
+    normalized: list[dict[str, str]] = []
+    for resource in resources:
+        _require(isinstance(resource, Mapping), "live cleanup resource must be an object")
+        resource_id = resource.get("id")
+        status = resource.get("worktree_status")
+        _require(isinstance(resource_id, str) and resource_id in expected, "live cleanup resource id is invalid")
+        _require(status in _CLEANUP_WORKTREE_STATUSES, "live cleanup worktree status is invalid")
+        # Reject fields rather than passing through a future runtime's raw
+        # cleanup detail.  The durable trial receipt is intentionally public-
+        # shape-safe even though it is stored mode 0600.
+        _require(set(resource) == {"id", "worktree_status"}, "live cleanup resource is not allowlisted")
+        normalized.append({"id": resource_id, "worktree_status": status})
+    _require(
+        [item["id"] for item in normalized] == expected,
+        "live cleanup receipt resources are incomplete or out of order",
+    )
+    if successful:
+        _require(
+            all(item["worktree_status"] == "succeeded" for item in normalized),
+            "successful live trial has incomplete cleanup",
+        )
+    core = {
+        "version": CLEANUP_RECEIPT_VERSION,
+        "expected_resource_ids": expected,
+        "resources": normalized,
+    }
+    digest = value.get("sha256")
+    _require(isinstance(digest, str) and _is_sha256(digest), "live cleanup receipt hash is invalid")
+    _require(digest == sha256_value(core), "live cleanup receipt hash mismatch")
+    _require(set(value) == {"version", "expected_resource_ids", "resources", "sha256"}, "live cleanup receipt is not allowlisted")
+    return {**core, "sha256": digest}
+
+
 def _current_orchestrator_entrypoint() -> tuple[Path, str]:
     """Bind live benchmark cells to this checkout, never PATH's agent-run."""
 
@@ -1637,7 +1716,7 @@ def _live_outcome(
     public_task: Mapping[str, Any],
     expected_fingerprint: str,
     block_id: str,
-) -> tuple[list[Mapping[str, Any]], list[Path]]:
+) -> tuple[list[Mapping[str, Any]], list[Path], dict[str, Any]]:
     """Validate a runtime receipt without allowing it to redefine a cell."""
 
     _require(isinstance(outcome, Mapping), "live adapter outcome must be an object")
@@ -1656,10 +1735,20 @@ def _live_outcome(
     paths = outcome.get("artifact_paths")
     _require(isinstance(events, list) and all(isinstance(row, Mapping) for row in events), "live events are required")
     _require(isinstance(paths, list) and all(isinstance(row, (str, Path)) for row in paths), "live artifact paths are required")
+    terminal = next(
+        (row for row in reversed(events) if row.get("event") == "trial_completed"),
+        None,
+    )
+    _require(isinstance(terminal, Mapping), "live trial completion event is required")
+    cleanup_receipt = _validate_cleanup_receipt(
+        contract,
+        outcome.get("cleanup_receipt"),
+        successful=terminal.get("accepted") is True and terminal.get("failure_class") == "none",
+    )
     if contract.arm == "B":
         _require(any(row.get("event") == "coordination_started" for row in events), "manual B coordination event missing")
         _require(any(row.get("event") == "coordination_completed" for row in events), "manual B coordination completion missing")
-    return events, [Path(path) for path in paths]
+    return events, [Path(path) for path in paths], cleanup_receipt
 
 
 def run_live_experiment(
@@ -1725,13 +1814,14 @@ def run_live_experiment(
                 reviewer=public["reviewer"],
                 block_id=block_id,
             )
-            events, artifacts = _live_outcome(
+            events, artifacts, cleanup_receipt = _live_outcome(
                 contract, outcome, public_task=public,
                 expected_fingerprint=str(active_preflight["config_fingerprint"]), block_id=block_id,
             )
             receipt = derive_trial_receipt(
                 contract, events, block_id=block_id,
                 config_fingerprint_value=str(active_preflight["config_fingerprint"]), artifact_paths=artifacts,
+                cleanup_receipt=cleanup_receipt,
             )
             receipt["live"] = True
             write_private_json(cell_root / "trial-receipt.json", receipt)
