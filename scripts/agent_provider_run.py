@@ -20,6 +20,7 @@ import re
 import shutil
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -67,7 +68,16 @@ PROVIDER_SERIAL_GROUPS = {
     "grok": "grok-family",
 }
 SERIAL_LOCK_WAIT_SECONDS = 900
+CURSOR_ATTRIBUTION_SETTLE_SECONDS = 3.0
+CURSOR_ATTRIBUTION_POLL_SECONDS = 0.1
 SKILL_NAME_RE = re.compile(r"^- `([^`]+)`$")
+VERIFIED_BROKER_SESSION_STATUSES = frozenset(
+    {
+        "attributed-single-artifact",
+        "attributed-correlated-artifacts",
+        "attributed-stream-json",
+    }
+)
 
 
 class ProviderRunError(RuntimeError):
@@ -400,7 +410,160 @@ def attribute_session(
             ),
         )
         return dict(best, session_status="attributed-correlated-artifacts"), len(paths)
+    if adapter == "cursor" and requested_model not in {None, "", "auto"}:
+        # Concurrent Cursor invocations share the same artifact roots. Correlate
+        # only when every changed session has complete native model metadata and
+        # exactly one session matches this invocation's exact named model. This
+        # remains ambiguous for same-model concurrency or an unflushed store, so
+        # it cannot hijack another invocation's session.
+        by_session: dict[str, list[dict]] = {}
+        for row in parsed:
+            session_id = str(row.get("session_id") or "unknown")
+            if session_id == "unknown":
+                return parse_session(
+                    adapter, None, "ambiguous-concurrent-artifacts"
+                ), len(paths)
+            by_session.setdefault(session_id, []).append(row)
+        native_models: dict[str, str] = {}
+        for session_id, rows in by_session.items():
+            models = {
+                str(row["model_observed"])
+                for row in rows
+                if row.get("model_observation_reason") == "cursor-store-db"
+                and row.get("model_observed") not in {None, "", "unknown", "auto-undisclosed"}
+            }
+            if len(models) != 1:
+                return parse_session(
+                    adapter, None, "ambiguous-concurrent-artifacts"
+                ), len(paths)
+            native_models[session_id] = models.pop()
+        matching = [
+            session_id
+            for session_id, model in native_models.items()
+            if model == requested_model
+        ]
+        if len(matching) == 1:
+            matching_rows = by_session[matching[0]]
+            best = max(
+                matching_rows,
+                key=lambda row: row.get("model_observation_reason") == "cursor-store-db",
+            )
+            return dict(
+                best, session_status="attributed-correlated-artifacts"
+            ), len(paths)
     return parse_session(adapter, None, "ambiguous-concurrent-artifacts"), len(paths)
+
+
+def cursor_metadata_signature(
+    before: dict[str, tuple[int, int]], after: dict[str, tuple[int, int]]
+) -> tuple[tuple[str, str], ...] | None:
+    paths = [Path(path) for path, fp in after.items() if before.get(path) != fp]
+    parsed = [parse_session("cursor", path, "candidate") for path in paths]
+    by_session: dict[str, set[str]] = {}
+    for row in parsed:
+        session_id = str(row.get("session_id") or "unknown")
+        if session_id == "unknown":
+            return None
+        by_session.setdefault(session_id, set())
+        if (
+            row.get("model_observation_reason") == "cursor-store-db"
+            and row.get("model_observed")
+            not in {None, "", "unknown", "auto-undisclosed"}
+        ):
+            by_session[session_id].add(str(row["model_observed"]))
+    if not by_session or any(len(models) != 1 for models in by_session.values()):
+        return None
+    return tuple(
+        sorted((session_id, next(iter(models))) for session_id, models in by_session.items())
+    )
+
+
+def settle_cursor_attribution(
+    *,
+    provider: dict,
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+    requested_model: str,
+    overall_started: float,
+    timeout_seconds: float,
+    snapshot_fn=None,
+    monotonic_fn=None,
+    sleep_fn=None,
+    max_wait_seconds: float = CURSOR_ATTRIBUTION_SETTLE_SECONDS,
+    poll_seconds: float = CURSOR_ATTRIBUTION_POLL_SECONDS,
+) -> tuple[dict, int, dict[str, tuple[int, int]], dict]:
+    snapshot_fn = snapshot_fn or session_snapshot
+    monotonic_fn = monotonic_fn or time.monotonic
+    sleep_fn = sleep_fn or time.sleep
+    session, changed_count = attribute_session(
+        "cursor", before, after, requested_model=requested_model
+    )
+    telemetry = {
+        "status": "not-needed",
+        "poll_count": 0,
+        "waited_ms": 0,
+        "budget_ms": 0,
+        "stable_samples_required": 2,
+    }
+    if (
+        requested_model in {"", "auto"}
+        or "ambiguous" not in str(session.get("session_status") or "")
+    ):
+        return session, changed_count, after, telemetry
+    now = monotonic_fn()
+    total_remaining = max(0.0, overall_started + timeout_seconds - now)
+    budget = min(max_wait_seconds, total_remaining)
+    telemetry["budget_ms"] = round(budget * 1000)
+    if budget <= 0:
+        telemetry["status"] = "total-timeout-exhausted"
+        return session, changed_count, after, telemetry
+    deadline = now + budget
+    stable_key: tuple | None = None
+    stable_samples = 0
+    latest_after = after
+    latest_count = changed_count
+    while monotonic_fn() < deadline:
+        remaining = deadline - monotonic_fn()
+        sleep_fn(min(poll_seconds, remaining))
+        telemetry["poll_count"] += 1
+        latest_after = snapshot_fn(provider)
+        candidate, latest_count = attribute_session(
+            "cursor", before, latest_after, requested_model=requested_model
+        )
+        signature = cursor_metadata_signature(before, latest_after)
+        if (
+            signature is not None
+            and "ambiguous" not in str(candidate.get("session_status") or "")
+        ):
+            key = (
+                str(candidate.get("session_id") or "unknown"),
+                str(candidate.get("model_observed") or "unknown"),
+                signature,
+            )
+            if key == stable_key:
+                stable_samples += 1
+            else:
+                stable_key = key
+                stable_samples = 1
+            if stable_samples >= telemetry["stable_samples_required"]:
+                telemetry["status"] = "settled"
+                telemetry["waited_ms"] = round(
+                    (monotonic_fn() - now) * 1000
+                )
+                return candidate, latest_count, latest_after, telemetry
+        else:
+            stable_key = None
+            stable_samples = 0
+    telemetry["status"] = (
+        "timeout-unstable" if stable_samples else "timeout-ambiguous"
+    )
+    telemetry["waited_ms"] = round((monotonic_fn() - now) * 1000)
+    return (
+        parse_session("cursor", None, "ambiguous-concurrent-artifacts"),
+        latest_count,
+        latest_after,
+        telemetry,
+    )
 
 
 def decode_cursor_meta(db_path: Path) -> dict:
@@ -871,7 +1034,13 @@ def journal_model_family(
     return provider_family(provider_id, config, observed)
 
 
-def find_run_record(run_id: str, config: dict, expected_repo: str) -> dict:
+def find_run_record(
+    run_id: str,
+    config: dict,
+    expected_repo: str,
+    *,
+    allowed_modes: frozenset[str] = frozenset({"execute"}),
+) -> dict:
     path = journal_path(config, expected_repo)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -890,10 +1059,200 @@ def find_run_record(run_id: str, config: dict, expected_repo: str) -> dict:
             )
         if row.get("run_status") != "completed" or row.get("exit_code") != 0:
             raise ProviderRunError("producer run did not complete successfully")
-        if row.get("mode") != "execute":
-            raise ProviderRunError("producer run was not a write-capable execution")
+        if row.get("mode") not in allowed_modes:
+            if allowed_modes == frozenset({"execute"}):
+                raise ProviderRunError(
+                    "producer run was not a write-capable execution"
+                )
+            raise ProviderRunError("producer run mode is not eligible for this review contract")
         return row
     raise ProviderRunError(f"producer run not found in local journal: {run_id}")
+
+
+def _private_review_bundle(
+    args: argparse.Namespace,
+    config: dict,
+    expected_repo: str,
+) -> tuple[dict, list[dict]] | None:
+    path_raw = getattr(args, "producer_review_bundle", None)
+    if not path_raw:
+        if any(
+            getattr(args, field, None) is not None
+            for field in (
+                "producer_review_bundle_sha256",
+                "orchestration_run_id",
+                "orchestration_generation",
+                "orchestration_fencing_token",
+                "orchestration_reviewer_task_id",
+                "orchestration_reviewer_attempt_id",
+            )
+        ):
+            raise ProviderRunError("review bundle binding flags require the bundle path")
+        return None
+    if getattr(args, "producer_run_id", None) or getattr(args, "producer_provider", None):
+        raise ProviderRunError(
+            "--producer-review-bundle cannot be combined with legacy producer flags"
+        )
+    path = Path(path_raw).expanduser()
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise ProviderRunError("producer review bundle is unavailable") from exc
+    if path.is_symlink() or not path.is_file() or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ProviderRunError("producer review bundle must be a mode-0600 regular file")
+    raw = path.read_bytes()
+    expected_sha = str(getattr(args, "producer_review_bundle_sha256", "") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha) or sha256_bytes(raw) != expected_sha:
+        raise ProviderRunError("producer review bundle hash mismatch")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ProviderRunError("producer review bundle is invalid JSON") from exc
+    required = {
+        "version", "orchestration_run_id", "generation", "fencing_token",
+        "reviewer_task_id", "reviewer_attempt_id", "repo", "producers",
+        "candidate",
+    }
+    if not isinstance(value, dict) or set(value) != required or value.get("version") != 1:
+        raise ProviderRunError("producer review bundle has an invalid schema")
+    binding = {
+        "orchestration_run_id": getattr(args, "orchestration_run_id", None),
+        "generation": getattr(args, "orchestration_generation", None),
+        "fencing_token": getattr(args, "orchestration_fencing_token", None),
+        "reviewer_task_id": getattr(args, "orchestration_reviewer_task_id", None),
+        "reviewer_attempt_id": getattr(args, "orchestration_reviewer_attempt_id", None),
+    }
+    drift = [key for key, observed in binding.items() if value.get(key) != observed]
+    if drift:
+        raise ProviderRunError(
+            "producer review bundle fencing/identity drift: " + ", ".join(drift)
+        )
+    if value.get("repo") != expected_repo:
+        raise ProviderRunError("producer review bundle repo does not match current repository")
+    producers = value.get("producers")
+    if not isinstance(producers, list) or not producers:
+        raise ProviderRunError("producer review bundle requires producer references")
+    expected_keys = {
+        "task_id", "run_id", "provider_id", "model_observed", "model_family",
+        "session_id", "session_status", "mode", "artifact_path", "artifact_sha256",
+    }
+    verified: list[dict] = []
+    run_ids: set[str] = set()
+    sessions: set[str] = set()
+    identities: set[tuple[str, str, str]] = set()
+    for producer in producers:
+        if not isinstance(producer, dict) or set(producer) != expected_keys:
+            raise ProviderRunError("producer review bundle has an invalid producer reference")
+        run_id = str(producer.get("run_id") or "")
+        if not run_id or run_id in run_ids:
+            raise ProviderRunError("producer review bundle has duplicate or missing run identity")
+        run_ids.add(run_id)
+        row = find_run_record(
+            run_id,
+            config,
+            expected_repo,
+            allowed_modes=frozenset({"read-only", "execute"}),
+        )
+        provider_id = canonical_provider_id(config, str(row.get("provider_id") or ""))
+        observed = str(row.get("model_observed") or "unknown")
+        family = str(row.get("model_family") or "unknown")
+        session_id = str(row.get("session_id") or "unknown")
+        if provider_id in {"cursor", "grok"}:
+            health = str(row.get("provider_health_evidence", {}).get("status") or "")
+            session_status = str(row.get("session_status") or "unknown")
+            if (
+                not health.startswith("verified-")
+                or session_status not in VERIFIED_BROKER_SESSION_STATUSES
+            ):
+                raise ProviderRunError("brokered producer model evidence is not verified")
+        observed_family = provider_family(provider_id, config, observed)
+        if family in {"", "unknown", "undisclosed"}:
+            family = observed_family
+        if (
+            observed in {"", "unknown", "auto-undisclosed"}
+            or family in {"", "unknown", "undisclosed"}
+            or session_id == "unknown"
+        ):
+            raise ProviderRunError("producer review identity is not fully attributed")
+        identity = (observed, session_id, family)
+        if session_id in sessions or identity in identities:
+            raise ProviderRunError("producer review bundle reuses a model/session/family identity")
+        sessions.add(session_id)
+        identities.add(identity)
+        comparisons = {
+            "provider_id": provider_id,
+            "model_observed": observed,
+            "model_family": family,
+            "session_id": session_id,
+            "session_status": str(row.get("session_status") or "unknown"),
+            "mode": str(row.get("mode") or "unknown"),
+        }
+        mismatched = [key for key, observed_value in comparisons.items() if producer.get(key) != observed_value]
+        if mismatched:
+            raise ProviderRunError(
+                "producer review bundle disagrees with provider journal: "
+                + ", ".join(mismatched)
+            )
+        artifact_path = Path(str(producer["artifact_path"])).expanduser()
+        try:
+            artifact_info = artifact_path.lstat()
+            artifact_bytes = artifact_path.read_bytes()
+        except OSError as exc:
+            raise ProviderRunError("producer review artifact is unavailable") from exc
+        if (
+            artifact_path.is_symlink()
+            or not artifact_path.is_file()
+            or stat.S_IMODE(artifact_info.st_mode) != 0o600
+            or sha256_bytes(artifact_bytes) != producer["artifact_sha256"]
+        ):
+            raise ProviderRunError("producer review artifact type, mode, or hash drift")
+        verified.append({**row, "model_family": family, "provider_id": provider_id})
+    candidate = value.get("candidate")
+    if not isinstance(candidate, dict) or set(candidate) != {
+        "kind", "artifact_path", "artifact_sha256", "integration_head"
+    }:
+        raise ProviderRunError("producer review bundle candidate is invalid")
+    if candidate["kind"] not in {
+        "controller-integration",
+        "read-only-artifact-set",
+    }:
+        raise ProviderRunError("producer review bundle candidate kind is invalid")
+    candidate_path = Path(str(candidate["artifact_path"])).expanduser()
+    try:
+        candidate_info = candidate_path.lstat()
+        candidate_bytes = candidate_path.read_bytes()
+    except OSError as exc:
+        raise ProviderRunError("producer review candidate is unavailable") from exc
+    if (
+        candidate_path.is_symlink()
+        or not candidate_path.is_file()
+        or stat.S_IMODE(candidate_info.st_mode) != 0o600
+        or sha256_bytes(candidate_bytes) != candidate["artifact_sha256"]
+    ):
+        raise ProviderRunError("producer review candidate type, mode, or hash drift")
+    try:
+        candidate_record = json.loads(candidate_bytes)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ProviderRunError("producer review candidate is invalid JSON") from exc
+    if (
+        not isinstance(candidate_record, dict)
+        or candidate_record.get("integration_head") != candidate["integration_head"]
+    ):
+        raise ProviderRunError("producer review candidate integration identity drift")
+    if candidate["kind"] == "controller-integration":
+        integration_path = candidate_record.get("integration_path")
+        if not isinstance(integration_path, str) or not Path(integration_path).is_dir():
+            raise ProviderRunError("producer review integration worktree is unavailable")
+        completed = subprocess.run(
+            ["git", "-C", integration_path, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        if completed.returncode or completed.stdout.strip() != candidate["integration_head"]:
+            raise ProviderRunError("producer review integration HEAD drift")
+    return value, verified
 
 
 def validate_review_independence(
@@ -904,13 +1263,59 @@ def validate_review_independence(
     expected_repo: str,
 ) -> tuple[str, dict | None]:
     if route_name is None:
+        if getattr(args, "producer_review_bundle", None):
+            raise ProviderRunError(
+                "producer review bundle requires a governed review route"
+            )
         return "not-route-enforced", None
     route = route_binding(config, route_name)
     policy = str(route.get("review_independence") or "not-applicable")
     if policy == "not-applicable":
         return policy, None
+    bundle_result = _private_review_bundle(args, config, expected_repo)
+    if bundle_result is not None:
+        bundle, producers = bundle_result
+        route = route_binding(config, route_name)
+        reviewer_family = provider_family(
+            provider_id, config, str(route.get("model") or "")
+        )
+        producer_families: set[str] = set()
+        for producer in producers:
+            producer_family = str(producer["model_family"])
+            producer_families.add(producer_family)
+            if str(producer.get("seat") or "") == str(route.get("seat") or ""):
+                raise ProviderRunError("reviewer seat must differ from every producer seat")
+            if policy == "cross-family" and reviewer_family == producer_family:
+                raise ProviderRunError(
+                    f"route {route_name!r} requires cross-family review; "
+                    f"reviewer family {reviewer_family!r} appears in producer bundle"
+                )
+            if policy == "independent-supplement":
+                eligible = route.get("eligible_producer_routes")
+                if not isinstance(eligible, list) or producer.get("route") not in eligible:
+                    raise ProviderRunError(
+                        f"route {route_name!r} does not allow a producer route in the bundle"
+                    )
+        if policy not in {"cross-family", "independent-supplement"}:
+            raise ProviderRunError(f"unsupported review independence policy: {policy!r}")
+        if any(producer.get("risk_overlay", {}).get("triggers") for producer in producers):
+            governance_effort = str(route.get("governance_effort") or route.get("effort"))
+            if policy != "cross-family" or governance_effort not in {"xhigh", "max"}:
+                raise ProviderRunError(
+                    "producer risk overlay requires cross-family review at xhigh/max effort"
+                )
+        return policy, {
+            "status": "verified-private-review-bundle",
+            "bundle_sha256": str(args.producer_review_bundle_sha256),
+            "producer_count": len(producers),
+            "run_ids": sorted(str(row["run_id"]) for row in producers),
+            "model_families": sorted(producer_families),
+            "session_ids": sorted(str(row["session_id"]) for row in producers),
+        }
     if not args.producer_run_id:
-        raise ProviderRunError(f"route {route_name!r} requires --producer-run-id")
+        raise ProviderRunError(
+            f"route {route_name!r} requires --producer-run-id or --producer-review-bundle"
+        )
     producer = find_run_record(args.producer_run_id, config, expected_repo)
     producer_id = canonical_provider_id(config, str(producer.get("provider_id") or ""))
     if (
@@ -942,10 +1347,10 @@ def validate_review_independence(
                 producer.get("provider_health_evidence", {}).get("status") or ""
             )
             session_status = str(producer.get("session_status") or "unknown")
-            if not health_status.startswith("verified-") or session_status not in {
-                "attributed-single-artifact",
-                "attributed-correlated-artifacts",
-            }:
+            if (
+                not health_status.startswith("verified-")
+                or session_status not in VERIFIED_BROKER_SESSION_STATUSES
+            ):
                 raise ProviderRunError(
                     f"route {route_name!r} requires verified model evidence "
                     "for brokered producer runs"
@@ -1054,6 +1459,10 @@ def provider_health_evidence(
         ):
             return {"status": "unverified", "reason": "session-unattributed"}
         observed = str(session.get("model_observed") or "unknown")
+        stream_identity = (
+            str(session.get("model_observation_reason") or "")
+            == "cursor-stream-json"
+        )
         if requested_model == "auto":
             if observed in {"", "unknown"}:
                 return {"status": "unverified", "reason": "model-unobserved"}
@@ -1063,12 +1472,20 @@ def provider_health_evidence(
                     "model_observed": observed,
                 }
             return {
-                "status": "verified-native-session-model",
+                "status": (
+                    "verified-stream-session-model"
+                    if stream_identity
+                    else "verified-native-session-model"
+                ),
                 "model_observed": observed,
             }
         if observed == requested_model:
             return {
-                "status": "verified-native-session-model",
+                "status": (
+                    "verified-stream-session-model"
+                    if stream_identity
+                    else "verified-native-session-model"
+                ),
                 "model_observed": observed,
             }
         return {
@@ -1328,12 +1745,104 @@ def extract_codex_session_from_events(events: list[dict]) -> str | None:
     return None
 
 
+def _cursor_stream_event_identity(event: dict) -> tuple[str | None, str | None]:
+    """Return only explicit Cursor stream identities from init/result events.
+
+    Cursor's human-readable model label is deliberately not an identity.  The
+    caller validates the returned raw model against the current `cursor-agent
+    models` catalog before it may be used for health or review provenance.
+    """
+    event_type = event.get("type")
+    if event_type == "system":
+        if event.get("subtype") != "init":
+            return None, None
+    elif event_type != "result":
+        return None, None
+    session_id = event.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None, None
+    # Prefer fields whose contract is an ID. `model` is retained as a
+    # fail-closed fallback: it must still exactly match a catalog ID below.
+    model = None
+    for key in ("model_id", "modelId", "current_model_id", "model"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            model = value.strip()
+            break
+    return session_id.strip(), model
+
+
+def extract_cursor_stream_identity(
+    events: list[dict], model_catalog: list[dict],
+) -> dict[str, str] | None:
+    """Extract one exact Cursor session/model pair or return no attribution.
+
+    The stream must name a single session across its init/result records.  A
+    reported model may be either an exact catalog ID or an exact, unique label
+    from that same live catalog.  Cursor currently emits display labels in its
+    init event and omits model on the result event, so no heuristic string
+    normalization is allowed or needed.
+    """
+    allowed_ids = {
+        str(row.get("id"))
+        for row in model_catalog
+        if isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"]
+    }
+    label_ids: dict[str, set[str]] = {}
+    for row in model_catalog:
+        if not isinstance(row, dict):
+            continue
+        model_id, label = row.get("id"), row.get("label")
+        if (
+            isinstance(model_id, str)
+            and model_id
+            and isinstance(label, str)
+            and label
+        ):
+            label_ids.setdefault(label, set()).add(model_id)
+    session_ids: set[str] = set()
+    models: set[str] = set()
+    saw_identity_event = False
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        session_id, raw_model = _cursor_stream_event_identity(event)
+        if session_id is None:
+            continue
+        saw_identity_event = True
+        session_ids.add(session_id)
+        if raw_model is None:
+            continue
+        if raw_model in allowed_ids:
+            models.add(raw_model)
+            continue
+        label_matches = label_ids.get(raw_model, set())
+        if len(label_matches) != 1:
+            return None
+        models.add(next(iter(label_matches)))
+    if not saw_identity_event or len(session_ids) != 1 or len(models) != 1:
+        return None
+    return {"session_id": next(iter(session_ids)), "model_observed": next(iter(models))}
+
+
 def configure_claude_stream_json(provider_id: str, command: list[str]) -> bool:
     if provider_id != "claude" or "--output-format" not in command:
         return False
     command[command.index("--output-format") + 1] = "stream-json"
     if "--verbose" not in command:
         command.insert(command.index("--output-format"), "--verbose")
+    return True
+
+
+def configure_cursor_stream_json(provider_id: str, command: list[str]) -> bool:
+    if provider_id != "cursor":
+        return False
+    if "--output-format" in command:
+        command[command.index("--output-format") + 1] = "stream-json"
+        return True
+    # The prompt is the final argument in the manifest command. Keeping it
+    # final prevents a provider option from ever being parsed as prompt text.
+    command[-1:-1] = ["--output-format", "stream-json"]
     return True
 
 
@@ -1351,6 +1860,26 @@ def stream_session_record(
         if str(parsed.get("session_id") or "") == session_id:
             return parsed
     return parse_session(adapter, None, "attributed-stream-json")
+
+
+def cursor_stream_session_record(
+    session_id: str,
+    model_observed: str,
+    artifacts: dict[str, tuple[int, int]],
+) -> dict:
+    """Build a stream-backed Cursor session record without global diff choice."""
+    record = stream_session_record("cursor", session_id, artifacts)
+    record["session_id"] = session_id
+    if record.get("session_ref") == "unknown":
+        # This is an opaque local pointer, not a filesystem path. It makes the
+        # source of the identity explicit without pretending an artifact was
+        # correlated when concurrent Cursor runs did write several artifacts.
+        record["session_ref"] = f"stream-json:{session_id}"
+    record["model_observed"] = model_observed
+    record["model_observation_reason"] = "cursor-stream-json"
+    record["session_status"] = "attributed-stream-json"
+    record["session_attribution"] = "stream-json"
+    return record
 
 
 def validate_checkpoint(slug: str, event_id: str | None, expected_seat: str) -> dict:
@@ -1689,6 +2218,21 @@ def run_claude_stream_json_process(
         return completed, "provider-start-failed", telemetry, events
 
 
+def run_cursor_stream_json_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+) -> tuple[subprocess.CompletedProcess, str, dict, list[dict]]:
+    """Run Cursor's native stream-json format with the same bounded reader."""
+    proc, run_status, telemetry, events = run_claude_stream_json_process(
+        command, cwd=cwd, env=env, timeout_seconds=timeout_seconds
+    )
+    telemetry["stream_mode"] = "cursor-stream-json"
+    return proc, run_status, telemetry, events
+
+
 def run_codex_json_process(
     command: list[str],
     *,
@@ -1889,6 +2433,41 @@ def classify_route_status(blockers: list[dict]) -> str:
     return "blocked"
 
 
+def validate_route_concurrency(canon: dict, route_name: str, binding: dict) -> str:
+    raw_route = canon["runtime_routes"].get(route_name)
+    concurrency = raw_route.get("concurrency") if isinstance(raw_route, dict) else None
+    if concurrency not in {"family_serial", "explicitly_parallel"}:
+        raise ProviderRunError(f"route {route_name!r} has invalid concurrency declaration")
+    serial_group = serial_group_for_provider(str(binding["provider"]), binding)
+    if concurrency == "family_serial" and not serial_group:
+        raise ProviderRunError(f"route {route_name!r} requires a serial_group")
+    if concurrency == "explicitly_parallel" and serial_group:
+        raise ProviderRunError(
+            f"route {route_name!r} declares parallel execution but has serial_group"
+        )
+    return concurrency
+
+
+def apply_workspace_trust(
+    provider: dict,
+    command: list[str],
+    *,
+    governed_route: bool,
+    explicit_trust: bool,
+) -> str:
+    if provider.get("requires_workspace_trust"):
+        if not governed_route and not explicit_trust:
+            raise ProviderRunError(
+                "Cursor headless mode requires explicit --trust-workspace"
+            )
+        command.insert(-1, "--trust")
+        return "governed-route-binding" if governed_route else "explicit-cli"
+    if explicit_trust:
+        raise ProviderRunError(
+            "--trust-workspace is only valid for providers that require it"
+        )
+    return "not-required"
+
 
 def run_provider(args: argparse.Namespace, config: dict) -> int:
     provider_id, model, effort, seat, route_name = resolve_route(args, config)
@@ -1922,6 +2501,8 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         route_name, provider_id, args, config, slug
     )
     route = route_binding(config, route_name) if route_name else {}
+    if route_name is not None:
+        validate_route_concurrency(routing_canon(config), route_name, route)
     governance_effort = str(
         route.get("governance_effort") or effort or "provider-default"
     )
@@ -1963,16 +2544,12 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
     command = build_command(
         provider, args.mode, binary, cwd, managed_prompt, model, effort
     )
-    if provider.get("requires_workspace_trust"):
-        if not args.trust_workspace:
-            raise ProviderRunError(
-                "Cursor headless mode requires explicit --trust-workspace"
-            )
-        command.insert(-1, "--trust")
-    elif args.trust_workspace:
-        raise ProviderRunError(
-            "--trust-workspace is only valid for providers that require it"
-        )
+    workspace_trust_source = apply_workspace_trust(
+        provider,
+        command,
+        governed_route=route_name is not None,
+        explicit_trust=bool(args.trust_workspace),
+    )
     if args.minimal_runtime:
         if provider_id != "codex":
             raise ProviderRunError(
@@ -1986,6 +2563,7 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
             )
         command[command.index("--tools") + 1] = ""
     use_claude_stream = configure_claude_stream_json(provider_id, command)
+    use_cursor_stream = configure_cursor_stream_json(provider_id, command)
     env, stripped_env = scrub_environment(provider)
     before: dict[str, tuple[int, int]] = {}
     after: dict[str, tuple[int, int]] = {}
@@ -2022,6 +2600,13 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
                     env=env,
                     timeout_seconds=timeout_seconds,
                 )
+            elif use_cursor_stream:
+                proc, run_status, stage_telemetry, stream_events = run_cursor_stream_json_process(
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    timeout_seconds=timeout_seconds,
+                )
             else:
                 proc, run_status, stage_telemetry = run_blocking_process(
                     command,
@@ -2040,27 +2625,69 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         )
     if serial_group:
         stage_telemetry["serial_lock"] = dict(lock_cm.telemetry)
-    duration_ms = round((time.monotonic() - started) * 1000)
-    ended_at = utc_now()
     adapter = str(provider["session"].get("adapter") or "")
+    cursor_stream_identity = (
+        extract_cursor_stream_identity(
+            stream_events, list(model_catalog.get("models") or [])
+        )
+        if provider_id == "cursor"
+        else None
+    )
     if run_status == "serial-lock-timeout":
         session = parse_session(adapter, None, "not-observed")
+        changed_artifact_count = 0
+    elif cursor_stream_identity is not None:
+        # A single native stream identity wins before any global Cursor state
+        # diff is considered. This is what makes same-provider parallel runs
+        # attributable instead of merely correlatable.
+        session = cursor_stream_session_record(
+            cursor_stream_identity["session_id"],
+            cursor_stream_identity["model_observed"],
+            after,
+        )
         changed_artifact_count = 0
     else:
         session, changed_artifact_count = attribute_session(
             adapter, before, after, requested_model=str(model)
         )
+        if (
+            adapter == "cursor"
+            and proc.returncode == 0
+            and "ambiguous" in str(session.get("session_status") or "")
+        ):
+            session, changed_artifact_count, after, settle_telemetry = (
+                settle_cursor_attribution(
+                    provider=provider,
+                    before=before,
+                    after=after,
+                    requested_model=str(model),
+                    overall_started=started,
+                    timeout_seconds=timeout_seconds,
+                )
+            )
+            stage_telemetry["session_attribution_settle"] = settle_telemetry
+    duration_ms = round((time.monotonic() - started) * 1000)
+    ended_at = utc_now()
     session_attribution = "file-diff"
     stream_session_id = None
     if provider_id == "claude":
         stream_session_id = extract_claude_session_from_events(stream_events)
     elif provider_id == "codex":
         stream_session_id = extract_codex_session_from_events(stream_events)
+    elif provider_id == "cursor" and cursor_stream_identity is not None:
+        stream_session_id = cursor_stream_identity["session_id"]
     if stream_session_id:
-        session = stream_session_record(adapter, stream_session_id, after)
-        session["session_id"] = stream_session_id
-        session["session_status"] = "attributed-stream-json"
-        session["session_attribution"] = "stream-json"
+        if cursor_stream_identity is not None:
+            session = cursor_stream_session_record(
+                stream_session_id,
+                cursor_stream_identity["model_observed"],
+                after,
+            )
+        else:
+            session = stream_session_record(adapter, stream_session_id, after)
+            session["session_id"] = stream_session_id
+            session["session_status"] = "attributed-stream-json"
+            session["session_attribution"] = "stream-json"
         session_attribution = "stream-json"
     if session_attribution != "stream-json":
         status = str(session.get("session_status") or "")
@@ -2091,9 +2718,16 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         proc = subprocess.CompletedProcess(
             command, 3, stdout=proc.stdout, stderr=proc.stderr
         )
+    producer_sessions = (
+        set(map(str, producer_ref.get("session_ids", [])))
+        if producer_ref is not None
+        else set()
+    )
+    if producer_ref is not None and "session_id" in producer_ref:
+        producer_sessions.add(str(producer_ref["session_id"]))
     if producer_ref is not None and (
         session["session_id"] == "unknown"
-        or producer_ref["session_id"] == session["session_id"]
+        or session["session_id"] in producer_sessions
     ):
         run_status = "review-independence-violation"
         proc = subprocess.CompletedProcess(
@@ -2206,6 +2840,7 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         "provider_tools": "none" if args.no_provider_tools else "manifest-default",
         "minimal_runtime": bool(args.minimal_runtime),
         "workspace_trust_explicit": bool(args.trust_workspace),
+        "workspace_trust_source": workspace_trust_source,
         "skill_evidence": skill_evidence,
         "instruction_bom": instruction_bom,
         "instruction_bom_digest": instruction_bom["digest"],
@@ -2235,6 +2870,8 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
                     "session_status": session["session_status"],
                     "journal": portable_ref(path),
                     "model": model,
+                    "model_observed": session["model_observed"],
+                    "model_family": record["model_family"],
                     "instruction_bom_digest": instruction_bom["digest"],
                     "skills_selected": [row["name"] for row in selection["chosen"]],
                     "skills_deferred": [row["name"] for row in selection["deferred"]],
@@ -2362,6 +2999,7 @@ def latest_provider_evidence(
                 not in {
                     "attributed-single-artifact",
                     "attributed-correlated-artifacts",
+                    "attributed-stream-json",
                 }
             )
             if model_identity_unverified or broker_health_unverified:
@@ -2453,11 +3091,14 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
 
     names = list(canon["runtime_routes"])
     route_rows: list[dict] = []
+    valid_concurrency = {"family_serial", "explicitly_parallel"}
     for name in names:
         binding = resolve_binding(canon, name)
+        raw_route = canon["runtime_routes"][name]
         provider_id = canonical_provider_id(config, binding["provider"])
         provider = config["providers"].get(provider_id)
         blockers: list[dict] = []
+        warnings: list[dict] = []
         if binding["route_policy"] != "enabled":
             blockers.append(
                 {
@@ -2534,8 +3175,24 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
                     }
                 )
         serial_group = serial_group_for_provider(provider_id, binding)
-        if not serial_group:
+        concurrency = raw_route.get("concurrency")
+        if concurrency not in valid_concurrency:
             blockers.append(
+                {"code": "route-concurrency-invalid", "detail": str(concurrency)}
+            )
+        elif concurrency == "family_serial" and not serial_group:
+            blockers.append(
+                {"code": "serial-lock-required", "detail": provider_id}
+            )
+        elif concurrency == "explicitly_parallel" and serial_group:
+            blockers.append(
+                {
+                    "code": "serial-lock-contradicts-parallel",
+                    "detail": serial_group,
+                }
+            )
+        elif concurrency == "explicitly_parallel":
+            warnings.append(
                 {
                     "code": "serial-lock-disabled",
                     "detail": provider_id,
@@ -2550,9 +3207,11 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
                 "model_family": family,
                 "seat": binding["seat"],
                 "timeout_seconds": binding.get("timeout_seconds"),
+                "concurrency": concurrency,
                 "serial_group": serial_group,
                 "serial_lock_enabled": bool(serial_group),
                 "blockers": blockers,
+                "warnings": warnings,
             }
         )
 
@@ -2643,12 +3302,13 @@ def build_route_doctor(config: dict, route_name: str | None, repo: str) -> dict:
     canon_path = ROOT / str(config.get("routing_canon") or "routing-policy.yaml")
     serial_lock_warnings = [
         {
-            "code": "serial-lock-disabled",
+            "code": warning["code"],
             "route": row["route"],
             "provider_id": row["provider_id"],
         }
         for row in route_rows
-        if not row["serial_lock_enabled"]
+        for warning in row["warnings"]
+        if warning.get("code") == "serial-lock-disabled"
     ]
     return {
         "routing_canon": portable_ref(canon_path),
@@ -2714,6 +3374,7 @@ def routes(config: dict) -> int:
         serial_group = serial_group_for_provider(provider_id, binding)
         compiled[name] = dict(
             binding,
+            concurrency=canon["runtime_routes"][name].get("concurrency"),
             serial_group=serial_group,
             serial_lock_enabled=bool(serial_group),
         )
@@ -2777,6 +3438,13 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--effort")
     run.add_argument("--producer-provider")
     run.add_argument("--producer-run-id")
+    run.add_argument("--producer-review-bundle")
+    run.add_argument("--producer-review-bundle-sha256")
+    run.add_argument("--orchestration-run-id")
+    run.add_argument("--orchestration-generation", type=int)
+    run.add_argument("--orchestration-fencing-token")
+    run.add_argument("--orchestration-reviewer-task-id")
+    run.add_argument("--orchestration-reviewer-attempt-id")
     run.add_argument("--checkpoint-event")
     run.add_argument("--risk-trigger", action="append", default=[])
     run.add_argument("--cwd", default=os.getcwd())

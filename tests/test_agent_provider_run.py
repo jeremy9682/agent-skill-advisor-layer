@@ -76,6 +76,142 @@ def verified_producer_model(provider_id: str, model: str, family: str) -> dict:
     return evidence
 
 
+def _private_json(path: Path, value: dict) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return agent_run.sha256_bytes(path.read_bytes())
+
+
+def test_private_review_bundle_accepts_read_only_producer_and_detects_candidate_drift(tmp_path):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journals")
+    artifact = tmp_path / "producer-answer.txt"
+    artifact.write_text("answer\n", encoding="utf-8")
+    artifact.chmod(0o600)
+    artifact_sha = agent_run.sha256_bytes(artifact.read_bytes())
+    row = {
+        "run_id": "producer-read-only",
+        "provider_id": "cursor",
+        "model_requested": "composer-2.5-fast",
+        "model_observed": "composer-2.5-fast",
+        "model_family": "cursor",
+        "provider_health_evidence": {
+            "status": "verified-stream-session-model",
+            "model_observed": "composer-2.5-fast",
+        },
+        "seat": "codex-landing",
+        "session_id": "session-producer",
+        "session_status": "attributed-stream-json",
+        "repo": "demo",
+        "route": "ordinary_bug_fix",
+        "run_status": "completed",
+        "exit_code": 0,
+        "mode": "read-only",
+        "risk_overlay": {"triggers": []},
+    }
+    journal = Path(data["journal"]["root"]) / "demo.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.json"
+    candidate_sha = _private_json(
+        candidate, {"integration_head": "read-only", "producer_artifacts": []}
+    )
+    bundle_value = {
+        "version": 1,
+        "orchestration_run_id": "orch-1",
+        "generation": 2,
+        "fencing_token": "fence-2",
+        "reviewer_task_id": "review",
+        "reviewer_attempt_id": "attempt-review",
+        "repo": "demo",
+        "producers": [
+            {
+                "task_id": "producer",
+                "run_id": "producer-read-only",
+                "provider_id": "cursor",
+                "model_observed": "composer-2.5-fast",
+                "model_family": "cursor",
+                "session_id": "session-producer",
+                "session_status": "attributed-stream-json",
+                "mode": "read-only",
+                "artifact_path": str(artifact),
+                "artifact_sha256": artifact_sha,
+            }
+        ],
+        "candidate": {
+            "kind": "read-only-artifact-set",
+            "artifact_path": str(candidate),
+            "artifact_sha256": candidate_sha,
+            "integration_head": "read-only",
+        },
+    }
+    bundle = tmp_path / "bundle.json"
+    bundle_sha = _private_json(bundle, bundle_value)
+    args = SimpleNamespace(
+        producer_review_bundle=str(bundle),
+        producer_review_bundle_sha256=bundle_sha,
+        producer_run_id=None,
+        producer_provider=None,
+        orchestration_run_id="orch-1",
+        orchestration_generation=2,
+        orchestration_fencing_token="fence-2",
+        orchestration_reviewer_task_id="review",
+        orchestration_reviewer_attempt_id="attempt-review",
+    )
+    policy, ref = agent_run.validate_review_independence(
+        "claude_final_review", "claude", args, data, "demo"
+    )
+    assert policy == "cross-family"
+    assert ref["status"] == "verified-private-review-bundle"
+    assert ref["session_ids"] == ["session-producer"]
+
+    integration = tmp_path / "integration"
+    integration.mkdir()
+    subprocess.run(["git", "-C", str(integration), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(integration), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(integration), "config", "user.name", "Test"], check=True
+    )
+    (integration / "frozen.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(integration), "add", "frozen.txt"], check=True)
+    subprocess.run(["git", "-C", str(integration), "commit", "-qm", "frozen"], check=True)
+    head = subprocess.run(
+        ["git", "-C", str(integration), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    candidate_sha = _private_json(
+        candidate, {"integration_head": head, "integration_path": str(integration)}
+    )
+    bundle_value["candidate"] = {
+        "kind": "controller-integration",
+        "artifact_path": str(candidate),
+        "artifact_sha256": candidate_sha,
+        "integration_head": head,
+    }
+    args.producer_review_bundle_sha256 = _private_json(bundle, bundle_value)
+    agent_run.validate_review_independence(
+        "claude_final_review", "claude", args, data, "demo"
+    )
+    (integration / "frozen.txt").write_text("two\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(integration), "commit", "-qam", "drift"], check=True)
+    with pytest.raises(agent_run.ProviderRunError, match="integration HEAD drift"):
+        agent_run.validate_review_independence(
+            "claude_final_review", "claude", args, data, "demo"
+        )
+
+    candidate.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(agent_run.ProviderRunError, match="candidate type, mode, or hash drift"):
+        agent_run.validate_review_independence(
+            "claude_final_review", "claude", args, data, "demo"
+        )
+
+
 def test_manifest_has_safe_existing_login_providers():
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     assert set(data["providers"]) == {"claude", "codex", "grok", "cursor"}
@@ -547,6 +683,32 @@ def test_live_evidence_requires_verified_health_for_broker_model(tmp_path):
                     "session_status": "attributed-correlated-artifacts",
                     "provider_health_evidence": {
                         "status": "verified-native-session-model",
+                        "model_observed": "composer-2.5",
+                    },
+                    "started_at": active_now,
+                }
+            )
+            + "\n"
+        )
+    assert (
+        agent_run.latest_provider_evidence(data, "demo", "cursor", "composer-2.5")[
+            "status"
+        ]
+        == "live-run-verified"
+    )
+
+    with path.open("a") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "provider_id": "cursor",
+                    "model_requested": "composer-2.5",
+                    "model_observed": "composer-2.5",
+                    "run_status": "completed",
+                    "exit_code": 0,
+                    "session_status": "attributed-stream-json",
+                    "provider_health_evidence": {
+                        "status": "verified-stream-session-model",
                         "model_observed": "composer-2.5",
                     },
                     "started_at": active_now,
@@ -1110,6 +1272,45 @@ def test_cross_family_review_reconciles_cursor_auto_producer_from_observed_famil
     )
     assert policy == "cross-family"
     assert producer_ref["model_family"] == "xai"
+
+
+def test_cross_family_review_accepts_cursor_stream_json_producer(tmp_path):
+    """A native Cursor stream identity is as strong as artifact correlation."""
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    (tmp_path / "demo.jsonl").write_text(
+        json.dumps(
+            {
+                "run_id": "cursor-stream-json-producer",
+                "provider_id": "cursor",
+                "model_requested": "composer-2.5-fast",
+                "model_observed": "composer-2.5-fast",
+                "model_family": "cursor",
+                "session_status": "attributed-stream-json",
+                "provider_health_evidence": {
+                    "status": "verified-stream-session-model",
+                    "model_observed": "composer-2.5-fast",
+                },
+                "seat": "claude-landing",
+                "session_id": "cursor-stream-session",
+                "repo": "demo",
+                "run_status": "completed",
+                "exit_code": 0,
+                "mode": "execute",
+                "risk_overlay": {"triggers": []},
+            }
+        )
+        + "\n"
+    )
+    args = SimpleNamespace(
+        producer_provider="cursor",
+        producer_run_id="cursor-stream-json-producer",
+    )
+    policy, producer_ref = agent_run.validate_review_independence(
+        "codex_final_review", "codex", args, data, "demo"
+    )
+    assert policy == "cross-family"
+    assert producer_ref["model_family"] == "cursor"
 
 
 def test_cross_family_review_accepts_cursor_producer_with_disclosed_family(tmp_path):
@@ -1679,6 +1880,102 @@ def test_extract_claude_session_from_stream_events():
     assert agent_run.extract_claude_session_from_events(events) == "sess-abc"
 
 
+def test_cursor_stream_identity_uses_exact_catalog_id_from_init_and_result():
+    identity = agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-abc",
+                "model_id": "composer-2.5-fast",
+            },
+            {
+                "type": "result",
+                "session_id": "cursor-stream-abc",
+                "model_id": "composer-2.5-fast",
+                "result": "OK",
+            },
+        ],
+        [{"id": "composer-2.5-fast", "label": "Composer 2.5 Fast"}],
+    )
+    assert identity == {
+        "session_id": "cursor-stream-abc",
+        "model_observed": "composer-2.5-fast",
+    }
+
+
+def test_cursor_stream_identity_maps_unique_catalog_label_and_rejects_conflict():
+    catalog = [{"id": "composer-2.5-fast", "label": "Composer 2.5 Fast"}]
+    assert agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-abc",
+                "model": "Composer 2.5 Fast",
+            },
+            {
+                "type": "result",
+                "session_id": "cursor-stream-abc",
+                "result": "OK",
+            },
+        ],
+        catalog,
+    ) == {
+        "session_id": "cursor-stream-abc",
+        "model_observed": "composer-2.5-fast",
+    }
+    assert agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-a",
+                "model_id": "composer-2.5-fast",
+            },
+            {
+                "type": "result",
+                "session_id": "cursor-stream-b",
+                "model_id": "composer-2.5-fast",
+            },
+        ],
+        catalog,
+    ) is None
+
+    duplicate_label_catalog = [
+        {"id": "composer-a", "label": "Composer"},
+        {"id": "composer-b", "label": "Composer"},
+    ]
+    assert agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-abc",
+                "model": "Composer",
+            }
+        ],
+        duplicate_label_catalog,
+    ) is None
+
+
+def test_cursor_stream_json_configuration_and_health_are_native_not_file_diff():
+    command = ["cursor-agent", "--print", "--model", "composer-2.5-fast", "prompt"]
+    assert agent_run.configure_cursor_stream_json("cursor", command) is True
+    assert command[-3:] == ["--output-format", "stream-json", "prompt"]
+    session = agent_run.cursor_stream_session_record(
+        "cursor-stream-abc", "composer-2.5-fast", {}
+    )
+    assert session["session_ref"] == "stream-json:cursor-stream-abc"
+    assert session["model_observation_reason"] == "cursor-stream-json"
+    assert agent_run.provider_health_evidence(
+        "cursor", "composer-2.5-fast", session
+    ) == {
+        "status": "verified-stream-session-model",
+        "model_observed": "composer-2.5-fast",
+    }
+
+
 def test_extract_codex_session_and_claude_result_from_stream_events(tmp_path):
     command = ["claude", "--print", "--output-format", "text", "prompt"]
     assert agent_run.configure_claude_stream_json("claude", command) is True
@@ -1982,7 +2279,11 @@ def test_run_claude_stream_json_extracts_result_and_session(monkeypatch, tmp_pat
             self._streams.append((stream, label))
 
         def unregister(self, stream):
-            self._streams = [(s, l) for s, l in self._streams if s is not stream]
+            self._streams = [
+                (registered_stream, label)
+                for registered_stream, label in self._streams
+                if registered_stream is not stream
+            ]
 
         def select(self, timeout=None):
             for stream, label in list(self._streams):
@@ -2056,7 +2357,7 @@ def test_cursor_session_parser_reads_model_only_from_native_blob_metadata(tmp_pa
     assert "private response" not in json.dumps(parsed)
 
 
-def test_cursor_attribution_rejects_concurrent_sessions_even_when_model_matches(
+def test_cursor_attribution_correlates_unique_exact_model_across_concurrent_sessions(
     tmp_path,
 ):
     def make_session(name, model):
@@ -2091,8 +2392,258 @@ def test_cursor_attribution_rejects_concurrent_sessions_even_when_model_matches(
         "cursor", {}, after, requested_model="composer-2.5"
     )
     assert changed == 3
+    assert session["session_id"] == "composer-session"
+    assert session["model_observed"] == "composer-2.5"
+    assert session["session_status"] == "attributed-correlated-artifacts"
+
+
+def test_cursor_attribution_correlates_both_overlapping_distinct_session_pairs(
+    tmp_path,
+):
+    def make_pair(session_id: str, model: str) -> tuple[Path, Path]:
+        db = tmp_path / "chats" / session_id / "store.db"
+        db.parent.mkdir(parents=True)
+        conn = sqlite3.connect(db)
+        conn.execute("create table meta (key text, value blob)")
+        conn.execute("create table blobs (id text primary key, data blob)")
+        conn.execute(
+            "insert into meta values ('0', ?)",
+            (json.dumps({"agentId": session_id, "lastUsedModel": model}).encode().hex(),),
+        )
+        conn.commit()
+        conn.close()
+        transcript = tmp_path / "projects" / session_id / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("{}\n")
+        return db, transcript
+
+    grok_id = "04956bfc-5b5d-4847-bf83-789965c80754"
+    composer_id = "ef9142d7-5fd7-4bd0-8f3f-e822a7c51d77"
+    grok = make_pair(grok_id, "cursor-grok-4.5-high-fast")
+    composer = make_pair(composer_id, "composer-2.5-fast")
+    after = {
+        str(path): agent_run.file_fingerprint(path)
+        for path in (*grok, *composer)
+    }
+
+    grok_session, grok_count = agent_run.attribute_session(
+        "cursor", {}, after, requested_model="cursor-grok-4.5-high-fast"
+    )
+    composer_session, composer_count = agent_run.attribute_session(
+        "cursor", {}, after, requested_model="composer-2.5-fast"
+    )
+
+    assert grok_count == composer_count == 4
+    assert grok_session["session_id"] == grok_id
+    assert grok_session["model_observed"] == "cursor-grok-4.5-high-fast"
+    assert composer_session["session_id"] == composer_id
+    assert composer_session["model_observed"] == "composer-2.5-fast"
+    assert grok_session["session_status"] == "attributed-correlated-artifacts"
+    assert composer_session["session_status"] == "attributed-correlated-artifacts"
+
+
+def test_cursor_attribution_same_model_concurrency_remains_ambiguous(tmp_path):
+    after = {}
+    for session_id in ("first", "second"):
+        db = tmp_path / session_id / "store.db"
+        db.parent.mkdir()
+        conn = sqlite3.connect(db)
+        conn.execute("create table meta (key text, value blob)")
+        conn.execute("create table blobs (id text primary key, data blob)")
+        conn.execute(
+            "insert into meta values ('0', ?)",
+            (json.dumps({"agentId": session_id, "lastUsedModel": "composer-2.5-fast"}).encode().hex(),),
+        )
+        conn.commit()
+        conn.close()
+        after[str(db)] = agent_run.file_fingerprint(db)
+    session, changed = agent_run.attribute_session(
+        "cursor", {}, after, requested_model="composer-2.5-fast"
+    )
+    assert changed == 2
     assert session["session_id"] == "unknown"
     assert session["session_status"] == "ambiguous-concurrent-artifacts"
+
+
+def test_cursor_settle_correlates_when_other_session_flushes_later(tmp_path):
+    def make_store(session_id: str, model: str) -> Path:
+        db = tmp_path / "chats" / session_id / "store.db"
+        db.parent.mkdir(parents=True)
+        conn = sqlite3.connect(db)
+        conn.execute("create table meta (key text, value blob)")
+        conn.execute("create table blobs (id text primary key, data blob)")
+        conn.execute(
+            "insert into meta values ('0', ?)",
+            (json.dumps({"agentId": session_id, "lastUsedModel": model}).encode().hex(),),
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    composer = make_store("composer-session", "composer-2.5-fast")
+    grok = make_store("grok-session", "cursor-grok-4.5-high-fast")
+    grok_transcript = tmp_path / "projects" / "grok-session" / "grok-session.jsonl"
+    grok_transcript.parent.mkdir(parents=True)
+    grok_transcript.write_text("{}\n")
+    initial = {
+        str(composer): agent_run.file_fingerprint(composer),
+        str(grok_transcript): agent_run.file_fingerprint(grok_transcript),
+    }
+    complete = dict(initial, **{str(grok): agent_run.file_fingerprint(grok)})
+    snapshots = [initial, initial, complete, complete]
+
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = FakeClock()
+
+    session, changed, settled_after, telemetry = agent_run.settle_cursor_attribution(
+        provider={"session": {"adapter": "cursor"}},
+        before={},
+        after=initial,
+        requested_model="composer-2.5-fast",
+        overall_started=0.0,
+        timeout_seconds=10.0,
+        snapshot_fn=lambda _provider: snapshots.pop(0),
+        monotonic_fn=clock.monotonic,
+        sleep_fn=clock.sleep,
+        max_wait_seconds=3.0,
+        poll_seconds=0.5,
+    )
+
+    assert session["session_id"] == "composer-session"
+    assert session["model_observed"] == "composer-2.5-fast"
+    assert changed == 3
+    assert settled_after == complete
+    assert telemetry == {
+        "status": "settled",
+        "poll_count": 4,
+        "waited_ms": 2000,
+        "budget_ms": 3000,
+        "stable_samples_required": 2,
+    }
+
+
+def test_cursor_settle_timeout_remains_fail_closed(tmp_path):
+    composer = tmp_path / "composer" / "store.db"
+    composer.parent.mkdir()
+    conn = sqlite3.connect(composer)
+    conn.execute("create table meta (key text, value blob)")
+    conn.execute("create table blobs (id text primary key, data blob)")
+    conn.execute(
+        "insert into meta values ('0', ?)",
+        (json.dumps({"agentId": "composer", "lastUsedModel": "composer-2.5-fast"}).encode().hex(),),
+    )
+    conn.commit()
+    conn.close()
+    incomplete = tmp_path / "grok" / "grok.jsonl"
+    incomplete.parent.mkdir()
+    incomplete.write_text("{}\n")
+    after = {
+        str(composer): agent_run.file_fingerprint(composer),
+        str(incomplete): agent_run.file_fingerprint(incomplete),
+    }
+
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = FakeClock()
+    session, changed, _settled_after, telemetry = agent_run.settle_cursor_attribution(
+        provider={}, before={}, after=after, requested_model="composer-2.5-fast",
+        overall_started=0.0, timeout_seconds=10.0,
+        snapshot_fn=lambda _provider: after,
+        monotonic_fn=clock.monotonic, sleep_fn=clock.sleep,
+        max_wait_seconds=0.5, poll_seconds=0.25,
+    )
+    assert changed == 2
+    assert session["session_id"] == "unknown"
+    assert session["session_status"] == "ambiguous-concurrent-artifacts"
+    assert telemetry["status"] == "timeout-ambiguous"
+    assert telemetry["poll_count"] == 2
+    assert telemetry["waited_ms"] == 500
+
+
+def test_cursor_settle_is_clamped_by_remaining_total_timeout(tmp_path):
+    transcripts = [tmp_path / "one.jsonl", tmp_path / "two.jsonl"]
+    for transcript in transcripts:
+        transcript.write_text("{}\n")
+    after = {
+        str(transcript): agent_run.file_fingerprint(transcript)
+        for transcript in transcripts
+    }
+
+    class FakeClock:
+        now = 9.8
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = FakeClock()
+    session, _changed, _after, telemetry = agent_run.settle_cursor_attribution(
+        provider={}, before={}, after=after, requested_model="composer-2.5-fast",
+        overall_started=0.0, timeout_seconds=10.0,
+        snapshot_fn=lambda _provider: after,
+        monotonic_fn=clock.monotonic, sleep_fn=clock.sleep,
+        max_wait_seconds=3.0, poll_seconds=0.5,
+    )
+    assert session["session_id"] == "unknown"
+    assert telemetry["status"] == "timeout-ambiguous"
+    assert telemetry["budget_ms"] == 200
+    assert telemetry["waited_ms"] == 200
+    assert clock.now == 10.0
+
+
+def test_governed_cursor_route_applies_manifest_trust_without_bridge_flag():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    args = SimpleNamespace(
+        provider="auto", task_shape="mechanical", model=None, effort=None, seat=None
+    )
+    provider_id, model, effort, seat, route_name = agent_run.resolve_route(args, data)
+    assert (provider_id, model, effort, seat, route_name) == (
+        "cursor", "composer-2.5-fast", "low", "claude-landing", "mechanical"
+    )
+    command = agent_run.build_command(
+        data["providers"][provider_id], "read-only", Path("/bin/echo"),
+        Path("/tmp/work"), "prompt", model, effort
+    )
+    source = agent_run.apply_workspace_trust(
+        data["providers"][provider_id], command,
+        governed_route=True, explicit_trust=False,
+    )
+    assert source == "governed-route-binding"
+    assert "--trust" in command
+
+
+def test_workspace_trust_cannot_be_borrowed_by_explicit_or_unrelated_provider():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    cursor_command = ["cursor-agent", "prompt"]
+    with pytest.raises(agent_run.ProviderRunError, match="explicit --trust-workspace"):
+        agent_run.apply_workspace_trust(
+            data["providers"]["cursor"], cursor_command,
+            governed_route=False, explicit_trust=False,
+        )
+    codex_command = ["codex", "prompt"]
+    with pytest.raises(agent_run.ProviderRunError, match="only valid"):
+        agent_run.apply_workspace_trust(
+            data["providers"]["codex"], codex_command,
+            governed_route=False, explicit_trust=True,
+        )
+    assert "--trust" not in cursor_command + codex_command
 
 
 def test_cursor_attribution_does_not_hijack_concurrent_same_model_store(tmp_path):
@@ -2711,6 +3262,135 @@ def test_classify_route_status_ready_degraded_blocked_disabled():
     )
 
 
+def test_route_doctor_treats_intentionally_unlocked_mechanical_route_as_warning(
+    tmp_path,
+    monkeypatch,
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    active_now = agent_run.utc_now()
+    (tmp_path / "demo.jsonl").write_text(
+        json.dumps(
+            {
+                "provider_id": "cursor",
+                "model_requested": "composer-2.5-fast",
+                "model_observed": "composer-2.5-fast",
+                "model_family": "cursor",
+                "run_status": "completed",
+                "exit_code": 0,
+                "failure_class": "none",
+                "started_at": active_now,
+                "session_id": "cursor-mechanical-session",
+                "session_status": "attributed-correlated-artifacts",
+                "provider_health_evidence": {
+                    "status": "verified-native-session-model",
+                    "model_observed": "composer-2.5-fast",
+                },
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        agent_run, "resolve_binary", lambda _provider: Path("/bin/echo")
+    )
+    monkeypatch.setattr(
+        agent_run, "binary_version", lambda _binary, _provider: "test-cli"
+    )
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda provider, _binary: {
+            "status": (
+                "catalog-listed"
+                if provider.get("display_name") == "Cursor"
+                else "static-config"
+            ),
+            "models": [
+                {"id": model}
+                for model in (
+                    ["auto", "composer-2.5-fast", "cursor-grok-4.5-high-fast"]
+                    if provider.get("display_name") == "Cursor"
+                    else provider.get("model_options", [])
+                )
+            ],
+        },
+    )
+
+    report = agent_run.build_route_doctor(
+        data, route_name="mechanical", repo="demo"
+    )
+    route = report["routes"][0]
+    assert route["status"] == "ready"
+    assert route["blockers"] == []
+    assert route["warnings"] == [
+        {"code": "serial-lock-disabled", "detail": "cursor"}
+    ]
+    assert report["warnings"] == [
+        {
+            "code": "serial-lock-disabled",
+            "route": "mechanical",
+            "provider_id": "cursor",
+        },
+        {
+            "code": "serial-lock-disabled",
+            "route": "mechanical_grok",
+            "provider_id": "cursor",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("route_name", "mutate", "expected"),
+    [
+        (
+            "ordinary_bug_fix",
+            lambda route: route.pop("serial_group"),
+            {"code": "serial-lock-required", "detail": "codex"},
+        ),
+        (
+            "mechanical",
+            lambda route: route.update(serial_group="cursor-family"),
+            {
+                "code": "serial-lock-contradicts-parallel",
+                "detail": "cursor-family",
+            },
+        ),
+    ],
+)
+def test_route_doctor_fails_closed_for_invalid_concurrency_contract(
+    tmp_path, monkeypatch, route_name, mutate, expected
+):
+    canon = yaml.safe_load((ROOT / "routing-policy.yaml").read_text())
+    mutate(canon["runtime_routes"][route_name])
+    canon_path = tmp_path / "routing-policy.yaml"
+    canon_path.write_text(yaml.safe_dump(canon))
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["routing_canon"] = str(canon_path)
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(agent_run, "binary_version", lambda *_args: "test-cli")
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda provider, _binary: {
+            "status": "catalog-listed" if provider.get("display_name") == "Cursor" else "static-config",
+            "models": [{"id": model} for model in provider.get("model_options", [])],
+        },
+    )
+    route = agent_run.build_route_doctor(data, route_name=route_name, repo="demo")["routes"][0]
+    assert expected in route["blockers"]
+
+
+def test_governed_run_concurrency_validation_rejects_missing_serial_group():
+    canon = yaml.safe_load((ROOT / "routing-policy.yaml").read_text())
+    canon["runtime_routes"]["ordinary_bug_fix"].pop("serial_group")
+    binding = agent_run.resolve_binding(canon, "ordinary_bug_fix")
+    with pytest.raises(agent_run.ProviderRunError, match="requires a serial_group"):
+        agent_run.validate_route_concurrency(canon, "ordinary_bug_fix", binding)
+
+
 def test_classify_failure_uses_timeout_class():
     assert agent_run.classify_failure("timed-out", 124, "") == "timeout"
     assert (
@@ -3007,7 +3687,11 @@ def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypat
             self._streams.append((stream, label))
 
         def unregister(self, stream):
-            self._streams = [(s, l) for s, l in self._streams if s is not stream]
+            self._streams = [
+                (registered_stream, label)
+                for registered_stream, label in self._streams
+                if registered_stream is not stream
+            ]
 
         def select(self, timeout=None):
             for stream, label in list(self._streams):
@@ -3117,3 +3801,82 @@ def test_no_skills_does_not_require_local_skill_manifest(tmp_path, monkeypatch, 
     assert len(journals) == 1, journals
     row = json.loads(journals[0].read_text().strip().splitlines()[-1])
     assert row["skill_evidence"]["routing_status"] == "explicitly-disabled-for-run"
+
+
+def test_cursor_run_prefers_native_stream_identity_over_ambiguous_file_diff(
+    tmp_path, monkeypatch
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(agent_run, "binary_version", lambda *_args: "test-cursor")
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda _provider, _binary: {
+            "status": "catalog-listed",
+            "models": [
+                {"id": "composer-2.5-fast", "label": "Composer 2.5 Fast"}
+            ],
+        },
+    )
+    observed = {}
+
+    def fake_stream(command, **_kwargs):
+        observed["command"] = command
+        return (
+            subprocess.CompletedProcess(command, 0, stdout="OK", stderr=""),
+            "completed",
+            agent_run.empty_stage_telemetry(),
+            [
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "session_id": "cursor-native-session",
+                    "model_id": "composer-2.5-fast",
+                },
+                {
+                    "type": "result",
+                    "session_id": "cursor-native-session",
+                    "model_id": "composer-2.5-fast",
+                    "result": "OK",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(agent_run, "run_cursor_stream_json_process", fake_stream)
+    monkeypatch.setattr(
+        agent_run,
+        "attribute_session",
+        lambda *_args, **_kwargs: pytest.fail("native stream must precede file diff"),
+    )
+    args = SimpleNamespace(
+        provider="cursor",
+        task_shape=None,
+        model="composer-2.5-fast",
+        effort=None,
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=True,
+        prompt="native cursor identity",
+    )
+    assert agent_run.run_provider(args, data) == 0
+    assert observed["command"][-3:] == ["--output-format", "stream-json", "native cursor identity"]
+    row = json.loads(next((tmp_path / "journal").glob("*.jsonl")).read_text().splitlines()[-1])
+    assert row["session_attribution"] == "stream-json"
+    assert row["session_id"] == "cursor-native-session"
+    assert row["model_observed"] == "composer-2.5-fast"
+    assert row["provider_health_evidence"]["status"] == "verified-stream-session-model"

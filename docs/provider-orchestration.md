@@ -4,6 +4,72 @@
 three-seat/checkpoint/skill governance. Provider identity never replaces seat
 identity.
 
+## Current V1 implementation and evidence boundary
+
+The V1 control plane is implemented locally: versioned DAG plans, bounded
+ready-set scheduling, isolated worktrees and controller-created candidates,
+deterministic integration/join, dependency bundles, controller leases and
+fencing, exact resume reconciliation, ownership-checked cleanup, and the thin
+`agent-run` bridge. It preserves native provider CLIs and their observed
+receipts; it is not a raw-API multi-model replacement.
+
+Cursor uses its native `--output-format stream-json` evidence first. A Cursor
+model is attributed only when the stream identity is exact, including the
+unique exact catalog-label-to-ID mapping where Cursor emits a display label;
+ambiguous or conflicting identity fails closed. Artifact correlation remains a
+bounded fallback, not a guess.
+
+The `mechanical` and `mechanical_grok` bindings set `managed_skills: disabled`
+for the orchestration hot path, preventing unrelated automatically selected
+skill bodies from consuming the provider prompt budget. Their current doctor
+state is `ready`; the intentionally parallel routes retain only the
+`serial-lock-disabled` warning.
+
+Provider invocation success is not review approval. A review is accepted only
+when its final non-empty line is the one unique exact marker
+`AGENT_RUN_REVIEW_VERDICT: PASS`. The corresponding `FAIL` marker, a missing
+marker, trailing text, or multiple/ambiguous markers fail closed, even if the
+provider process exited zero and returned a session receipt. Cleanup is allowed
+only after integration and that final review acceptance both succeed.
+
+Real local canaries exposed and then exercised this boundary. V1 exposed
+concurrent-attribution, skill-prompt-bloat, and process-cleanup defects. V2 and
+V3 exposed a further defect: the old scheduler marked the runs completed from
+review-provider exit zero even though their stored Claude verdicts were
+`FAIL`. The new verdict gate makes those artifacts retrospective negative
+evidence rather than accepted canaries. V4 completed two concurrent native
+producers, deterministic integration, and a Claude Opus review with the exact
+machine `PASS` marker, then performed eligible cleanup. A subsequent Fable 5
+Max audit passed with no P0/P1 and identified six fail-closed P2 gaps. Those
+gaps were remediated: stream attribution is accepted consistently, provider
+failures map to bounded retries with backoff, dirty writer retries stop before
+a new session, legacy review uses the same verdict projection, command-string
+interpreters and credential keys are rejected, and private candidate evidence
+now includes exact acceptance argv. A fresh incremental Fable audit confirmed
+all six groups closed and no P0/P1, then identified two residual P2 hardening
+items. The final validator now detects wrapped interpreters such as
+`env bash -c` and rejects acceptance declarations on read-only/no-writer plans
+instead of silently recording commands it cannot execute. A final fresh Fable
+closure review recorded in host-local evidence returned `PASS` with no
+remaining P0/P1/P2. The interpreter check is an auditability guard for canonical `-c`
+forms, not a universal executable sandbox; shell-free argv, frozen plans and
+acceptance/review remain the actual safety boundaries.
+
+V5 reran the final hardened path with an argv-native tracked verifier:
+
+- Composer: `composer-2.5-fast`, 19.898 s.
+- Cursor Grok: `cursor-grok-4.5-high-fast`, 23.248 s.
+- The producers launched 0.194 s apart; producer wall time was 25.555 s versus
+  a 43.146 s serial provider-time sum (about 1.69x for this canary only).
+- Claude review: `claude-opus-4-8`, 50.983 s, delivered prompt 1,410 bytes.
+
+These are capability and one-canary latency observations, not proof of a
+general quality or end-to-end speed improvement. The local evidence summary is
+under `~/.agent-runs/`; it remains host-local and is not a Git artifact.
+The final local regression result was 392 pytest passes, 47/47 agent-run
+functional checks, passing orchestrator functional QA, compilation, scoped
+Ruff and diff checks.
+
 ## Install the local entrypoint
 
 ```bash
@@ -135,7 +201,7 @@ agent-run run auto --task-shape codex_final_review \
 
 The current routes map mechanical work to Cursor `composer-2.5-fast`/low
 (Shuttle Seal 飞梭; alternate `mechanical_grok` →
-`cursor-grok-4.5-high`), ordinary bugs to Codex Terra/medium, judgment and
+`cursor-grok-4.5-high-fast`), ordinary bugs to Codex Terra/medium, judgment and
 restricted-zone direction to Claude Opus/high, and dual-seal final review to
 Fable max + GPT-5.6 Sol xhigh (`fable_final_review` / `codex_final_review`).
 Both Cursor routes queue on the same local provider-family lock only when
@@ -197,7 +263,10 @@ budget; authentication and repository files remain available.
 Review routes resolve `--producer-run-id` only from the current repository's
 append-only journal. They require a successful write-capable producer run, reject
 same-seat producers before launch, and reject same-session reuse after native
-session attribution. The checkpoint must be open and claimed by the exact run seat;
+session attribution. Brokered producers additionally require verified health evidence
+plus exactly one accepted attribution state: `attributed-single-artifact`,
+`attributed-correlated-artifacts`, or `attributed-stream-json`; unknown and ambiguous
+states fail closed. The checkpoint must be open and claimed by the exact run seat;
 malformed ledger rows fail closed instead of being skipped.
 Risk triggers are passed with repeated `--risk-trigger` flags. Non-restricted
 execution routes fail closed and direct the caller to `restricted_zone`; a final
@@ -255,7 +324,11 @@ These patterns are worth preserving as timeless protocol guidance:
   one session rather than guessing by newest mtime. Concurrent sessions can yield
   `ambiguous-concurrent-artifacts`; model matching cannot prove ownership.
 - **Headless workspace trust**: Cursor read-only smokes fail fast without explicit
-  `--trust-workspace`; adding trust makes subsequent smokes pass.
+  `--trust-workspace` when the provider is selected explicitly. For a governed
+  `run auto --task-shape ...` route, `agent-run` derives the same native trust
+  decision from the fixed provider manifest and compiled route binding; an
+  orchestrator adapter neither passes nor overrides that flag. The journal
+  records whether trust came from `explicit-cli` or `governed-route-binding`.
 - **Spending-limit signals**: HTTP 402 and similar spending-limit classes are
   transient live states, not evidence that the CLI never worked and not an
   authentication failure. The portable manifest remains capability configuration;
