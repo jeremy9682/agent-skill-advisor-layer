@@ -73,11 +73,14 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
     assert {family for task in protocol["tasks"] for family in task["producer_families"]} == {
         "openai", "cursor"
     }
-    assert all(
-        command.startswith("python3 ")
-        for task in protocol["tasks"]
-        for command in task["acceptance_commands"]
-    )
+    for task in protocol["tasks"]:
+        expected_prefix = (
+            "env PYTHONDONTWRITEBYTECODE=1 python3 "
+            if task["task_class"] == "read_only"
+            else "env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 python3 "
+        )
+        assert all(command.startswith(expected_prefix) for command in task["acceptance_commands"])
+        assert all("sh -c" not in command for command in task["acceptance_commands"])
     launches: dict[tuple[str, str], object] = {}
     for public in protocol["tasks"]:
         assert public["route_policy_sha256"] == fixture.route_policy_sha256
@@ -121,7 +124,18 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
     ]
     assert [task["task_shape"] for task in launches[("neg-1", "B")].plan["tasks"][:-1]] == ["mechanical"]
 
-    pytest_command = ["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+    pytest_command = [
+        "env",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    ]
     full_acceptance = [pytest_command]
     alpha_acceptance = [pytest_command + ["tests/test_pilot_app.py::test_alpha_label"]]
     beta_acceptance = [pytest_command + ["tests/test_pilot_app.py::test_beta_label"]]
@@ -163,25 +177,58 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
         ["reports/pilot-readonly-alpha.md"],
         ["reports/pilot-readonly-beta-negative.md"],
     ]
-    expected_acceptance = [["python3", "-B", "-m", "pilot_app.report_check"]]
+    expected_acceptance = [[
+        "env",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "python3",
+        "-B",
+        "-m",
+        "pilot_app.report_check",
+    ]]
     assert all(task["acceptance"] == expected_acceptance for task in read_b.plan["tasks"][:-1])
     assert read_b.plan["integrated_acceptance"] == expected_acceptance
 
+    # Make each frozen task's intended repair before exercising every compiled
+    # acceptance argv under a caller environment that tries to undo it.  The
+    # acceptance command itself must restore both hermetic settings.
+    (fixture.repo_root / "pilot_app" / "alpha.py").write_text(
+        "def label() -> str:\n    return 'alpha-ready'\n", encoding="utf-8"
+    )
+    (fixture.repo_root / "pilot_app" / "beta.py").write_text(
+        "def label() -> str:\n    return 'beta-ready'\n", encoding="utf-8"
+    )
+    (fixture.repo_root / "pilot_app" / "negative.py").write_text(
+        "def enabled() -> bool:\n    return True\n", encoding="utf-8"
+    )
+    report_path = fixture.repo_root / "reports" / "pilot-readonly-combined.md"
+    report_path.write_text("fixture report\n", encoding="utf-8")
     acceptance_commands = {
         tuple(command)
-        for task_id in ("sep-1", "neg-1", "read-1")
-        for command in json.loads(
-            (fixture.evaluator_root / "tasks" / f"{task_id}.json").read_text()
-        )["lifecycle"]["single_producer"]["acceptance_argv"]
+        for launch in launches.values()
+        for task in launch.plan["tasks"]
+        if not task.get("reviewer_for")
+        for command in task["acceptance"]
     }
+    acceptance_commands.update(
+        tuple(command)
+        for launch in launches.values()
+        for command in launch.plan["integrated_acceptance"]
+    )
     for command in acceptance_commands:
-        subprocess.run(
+        result = subprocess.run(
             command,
             cwd=fixture.repo_root,
             check=False,
             capture_output=True,
-            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+            # The fixture must be hermetic even when its caller pollutes or
+            # removes the relevant environment settings.
+            env={
+                **os.environ,
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "0",
+                "PYTHONDONTWRITEBYTECODE": "0",
+            },
         )
+        assert result.returncode == 0, result.stderr.decode() if isinstance(result.stderr, bytes) else result.stderr
     # Providers may run their own ordinary Python diagnostics before the
     # controller-owned hermetic acceptance commands.  Standard interpreter
     # caches must remain outside the candidate diff in that case as well.
@@ -200,6 +247,7 @@ def test_builds_disposable_clean_fixture_and_compilable_pilot_inputs(tmp_path: P
                 "PYTHONDONTWRITEBYTECODE": "1",
             },
         )
+    report_path.unlink()
     assert not list(fixture.repo_root.rglob("__pycache__"))
     assert not (fixture.repo_root / ".pytest_cache").exists()
     assert not subprocess.run(

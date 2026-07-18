@@ -75,6 +75,31 @@ _REVIEW_PROMPT = (
     "Report concise findings without changing files."
 )
 
+# Acceptance is executed as an argv list, not through a shell.  Prefixing the
+# command with ``env`` makes the pilot independent of the controller's pytest
+# plugin environment and prevents interpreter cache files from becoming an
+# unowned candidate diff.
+_PYTEST_ACCEPTANCE_PREFIX = [
+    "env",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "python3",
+    "-B",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+]
+_REPORT_CHECK_ACCEPTANCE = [
+    "env",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "python3",
+    "-B",
+    "-m",
+    "pilot_app.report_check",
+]
+
 
 def _mode(path: Path, mode: int) -> None:
     os.chmod(path, mode)
@@ -187,30 +212,16 @@ def _private_task(
     repo: Path,
 ) -> dict[str, Any]:
     if task_class == "separable":
-        full_acceptance = [
-            ["python3", "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
-        ]
+        full_acceptance = [[*_PYTEST_ACCEPTANCE_PREFIX]]
         alpha_acceptance = [
             [
-                "python3",
-                "-B",
-                "-m",
-                "pytest",
-                "-q",
-                "-p",
-                "no:cacheprovider",
+                *_PYTEST_ACCEPTANCE_PREFIX,
                 "tests/test_pilot_app.py::test_alpha_label",
             ]
         ]
         beta_acceptance = [
             [
-                "python3",
-                "-B",
-                "-m",
-                "pytest",
-                "-q",
-                "-p",
-                "no:cacheprovider",
+                *_PYTEST_ACCEPTANCE_PREFIX,
                 "tests/test_pilot_app.py::test_beta_label",
             ]
         ]
@@ -248,13 +259,7 @@ def _private_task(
     elif task_class == "negative_control":
         negative_acceptance = [
             [
-                "python3",
-                "-B",
-                "-m",
-                "pytest",
-                "-q",
-                "-p",
-                "no:cacheprovider",
+                *_PYTEST_ACCEPTANCE_PREFIX,
                 "tests/test_pilot_app.py::test_negative_enabled",
             ]
         ]
@@ -282,7 +287,7 @@ def _private_task(
         runbook = {"ready_sets": [["writer-negative"]]}
         intent = {"goal": "Repair one single-module defect", "constraints": ["negative control has one writer"]}
     elif task_class == "read_only":
-        acceptance = [["python3", "-B", "-m", "pilot_app.report_check"]]
+        acceptance = [[*_REPORT_CHECK_ACCEPTANCE]]
         task_input = (
             "Inspect the repository without changing source code, tests, or metadata. Create "
             "only reports/pilot-readonly-combined.md with a concise analysis of the alpha, "
