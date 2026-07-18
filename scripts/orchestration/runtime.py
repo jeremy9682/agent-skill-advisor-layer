@@ -376,8 +376,6 @@ class _BenchmarkManualWrapper:
         return self.runtime.prepare_review(*args, **kwargs)
 
     def cleanup_terminal(self, state: Mapping[str, Any], *, preserve: bool) -> Mapping[str, Any]:
-        if preserve:
-            return {"status": "preserved", "reason": "benchmark-default"}
         plan = self.runtime.runtime.plan
         writers = [
             task
@@ -396,9 +394,19 @@ class _BenchmarkManualWrapper:
                 "status": "failed",
                 "reason": "manual-cleanup-authority-unavailable",
             }
+        cleanup_state = state
+        if preserve:
+            # Reuse the runtime's ownership-aware terminal cleanup projection,
+            # but make preservation an explicit non-eligible state.  The
+            # runtime will emit exact writer + integration `preserved`
+            # outcomes without deleting either worktree.  This avoids the old
+            # top-level placeholder which became `missing` after receipt
+            # normalization and obscured the actual provider failure.
+            cleanup_state = dict(state)
+            cleanup_state["integration"] = {"status": "preserved"}
         return self.runtime.terminal_cleanup(
             plan,
-            state,
+            cleanup_state,
             run_id=run_id,
             generation=1,
             fencing_token=fencing_token,

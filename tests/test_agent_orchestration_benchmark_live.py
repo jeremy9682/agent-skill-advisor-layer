@@ -944,10 +944,20 @@ class _ManualRuntimeProbe:
         self.calls.append(("prepare-review", time.time()))
         return {"status": "succeeded"}
 
-    def terminal_cleanup(self, *_args, fencing_token, **_kwargs):
+    def terminal_cleanup(self, plan, state, *, fencing_token, **_kwargs):
         assert self.ownership is not None
         assert fencing_token == self.ownership["fencing_token"]
         self.calls.append(("cleanup", time.time()))
+        tasks_state = state.get("tasks", {})
+        eligible = all(
+            tasks_state.get(str(task["id"]), {}).get("status") == "succeeded"
+            for task in plan["tasks"]
+        ) and state.get("integration", {}).get("status") == "succeeded"
+        if not eligible:
+            return {
+                "producer": {"worktree": {"status": "preserved"}},
+                "integration": {"worktree": {"status": "preserved"}},
+            }
         shutil.rmtree(self.residual_worktree)
         return {
             "producer": {"worktree": {"status": "succeeded"}},
@@ -1054,6 +1064,98 @@ def test_runtime_adapter_manual_arm_rebinds_one_run_and_preserves_real_event_ord
         "producer",
         "integration",
     ]
+
+
+def test_runtime_adapter_manual_provider_failure_preserves_exact_cleanup_receipt(
+    tmp_path: Path, monkeypatch
+):
+    launch = _manual_launch_fixture(tmp_path)
+    contract = benchmark.LaunchContract(
+        task_id="fixture",
+        arm="B",
+        launcher_kind="manual-event-fanout",
+        payload={"graph": {"nodes": [{"id": "producer"}]}},
+        graph_sha256=launch.graph_sha256,
+        manual_runbook_sha256=launch.manual_runbook_sha256,
+    )
+
+    class _ProviderFailureProbe(_ManualRuntimeProbe):
+        def collect_task(self, task):
+            self.calls.append((f"collect:{task['id']}", time.time()))
+            return {
+                "status": "failed",
+                "failure_class": "timeout_idle",
+                "provider": "cursor",
+                "provider_run_id": "cursor-run-failed",
+                "model_observed": "composer-2.5-fast",
+                "session_id": "cursor-session-failed",
+                "provider_duration_ms": 1000,
+            }
+
+    probes: list[_ProviderFailureProbe] = []
+
+    def runtime_factory(plan, artifact_root, *_args):
+        probe = _ProviderFailureProbe(dict(plan), artifact_root)
+        probes.append(probe)
+        return probe
+
+    adapter = BenchmarkLiveRuntimeAdapter(
+        Path(__file__).parents[1], runtime_factory=runtime_factory
+    )
+    protocol = {"fixture": True}
+    adapter._inspection = {
+        "protocol": protocol,
+        "protocol_sha256": benchmark.sha256_value(protocol),
+        "evaluator_root": tmp_path,
+        "manifest_sha256": "b" * 64,
+        "config_fingerprint": adapter._config_fingerprint,
+    }
+    monkeypatch.setattr(
+        benchmark, "compile_governed_lifecycle", lambda *_args, **_kwargs: launch
+    )
+    cell = tmp_path / "manual-provider-failure"
+    cell.mkdir(mode=0o700)
+    reviewer = {
+        "route": "review",
+        "model": "claude-fable-5",
+        "effort": "max",
+        "family": "claude-family",
+        "prompt_sha256": "c" * 64,
+    }
+
+    outcome = adapter.launch_benchmark_arm(
+        contract,
+        cell_root=cell,
+        reviewer=reviewer,
+        block_id="block-fixture",
+    )
+
+    assert probes and probes[0].residual_worktree.is_dir()
+    assert outcome["events"][-1]["failure_class"] == "provider-environment-failure"
+    assert outcome["cleanup_receipt"]["expected_resource_ids"] == [
+        "producer",
+        "integration",
+    ]
+    assert outcome["cleanup_receipt"]["resources"] == [
+        {"id": "producer", "worktree_status": "preserved"},
+        {"id": "integration", "worktree_status": "preserved"},
+    ]
+
+    events, _artifacts, cleanup_receipt = benchmark._live_outcome(
+        contract,
+        outcome,
+        public_task={
+            "reviewer": reviewer,
+            "producer_families": ["openai", "cursor"],
+        },
+        expected_fingerprint=adapter._config_fingerprint,
+        block_id="block-fixture",
+    )
+    assert events[-1]["failure_class"] == "provider-environment-failure"
+    assert all(
+        resource["worktree_status"] == "preserved"
+        for resource in cleanup_receipt["resources"]
+    )
 
 
 def test_success_cleanup_requires_every_owned_worktree(tmp_path: Path):
