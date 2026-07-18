@@ -70,6 +70,9 @@ PROVIDER_SERIAL_GROUPS = {
 SERIAL_LOCK_WAIT_SECONDS = 900
 CURSOR_ATTRIBUTION_SETTLE_SECONDS = 3.0
 CURSOR_ATTRIBUTION_POLL_SECONDS = 0.1
+CATALOG_DISCOVERY_MAX_ATTEMPTS = 2
+CATALOG_DISCOVERY_TIMEOUT_SECONDS = 5
+CATALOG_DISCOVERY_RETRY_DELAY_SECONDS = 0.1
 SKILL_NAME_RE = re.compile(r"^- `([^`]+)`$")
 VERIFIED_BROKER_SESSION_STATUSES = frozenset(
     {
@@ -82,6 +85,37 @@ VERIFIED_BROKER_SESSION_STATUSES = frozenset(
 
 class ProviderRunError(RuntimeError):
     pass
+
+
+class CatalogUnavailableError(ProviderRunError):
+    def __init__(self, catalog_status: str, attempts: int):
+        super().__init__(f"model catalog is unavailable: {catalog_status}")
+        self.catalog_status = catalog_status
+        self.attempts = attempts
+
+
+class CatalogPreflightError(ProviderRunError):
+    """A pre-provider Cursor catalog rejection that may be scheduler-retried."""
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        provider: str,
+        model: str,
+        seat: str,
+        catalog_status: str,
+        catalog_attempts: int,
+    ):
+        super().__init__(
+            f"model catalog is unavailable for provider {provider!r}: {catalog_status}"
+        )
+        self.run_id = run_id
+        self.provider = provider
+        self.model = model
+        self.seat = seat
+        self.catalog_status = catalog_status
+        self.catalog_attempts = catalog_attempts
 
 
 class SerialLockTimeout(ProviderRunError):
@@ -200,7 +234,7 @@ def discover_provider_models(provider: dict, binary: Path) -> dict:
             env=env,
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=CATALOG_DISCOVERY_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -219,10 +253,30 @@ def validate_provider_model(
     provider: dict,
     binary: Path,
     model: str,
+    *,
+    preflight_retry: bool = False,
 ) -> dict:
-    catalog = discover_provider_models(provider, binary)
+    if preflight_retry:
+        attempts = 0
+        while True:
+            attempts += 1
+            # Keep the retry policy at the run preflight boundary.  This also
+            # preserves the public discovery seam used by doctor/discover and
+            # makes it impossible for the provider command path to retry.
+            catalog = discover_provider_models(provider, binary)
+            if (
+                catalog["status"] != "catalog-unavailable"
+                or attempts >= CATALOG_DISCOVERY_MAX_ATTEMPTS
+            ):
+                break
+            time.sleep(CATALOG_DISCOVERY_RETRY_DELAY_SECONDS)
+    else:
+        catalog = discover_provider_models(provider, binary)
+        attempts = 0
     allowed = {str(row.get("id")) for row in catalog["models"] if row.get("id")}
     if catalog["status"] not in {"catalog-listed", "static-config"}:
+        if preflight_retry and catalog["status"] == "catalog-unavailable":
+            raise CatalogUnavailableError(str(catalog["status"]), attempts)
         raise ProviderRunError(
             f"model catalog is unavailable for provider {provider_id!r}: {catalog['status']}"
         )
@@ -2506,6 +2560,39 @@ def apply_workspace_trust(
     return "not-required"
 
 
+def emit_catalog_preflight_rejection(error: CatalogPreflightError) -> None:
+    """Emit the sole machine receipt allowed before a provider session starts.
+
+    This is deliberately not a provider-run journal event: no provider command
+    was launched and there is no attributable provider session.  The bridge
+    recognizes only this exact small schema, so a generic CLI exit 2 cannot be
+    mistaken for a retryable provider failure.
+    """
+
+    print(
+        json.dumps(
+            {
+                "agent_run": {
+                    "receipt_kind": "preflight-rejection-v1",
+                    "run_id": error.run_id,
+                    "provider": error.provider,
+                    "seat": error.seat,
+                    "model": error.model,
+                    "exit_code": 2,
+                    "failure_class": "provider-catalog-unavailable",
+                    "session_status": "not-started",
+                    "preflight_stage": "model-catalog",
+                    "catalog_status": error.catalog_status,
+                    "catalog_attempts": error.catalog_attempts,
+                }
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        file=sys.stderr,
+    )
+
+
 def run_provider(args: argparse.Namespace, config: dict) -> int:
     provider_id, model, effort, seat, route_name = resolve_route(args, config)
     if not SEAT_RE.fullmatch(seat or ""):
@@ -2552,7 +2639,24 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
     model = model or str(provider.get("model_requested") or "unknown")
     effort = effort or provider.get("effort_requested")
     binary = resolve_binary(provider)
-    model_catalog = validate_provider_model(provider_id, provider, binary, str(model))
+    run_id = str(uuid.uuid4())
+    try:
+        model_catalog = validate_provider_model(
+            provider_id,
+            provider,
+            binary,
+            str(model),
+            preflight_retry=True,
+        )
+    except CatalogUnavailableError as exc:
+        raise CatalogPreflightError(
+            run_id=run_id,
+            provider=provider_id,
+            model=str(model),
+            seat=seat,
+            catalog_status=exc.catalog_status,
+            catalog_attempts=exc.attempts,
+        ) from exc
     if effort is not None and effort not in set(
         map(str, provider.get("effort_options", [effort]))
     ):
@@ -2604,7 +2708,6 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
     env, stripped_env = scrub_environment(provider)
     before: dict[str, tuple[int, int]] = {}
     after: dict[str, tuple[int, int]] = {}
-    run_id = str(uuid.uuid4())
     started_at = utc_now()
     started = time.monotonic()
     stream_events: list[dict] = []
@@ -3520,6 +3623,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             return status(args, config)
         raise ProviderRunError("unsupported command")
+    except CatalogPreflightError as exc:
+        emit_catalog_preflight_rejection(exc)
+        print(f"agent-run: error: {exc}", file=sys.stderr)
+        return 2
     except ProviderRunError as exc:
         print(f"agent-run: error: {exc}", file=sys.stderr)
         return 2

@@ -719,7 +719,11 @@ def test_scheduler_retries_only_declared_classes_and_propagates_failure(tmp_path
 
 
 @pytest.mark.parametrize(
-    "failure_class", ["provider-rate-limit", "provider-transient"]
+    "failure_class", [
+        "provider-rate-limit",
+        "provider-transient",
+        "provider-preflight-transient",
+    ]
 )
 def test_scheduler_provider_retry_has_bounded_deterministic_backoff(
     tmp_path, failure_class

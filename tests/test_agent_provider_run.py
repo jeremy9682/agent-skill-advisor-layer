@@ -293,6 +293,114 @@ def test_cursor_alias_and_discovered_model_validation(monkeypatch):
         )
 
 
+def test_cursor_catalog_preflight_retries_are_bounded_and_never_run_the_provider(
+    monkeypatch,
+):
+    """A transient Cursor catalog probe may retry before any provider run exists."""
+
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    provider = data["providers"]["cursor"]
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(list(command))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="temporary")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="Available models\n\ncomposer-2.5-fast - Composer 2.5 Fast\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_run.subprocess, "run", fake_run)
+    agent_run.validate_provider_model(
+        "cursor",
+        provider,
+        Path("/bin/echo"),
+        "composer-2.5-fast",
+        preflight_retry=True,
+    )
+    assert calls == [["/bin/echo", "models"], ["/bin/echo", "models"]]
+
+
+def test_catalog_exhaustion_emits_strict_sessionless_preflight_rejection(capsys):
+    error = agent_run.CatalogPreflightError(
+        run_id="preflight-run-1",
+        provider="cursor",
+        model="composer-2.5-fast",
+        seat="cursor-producer",
+        catalog_status="catalog-unavailable",
+        catalog_attempts=2,
+    )
+    agent_run.emit_catalog_preflight_rejection(error)
+    output = json.loads(capsys.readouterr().err)
+    receipt = output["agent_run"]
+    assert receipt == {
+        "receipt_kind": "preflight-rejection-v1",
+        "run_id": "preflight-run-1",
+        "provider": "cursor",
+        "seat": "cursor-producer",
+        "model": "composer-2.5-fast",
+        "exit_code": 2,
+        "failure_class": "provider-catalog-unavailable",
+        "session_status": "not-started",
+        "preflight_stage": "model-catalog",
+        "catalog_status": "catalog-unavailable",
+        "catalog_attempts": 2,
+    }
+    assert "session_id" not in receipt
+    assert "prompt" not in json.dumps(receipt)
+
+
+def test_catalog_preflight_exhaustion_never_launches_provider_or_writes_journal(
+    tmp_path, monkeypatch,
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    calls = 0
+
+    def unavailable_catalog(_provider, _binary):
+        nonlocal calls
+        calls += 1
+        return {"status": "catalog-unavailable", "models": []}
+
+    monkeypatch.setattr(agent_run, "discover_provider_models", unavailable_catalog)
+    monkeypatch.setattr(
+        agent_run,
+        "run_cursor_stream_json_process",
+        lambda *_args, **_kwargs: pytest.fail("provider main execution must not start"),
+    )
+    args = SimpleNamespace(
+        provider="cursor",
+        task_shape=None,
+        model="composer-2.5-fast",
+        effort=None,
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=True,
+        prompt="must never leave preflight",
+    )
+    with pytest.raises(agent_run.CatalogPreflightError) as raised:
+        agent_run.run_provider(args, data)
+    assert raised.value.catalog_attempts == 2
+    assert calls == 2
+    assert not (tmp_path / "journal").exists()
+
+
 def test_model_discovery_strips_provider_billing_environment(monkeypatch):
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     provider = data["providers"]["cursor"]

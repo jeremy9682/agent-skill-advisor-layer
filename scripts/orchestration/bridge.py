@@ -40,6 +40,23 @@ REVIEW_VERDICT_PREFIX = "AGENT_RUN_REVIEW_VERDICT:"
 REVIEW_VERDICT_PASS = "AGENT_RUN_REVIEW_VERDICT: PASS"
 REVIEW_VERDICT_FAIL = "AGENT_RUN_REVIEW_VERDICT: FAIL"
 MAX_NATURAL_EXIT_SETTLE_SECONDS = 0.25
+PREFLIGHT_REJECTION_KEYS = frozenset(
+    {
+        "receipt_kind",
+        "run_id",
+        "provider",
+        "seat",
+        "model",
+        "exit_code",
+        "failure_class",
+        "session_status",
+        "preflight_stage",
+        "catalog_status",
+        "catalog_attempts",
+    }
+)
+PREFLIGHT_REJECTION_KIND = "preflight-rejection-v1"
+PREFLIGHT_REJECTION_FAILURE = "provider-catalog-unavailable"
 
 
 def _sha256(data: bytes) -> str:
@@ -130,6 +147,35 @@ def _group_alive(pgid: int) -> bool:
     return True
 
 
+def _is_strict_catalog_preflight_rejection(receipt: Mapping[str, Any]) -> bool:
+    return receipt.get("receipt_kind") == PREFLIGHT_REJECTION_KIND
+
+
+def _validate_catalog_preflight_rejection(receipt: Mapping[str, Any]) -> None:
+    if set(receipt) != PREFLIGHT_REJECTION_KEYS:
+        raise BridgeError("agent_run strict preflight rejection has unexpected fields")
+    required_strings = ("run_id", "provider", "seat", "model")
+    if any(
+        not isinstance(receipt.get(field), str) or not receipt[field]
+        or not SAFE_ID_RE.fullmatch(receipt[field])
+        for field in required_strings
+    ):
+        raise BridgeError("agent_run strict preflight rejection has incomplete identity")
+    if receipt.get("exit_code") != 2:
+        raise BridgeError("agent_run strict preflight rejection must use exit code 2")
+    if receipt.get("failure_class") != PREFLIGHT_REJECTION_FAILURE:
+        raise BridgeError("agent_run strict preflight rejection has invalid failure class")
+    if receipt.get("session_status") != "not-started":
+        raise BridgeError("agent_run strict preflight rejection must be sessionless")
+    if receipt.get("preflight_stage") != "model-catalog":
+        raise BridgeError("agent_run strict preflight rejection has invalid stage")
+    if receipt.get("catalog_status") != "catalog-unavailable":
+        raise BridgeError("agent_run strict preflight rejection has invalid catalog status")
+    attempts = receipt.get("catalog_attempts")
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or not 1 <= attempts <= 3:
+        raise BridgeError("agent_run strict preflight rejection has invalid retry count")
+
+
 def parse_agent_run_output(stdout: str, stderr: str = "") -> tuple[dict[str, Any], str]:
     """Extract exactly one attributed machine receipt and its provider answer."""
     candidates: list[tuple[str, int, Mapping[str, Any]]] = []
@@ -148,6 +194,9 @@ def parse_agent_run_output(stdout: str, stderr: str = "") -> tuple[dict[str, Any
     missing = [field for field in required if receipt.get(field) in (None, "")]
     if missing:
         raise BridgeError(f"agent_run receipt missing fields: {', '.join(missing)}")
+    if _is_strict_catalog_preflight_rejection(receipt):
+        _validate_catalog_preflight_rejection(receipt)
+        return dict(receipt), ""
     if receipt.get("session_status") not in {
         "attributed-stream-json", "attributed-single-artifact",
         "attributed-correlated-artifacts",
@@ -191,6 +240,8 @@ def orchestration_failure_class(provider_failure_class: Any) -> str:
     failure_class = str(provider_failure_class or "none")
     if failure_class == "rate-limited":
         return "provider-rate-limit"
+    if failure_class == PREFLIGHT_REJECTION_FAILURE:
+        return "provider-preflight-transient"
     if failure_class in {
         "upstream-overload",
         "provider-error",
@@ -201,6 +252,44 @@ def orchestration_failure_class(provider_failure_class: Any) -> str:
     }:
         return "provider-transient"
     return failure_class
+
+
+def _unattributed_wrapper_exit(
+    *,
+    run_id: str,
+    task_id: str,
+    attempt_id: str,
+    generation: int,
+    returncode: int | None,
+    wall_ms: int,
+    metrics: Mapping[str, int],
+    wrapper_pid: int | None = None,
+    wrapper_start_fingerprint: str | None = None,
+    launch_manifest_path: str | None = None,
+    process_cleanup: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fail closed when a nonzero wrapper cannot prove what it did."""
+
+    result: dict[str, Any] = {
+        "task_id": task_id,
+        "orchestration_run_id": run_id,
+        "attempt_id": attempt_id,
+        "generation": generation,
+        "status": "failed-unsafe",
+        "failure_class": "unattributed-wrapper-exit",
+        "wrapper_exit_code": returncode,
+        "bridge_wall_ms": int(wall_ms),
+        **dict(metrics),
+    }
+    if wrapper_pid is not None:
+        result["wrapper_pid"] = wrapper_pid
+    if wrapper_start_fingerprint is not None:
+        result["wrapper_start_fingerprint"] = wrapper_start_fingerprint
+    if launch_manifest_path is not None:
+        result["launch_manifest_path"] = launch_manifest_path
+    if process_cleanup is not None:
+        result["process_cleanup"] = dict(process_cleanup)
+    return result
 
 
 class BridgeLaunch:
@@ -598,7 +687,34 @@ class NativeAgentRunBridge:
             return result
         stdout = _private_read(launch.stdout_path).decode("utf-8", errors="replace")
         stderr = _private_read(launch.stderr_path).decode("utf-8", errors="replace")
-        receipt, answer = parse_agent_run_output(stdout, stderr)
+        try:
+            receipt, answer = parse_agent_run_output(stdout, stderr)
+        except BridgeError:
+            if returncode == 2:
+                result = _unattributed_wrapper_exit(
+                    run_id=launch.run_id,
+                    task_id=launch.task_id,
+                    attempt_id=launch.attempt_id,
+                    generation=launch.generation,
+                    returncode=returncode,
+                    wall_ms=wall_ms,
+                    metrics=launch.metrics,
+                    wrapper_pid=launch.pid,
+                    wrapper_start_fingerprint=launch.start_fingerprint,
+                    launch_manifest_path=str(launch.manifest_path),
+                    process_cleanup=cleanup,
+                )
+                _private_atomic_json(
+                    launch.manifest_path,
+                    {
+                        **self._read_manifest(launch.manifest_path),
+                        "status": "failed-unsafe",
+                        "wrapper_exit_code": returncode,
+                        "process_cleanup": cleanup,
+                    },
+                )
+                return result
+            raise
         receipt_exit = int(receipt["exit_code"])
         if returncode is not None and int(returncode) != receipt_exit:
             raise BridgeError("wrapper exit code does not match machine receipt")
@@ -614,20 +730,23 @@ class NativeAgentRunBridge:
             verdict_failure = review_verdict_failure(answer)
             if verdict_failure is not None:
                 status, failure_class = "failed", verdict_failure
+        preflight_rejection = _is_strict_catalog_preflight_rejection(receipt)
         result = {
             "task_id": launch.task_id, "orchestration_run_id": launch.run_id,
             "attempt_id": launch.attempt_id, "generation": launch.generation,
             "status": status, "failure_class": failure_class,
             "provider_run_id": str(receipt["run_id"]), "provider": str(receipt["provider"]),
-            "model_observed": str(receipt["model"]), "session_id": str(receipt["session_id"]),
+            "model_observed": str(receipt["model"]),
             "session_status": str(receipt["session_status"]), "exit_code": receipt_exit,
             "artifact_path": str(answer_path), "artifact_sha256": _sha256(answer_bytes),
-            "provider_duration_ms": int(receipt.get("duration_ms") or wall_ms),
+            "provider_duration_ms": 0 if preflight_rejection else int(receipt.get("duration_ms") or wall_ms),
             "bridge_wall_ms": int(wall_ms), "wrapper_pid": launch.pid,
             "wrapper_start_fingerprint": launch.start_fingerprint,
             "launch_manifest_path": str(launch.manifest_path), "process_cleanup": cleanup,
             **launch.metrics,
         }
+        if not preflight_rejection:
+            result["session_id"] = str(receipt["session_id"])
         if receipt.get("model_observed"):
             result["model_observed"] = str(receipt["model_observed"])
         if receipt.get("model_family"):
@@ -755,11 +874,26 @@ class NativeAgentRunBridge:
             capture_output=True, text=True, check=False,
         )
         wall_ms = max(0, (time.perf_counter_ns() - started) // 1_000_000)
-        receipt, answer = parse_agent_run_output(completed.stdout or "", completed.stderr or "")
+        task_id = str(task.get("task_id") or task.get("id") or "unknown")
+        try:
+            receipt, answer = parse_agent_run_output(
+                completed.stdout or "", completed.stderr or ""
+            )
+        except BridgeError:
+            if int(completed.returncode) == 2:
+                return _unattributed_wrapper_exit(
+                    run_id=run_id,
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    generation=generation,
+                    returncode=int(completed.returncode),
+                    wall_ms=wall_ms,
+                    metrics=metrics,
+                )
+            raise
         receipt_exit = int(receipt["exit_code"])
         if int(completed.returncode) != receipt_exit:
             raise BridgeError("wrapper exit code does not match machine receipt")
-        task_id = str(task.get("task_id") or task.get("id") or "unknown")
         directory, _manifest, _stdout, _stderr = self._attempt_paths(run_id, task_id, attempt_id)
         answer_path, answer_bytes = directory / "provider-answer.txt", answer.encode()
         _private_write(answer_path, answer_bytes)
@@ -769,17 +903,21 @@ class NativeAgentRunBridge:
             verdict_failure = review_verdict_failure(answer)
             if verdict_failure is not None:
                 status, failure_class = "failed", verdict_failure
-        return {
+        preflight_rejection = _is_strict_catalog_preflight_rejection(receipt)
+        result = {
             "task_id": task_id, "orchestration_run_id": run_id, "attempt_id": attempt_id,
             "generation": generation, "status": status,
             "failure_class": failure_class, "provider_run_id": str(receipt["run_id"]),
             "provider": str(receipt["provider"]), "model_observed": str(receipt["model"]),
-            "session_id": str(receipt["session_id"]), "session_status": str(receipt["session_status"]),
+            "session_status": str(receipt["session_status"]),
             "exit_code": receipt_exit, "artifact_path": str(answer_path),
             "artifact_sha256": _sha256(answer_bytes),
-            "provider_duration_ms": int(receipt.get("duration_ms") or wall_ms),
+            "provider_duration_ms": 0 if preflight_rejection else int(receipt.get("duration_ms") or wall_ms),
             "bridge_wall_ms": int(wall_ms), **metrics,
         }
+        if not preflight_rejection:
+            result["session_id"] = str(receipt["session_id"])
+        return result
 
     def run_task(self, task: Mapping[str, Any], *, run_id: str, attempt_id: str, generation: int) -> dict[str, Any]:
         if self.runner is not None:

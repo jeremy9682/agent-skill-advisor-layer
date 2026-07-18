@@ -100,6 +100,7 @@ ALLOWED_WORKSPACE_KEYS = {
 ALLOWED_RETRY_CLASSES = {
     "provider-transient",
     "provider-rate-limit",
+    "provider-preflight-transient",
     "adapter-transient",
 }
 METADATA_DENY_KEYS = FORBIDDEN_AUTHORITY_KEYS | {

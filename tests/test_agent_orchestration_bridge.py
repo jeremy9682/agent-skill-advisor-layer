@@ -86,6 +86,78 @@ def test_parse_requires_one_complete_attributed_receipt():
         bridge_mod.parse_agent_run_output(bad)
 
 
+def preflight_rejection_receipt(**overrides) -> dict:
+    value = {
+        "receipt_kind": "preflight-rejection-v1",
+        "run_id": "preflight-run-1",
+        "provider": "cursor",
+        "seat": "cursor-producer",
+        "model": "composer-2.5-fast",
+        "exit_code": 2,
+        "failure_class": "provider-catalog-unavailable",
+        "session_status": "not-started",
+        "preflight_stage": "model-catalog",
+        "catalog_status": "catalog-unavailable",
+        "catalog_attempts": 2,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_bridge_accepts_only_strict_identity_complete_sessionless_catalog_rejection(
+    tmp_path,
+):
+    line = json.dumps({"agent_run": preflight_rejection_receipt()})
+    parsed, answer = bridge_mod.parse_agent_run_output(line)
+    assert parsed["session_status"] == "not-started"
+    assert answer == ""
+
+    def runner(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr=line)
+
+    result = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", runner=runner
+    ).run_task(
+        base_task(tmp_path), run_id="catalog-preflight", attempt_id="attempt-1", generation=1
+    )
+    assert result["status"] == "failed"
+    assert result["failure_class"] == "provider-preflight-transient"
+    assert result["session_status"] == "not-started"
+    assert "session_id" not in result
+    assert base_task(tmp_path)["prompt"] not in json.dumps(result)
+
+    malformed = dict(preflight_rejection_receipt())
+    malformed["session_id"] = "must-not-exist"
+    with pytest.raises(bridge_mod.BridgeError, match="strict preflight rejection"):
+        bridge_mod.parse_agent_run_output(json.dumps({"agent_run": malformed}))
+
+
+def test_unknown_exit_two_without_machine_rejection_stays_failed_unsafe(tmp_path):
+    def runner(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr="catalog failed")
+
+    result = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", runner=runner
+    ).run_task(
+        base_task(tmp_path), run_id="unknown-exit-two", attempt_id="attempt-1", generation=1
+    )
+    assert result["status"] == "failed-unsafe"
+    assert result["failure_class"] == "unattributed-wrapper-exit"
+
+
+def test_live_unknown_exit_two_without_machine_rejection_stays_failed_unsafe(tmp_path):
+    wrapper = executable_wrapper(tmp_path, "raise SystemExit(2)")
+    bridge = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", binary=str(wrapper)
+    )
+    launch = bridge.launch_task(
+        base_task(tmp_path), run_id="unknown-live-exit-two", attempt_id="attempt-1", generation=1
+    )
+    result = bridge.collect_task(launch)
+    assert result["status"] == "failed-unsafe"
+    assert result["failure_class"] == "unattributed-wrapper-exit"
+
+
 @pytest.mark.parametrize(
     ("provider_failure", "orchestration_failure"),
     [
