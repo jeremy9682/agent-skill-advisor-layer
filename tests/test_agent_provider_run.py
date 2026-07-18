@@ -401,6 +401,133 @@ def test_catalog_preflight_exhaustion_never_launches_provider_or_writes_journal(
     assert not (tmp_path / "journal").exists()
 
 
+def test_auto_skill_router_retries_exactly_once_after_a_known_timeout(
+    tmp_path, monkeypatch,
+):
+    config = {"skills": {"router_hook": "scripts/skill_router_hook.py"}}
+    calls = 0
+
+    def timed_then_ok(command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.TimeoutExpired(command, 8)
+        return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(agent_run.subprocess, "run", timed_then_ok)
+    names, status = agent_run.auto_skill_names("inspect", tmp_path, config)
+    assert names == []
+    assert status == "ok"
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [
+        (OSError("router unavailable"), "router-exec-error"),
+        (subprocess.CompletedProcess([], 0, stdout="not-json", stderr=""), "router-malformed-output"),
+    ],
+)
+def test_auto_skill_router_does_not_retry_unknown_or_non_timeout_failures(
+    tmp_path, monkeypatch, failure, expected_status,
+):
+    config = {"skills": {"router_hook": "scripts/skill_router_hook.py"}}
+    calls = 0
+
+    def failing_run(_command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(agent_run.subprocess, "run", failing_run)
+    assert agent_run.auto_skill_names("inspect", tmp_path, config) == ([], expected_status)
+    assert calls == 1
+
+
+def test_router_timeout_preflight_has_no_provider_run_or_journal(tmp_path, monkeypatch):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "validate_checkpoint", lambda *_args: {})
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(
+        agent_run,
+        "validate_provider_model",
+        lambda *_args, **_kwargs: {"status": "static-config", "models": []},
+    )
+    monkeypatch.setattr(
+        agent_run,
+        "select_skills",
+        lambda *_args, **_kwargs: {
+            "manifest_sha256": "a" * 64,
+            "available_count": 0,
+            "chosen": [],
+            "deferred": [],
+            "entries": {},
+            "routing_status": "router-timeout",
+        },
+    )
+    monkeypatch.setattr(
+        agent_run,
+        "run_codex_json_process",
+        lambda *_args, **_kwargs: pytest.fail("provider main execution must not start"),
+    )
+    args = SimpleNamespace(
+        provider="auto",
+        task_shape="ordinary_bug_fix",
+        model=None,
+        effort=None,
+        seat=None,
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event="evt-20260718T000000.000000Z-codex-landing",
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=False,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=False,
+        prompt="must never leave router preflight",
+    )
+    with pytest.raises(agent_run.RouterPreflightError) as raised:
+        agent_run.run_provider(args, data)
+    assert raised.value.router_attempts == 2
+    assert not (tmp_path / "journal").exists()
+
+
+def test_router_timeout_emits_strict_sessionless_preflight_rejection(capsys):
+    error = agent_run.RouterPreflightError(
+        run_id="router-preflight-run-1",
+        provider="codex",
+        model="gpt-5.6-terra",
+        seat="codex-landing",
+        router_attempts=2,
+    )
+    agent_run.emit_router_preflight_rejection(error)
+    receipt = json.loads(capsys.readouterr().err)["agent_run"]
+    assert receipt == {
+        "receipt_kind": "preflight-rejection-v1",
+        "run_id": "router-preflight-run-1",
+        "provider": "codex",
+        "seat": "codex-landing",
+        "model": "gpt-5.6-terra",
+        "exit_code": 2,
+        "failure_class": "provider-skill-router-timeout",
+        "session_status": "not-started",
+        "preflight_stage": "skill-router",
+        "router_status": "router-timeout",
+        "router_attempts": 2,
+    }
+    assert "session_id" not in receipt
+    assert "prompt" not in json.dumps(receipt)
+
+
 def test_model_discovery_strips_provider_billing_environment(monkeypatch):
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     provider = data["providers"]["cursor"]

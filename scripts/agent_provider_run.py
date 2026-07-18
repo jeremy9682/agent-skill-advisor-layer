@@ -73,6 +73,8 @@ CURSOR_ATTRIBUTION_POLL_SECONDS = 0.1
 CATALOG_DISCOVERY_MAX_ATTEMPTS = 2
 CATALOG_DISCOVERY_TIMEOUT_SECONDS = 5
 CATALOG_DISCOVERY_RETRY_DELAY_SECONDS = 0.1
+ROUTER_PREFLIGHT_MAX_ATTEMPTS = 2
+ROUTER_PREFLIGHT_RETRY_DELAY_SECONDS = 0.1
 SKILL_NAME_RE = re.compile(r"^- `([^`]+)`$")
 VERIFIED_BROKER_SESSION_STATUSES = frozenset(
     {
@@ -116,6 +118,26 @@ class CatalogPreflightError(ProviderRunError):
         self.seat = seat
         self.catalog_status = catalog_status
         self.catalog_attempts = catalog_attempts
+
+
+class RouterPreflightError(ProviderRunError):
+    """A known skill-router timeout before a provider process starts."""
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        provider: str,
+        model: str,
+        seat: str,
+        router_attempts: int,
+    ):
+        super().__init__("skill router timed out before provider launch")
+        self.run_id = run_id
+        self.provider = provider
+        self.model = model
+        self.seat = seat
+        self.router_attempts = router_attempts
 
 
 class SerialLockTimeout(ProviderRunError):
@@ -873,23 +895,27 @@ def auto_skill_names(prompt: str, cwd: Path, config: dict) -> tuple[list[str], s
     payload = json.dumps(
         {"prompt": prompt, "cwd": str(cwd), "session_id": "agent-run-preflight"}
     )
-    try:
-        run = subprocess.run(
-            [sys.executable, str(hook)],
-            input=payload,
-            capture_output=True,
-            text=True,
-            timeout=8,
-            check=False,
-        )
-        parsed = json.loads(run.stdout or "{}")
-        context = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
-    except OSError:
-        return [], "router-exec-error"
-    except subprocess.TimeoutExpired:
-        return [], "router-timeout"
-    except ValueError:
-        return [], "router-malformed-output"
+    for attempt in range(1, ROUTER_PREFLIGHT_MAX_ATTEMPTS + 1):
+        try:
+            run = subprocess.run(
+                [sys.executable, str(hook)],
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            parsed = json.loads(run.stdout or "{}")
+            context = parsed.get("hookSpecificOutput", {}).get("additionalContext", "")
+            break
+        except OSError:
+            return [], "router-exec-error"
+        except subprocess.TimeoutExpired:
+            if attempt == ROUTER_PREFLIGHT_MAX_ATTEMPTS:
+                return [], "router-timeout"
+            time.sleep(ROUTER_PREFLIGHT_RETRY_DELAY_SECONDS)
+        except ValueError:
+            return [], "router-malformed-output"
     names: list[str] = []
     for line in context.splitlines():
         match = SKILL_NAME_RE.fullmatch(line.strip())
@@ -2593,6 +2619,33 @@ def emit_catalog_preflight_rejection(error: CatalogPreflightError) -> None:
     )
 
 
+def emit_router_preflight_rejection(error: RouterPreflightError) -> None:
+    """Emit the only accepted receipt for an exhausted router timeout."""
+
+    print(
+        json.dumps(
+            {
+                "agent_run": {
+                    "receipt_kind": "preflight-rejection-v1",
+                    "run_id": error.run_id,
+                    "provider": error.provider,
+                    "seat": error.seat,
+                    "model": error.model,
+                    "exit_code": 2,
+                    "failure_class": "provider-skill-router-timeout",
+                    "session_status": "not-started",
+                    "preflight_stage": "skill-router",
+                    "router_status": "router-timeout",
+                    "router_attempts": error.router_attempts,
+                }
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        file=sys.stderr,
+    )
+
+
 def run_provider(args: argparse.Namespace, config: dict) -> int:
     provider_id, model, effort, seat, route_name = resolve_route(args, config)
     if not SEAT_RE.fullmatch(seat or ""):
@@ -2675,6 +2728,17 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         }
     else:
         selection = select_skills(args.prompt, cwd, args.skill, config)
+        if (
+            route_name is not None
+            and selection.get("routing_status") == "router-timeout"
+        ):
+            raise RouterPreflightError(
+                run_id=run_id,
+                provider=provider_id,
+                model=str(model),
+                seat=seat,
+                router_attempts=ROUTER_PREFLIGHT_MAX_ATTEMPTS,
+            )
         if route_name is not None and selection.get("routing_status") != "ok":
             raise ProviderRunError(
                 f"skill router is degraded for governed route: {selection.get('routing_status')}"
@@ -3625,6 +3689,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ProviderRunError("unsupported command")
     except CatalogPreflightError as exc:
         emit_catalog_preflight_rejection(exc)
+        print(f"agent-run: error: {exc}", file=sys.stderr)
+        return 2
+    except RouterPreflightError as exc:
+        emit_router_preflight_rejection(exc)
         print(f"agent-run: error: {exc}", file=sys.stderr)
         return 2
     except ProviderRunError as exc:

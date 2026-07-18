@@ -132,6 +132,41 @@ def test_bridge_accepts_only_strict_identity_complete_sessionless_catalog_reject
         bridge_mod.parse_agent_run_output(json.dumps({"agent_run": malformed}))
 
 
+def test_bridge_accepts_only_strict_sessionless_router_timeout_rejection(tmp_path):
+    router_receipt = {
+        "receipt_kind": "preflight-rejection-v1",
+        "run_id": "router-preflight-run-1",
+        "provider": "codex",
+        "seat": "codex-landing",
+        "model": "gpt-5.6-terra",
+        "exit_code": 2,
+        "failure_class": "provider-skill-router-timeout",
+        "session_status": "not-started",
+        "preflight_stage": "skill-router",
+        "router_status": "router-timeout",
+        "router_attempts": 2,
+    }
+    line = json.dumps({"agent_run": router_receipt})
+
+    def runner(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr=line)
+
+    result = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", runner=runner
+    ).run_task(
+        base_task(tmp_path), run_id="router-preflight", attempt_id="attempt-1", generation=1
+    )
+    assert result["status"] == "failed"
+    assert result["failure_class"] == "provider-preflight-transient"
+    assert result["session_status"] == "not-started"
+    assert "session_id" not in result
+
+    malformed = dict(router_receipt)
+    malformed["router_status"] = "router-malformed-output"
+    with pytest.raises(bridge_mod.BridgeError, match="strict preflight rejection"):
+        bridge_mod.parse_agent_run_output(json.dumps({"agent_run": malformed}))
+
+
 def test_unknown_exit_two_without_machine_rejection_stays_failed_unsafe(tmp_path):
     def runner(command, **_kwargs):
         return subprocess.CompletedProcess(command, 2, stdout="", stderr="catalog failed")

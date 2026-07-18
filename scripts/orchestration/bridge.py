@@ -57,6 +57,22 @@ PREFLIGHT_REJECTION_KEYS = frozenset(
 )
 PREFLIGHT_REJECTION_KIND = "preflight-rejection-v1"
 PREFLIGHT_REJECTION_FAILURE = "provider-catalog-unavailable"
+ROUTER_PREFLIGHT_REJECTION_KEYS = frozenset(
+    {
+        "receipt_kind",
+        "run_id",
+        "provider",
+        "seat",
+        "model",
+        "exit_code",
+        "failure_class",
+        "session_status",
+        "preflight_stage",
+        "router_status",
+        "router_attempts",
+    }
+)
+ROUTER_PREFLIGHT_REJECTION_FAILURE = "provider-skill-router-timeout"
 
 
 def _sha256(data: bytes) -> str:
@@ -176,6 +192,31 @@ def _validate_catalog_preflight_rejection(receipt: Mapping[str, Any]) -> None:
         raise BridgeError("agent_run strict preflight rejection has invalid retry count")
 
 
+def _validate_router_preflight_rejection(receipt: Mapping[str, Any]) -> None:
+    if set(receipt) != ROUTER_PREFLIGHT_REJECTION_KEYS:
+        raise BridgeError("agent_run strict preflight rejection has unexpected fields")
+    required_strings = ("run_id", "provider", "seat", "model")
+    if any(
+        not isinstance(receipt.get(field), str) or not receipt[field]
+        or not SAFE_ID_RE.fullmatch(receipt[field])
+        for field in required_strings
+    ):
+        raise BridgeError("agent_run strict preflight rejection has incomplete identity")
+    if receipt.get("exit_code") != 2:
+        raise BridgeError("agent_run strict preflight rejection must use exit code 2")
+    if receipt.get("failure_class") != ROUTER_PREFLIGHT_REJECTION_FAILURE:
+        raise BridgeError("agent_run strict preflight rejection has invalid failure class")
+    if receipt.get("session_status") != "not-started":
+        raise BridgeError("agent_run strict preflight rejection must be sessionless")
+    if receipt.get("preflight_stage") != "skill-router":
+        raise BridgeError("agent_run strict preflight rejection has invalid stage")
+    if receipt.get("router_status") != "router-timeout":
+        raise BridgeError("agent_run strict preflight rejection has invalid router status")
+    attempts = receipt.get("router_attempts")
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or not 1 <= attempts <= 2:
+        raise BridgeError("agent_run strict preflight rejection has invalid retry count")
+
+
 def parse_agent_run_output(stdout: str, stderr: str = "") -> tuple[dict[str, Any], str]:
     """Extract exactly one attributed machine receipt and its provider answer."""
     candidates: list[tuple[str, int, Mapping[str, Any]]] = []
@@ -195,7 +236,12 @@ def parse_agent_run_output(stdout: str, stderr: str = "") -> tuple[dict[str, Any
     if missing:
         raise BridgeError(f"agent_run receipt missing fields: {', '.join(missing)}")
     if _is_strict_catalog_preflight_rejection(receipt):
-        _validate_catalog_preflight_rejection(receipt)
+        if receipt.get("preflight_stage") == "model-catalog":
+            _validate_catalog_preflight_rejection(receipt)
+        elif receipt.get("preflight_stage") == "skill-router":
+            _validate_router_preflight_rejection(receipt)
+        else:
+            raise BridgeError("agent_run strict preflight rejection has invalid stage")
         return dict(receipt), ""
     if receipt.get("session_status") not in {
         "attributed-stream-json", "attributed-single-artifact",
@@ -240,7 +286,10 @@ def orchestration_failure_class(provider_failure_class: Any) -> str:
     failure_class = str(provider_failure_class or "none")
     if failure_class == "rate-limited":
         return "provider-rate-limit"
-    if failure_class == PREFLIGHT_REJECTION_FAILURE:
+    if failure_class in {
+        PREFLIGHT_REJECTION_FAILURE,
+        ROUTER_PREFLIGHT_REJECTION_FAILURE,
+    }:
         return "provider-preflight-transient"
     if failure_class in {
         "upstream-overload",
