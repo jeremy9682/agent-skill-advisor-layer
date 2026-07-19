@@ -57,6 +57,7 @@ LOG_MAX_BYTES = 5 * 1024 * 1024
 # forgotten debug flag cannot leave prompt text on disk indefinitely.
 DEBUG_PLAINTEXT_ENV = "SKILL_ROUTER_DEBUG_PLAINTEXT"
 DEBUG_PLAINTEXT_TTL_DAYS = 7
+INSPECT_NO_WRITE_ENV = "SKILL_ROUTER_INSPECT_NO_WRITE"
 
 ROOT = Path(__file__).resolve().parents[1]
 GOV_DIR = Path.home() / ".codex" / "skill-governance"
@@ -76,21 +77,17 @@ LOG_PATH = GOV_DIR / "routing-log.jsonl"
 # does not touch the decision table. Overridable per host via
 # GOV_DIR/hot-route-exclude.json (a JSON list); an empty list restores the
 # pre-shrink behavior.
-DEFAULT_HOT_ROUTE_EXCLUDE = {
-    "huashu-design", "social-monitor", "huashu-data-pro", "huashu-research",
-    "huashu-article-edit",
-    "grilling",  # top-level explicit-only: reached by explicit name, not lexically
-}
-
-
-def load_hot_route_exclude() -> set[str]:
+def load_hot_route_exclude(default: set[str] | None = None) -> set[str]:
     try:
         v = json.loads((GOV_DIR / "hot-route-exclude.json").read_text())
         if isinstance(v, list):
             return {str(x) for x in v}
     except (OSError, ValueError):
         pass
-    return set(DEFAULT_HOT_ROUTE_EXCLUDE)
+    if default is None:
+        routing = load_routing_module()
+        default = set(getattr(routing, "DEFAULT_HOT_ROUTE_EXCLUDE", set()))
+    return set(default)
 
 
 def noop() -> None:
@@ -114,16 +111,27 @@ def fleet_fingerprint(audit) -> str:
     """
     paths: list[str] = []
     total = 0.0
+    skip_dirs = set(getattr(audit, "SKIP_DIRS", set()))
     for root in getattr(audit, "SKILL_ROOTS", {}).values():
-        try:
-            for skill_md in Path(root).rglob("SKILL.md"):
-                paths.append(str(skill_md))
-                try:
-                    total += skill_md.stat().st_mtime
-                except OSError:
-                    continue
-        except OSError:
-            continue
+        for current, dirs, filenames in os.walk(root):
+            # Match skill_audit.discover_skills exactly.  Path.rglob walked
+            # unrelated hidden checkout metadata on every governed launch and
+            # exceeded the wrapper's eight-second router deadline on the live
+            # skill fleet even with a warm index cache.
+            dirs[:] = [
+                name
+                for name in dirs
+                if name not in skip_dirs
+                and (not name.startswith(".") or name == ".system")
+            ]
+            if "SKILL.md" not in filenames:
+                continue
+            skill_md = Path(current) / "SKILL.md"
+            paths.append(str(skill_md))
+            try:
+                total += skill_md.stat().st_mtime
+            except OSError:
+                continue
     digest = hashlib.sha256("\n".join(sorted(paths)).encode()).hexdigest()[:12]
     return f"{len(paths)}:{total:.0f}:{digest}"
 
@@ -141,6 +149,8 @@ def load_skills_cached(routing) -> list[dict]:
         if skills:
             return skills
     skills = routing.collect_skills(audit, None)
+    if os.environ.get(INSPECT_NO_WRITE_ENV) == "1":
+        return skills
     try:
         GOV_DIR.mkdir(parents=True, exist_ok=True)
         CACHE_PATH.write_text(json.dumps(
@@ -162,6 +172,8 @@ def purge_expired_plaintext() -> None:
     (prompt_head without ttl_expires) and any non-JSON line are preserved
     verbatim, so the cleanup can never be crashed by legacy content.
     """
+    if os.environ.get(INSPECT_NO_WRITE_ENV) == "1":
+        return
     try:
         try:
             raw = LOG_PATH.read_text(encoding="utf-8")
@@ -223,6 +235,8 @@ def write_log(
     session_id: str = "",
     transcript_path: str = "",
 ) -> None:
+    if os.environ.get(INSPECT_NO_WRITE_ENV) == "1":
+        return
     try:
         GOV_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -315,7 +329,9 @@ def main() -> int:
         chosen = routing.chosen_candidates(top, fire_threshold=fire)
         # Hot-route shrink: drop excluded content-creation skills from the
         # auto-suggest surface (they stay reachable via decision table/explicit).
-        exclude = load_hot_route_exclude()
+        exclude = load_hot_route_exclude(
+            set(getattr(routing, "DEFAULT_HOT_ROUTE_EXCLUDE", set()))
+        )
         if exclude:
             chosen = [(n, s) for n, s in chosen if n not in exclude]
         if not chosen:

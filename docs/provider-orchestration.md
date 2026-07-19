@@ -4,6 +4,72 @@
 three-seat/checkpoint/skill governance. Provider identity never replaces seat
 identity.
 
+## Current V1 implementation and evidence boundary
+
+The V1 control plane is implemented locally: versioned DAG plans, bounded
+ready-set scheduling, isolated worktrees and controller-created candidates,
+deterministic integration/join, dependency bundles, controller leases and
+fencing, exact resume reconciliation, ownership-checked cleanup, and the thin
+`agent-run` bridge. It preserves native provider CLIs and their observed
+receipts; it is not a raw-API multi-model replacement.
+
+Cursor uses its native `--output-format stream-json` evidence first. A Cursor
+model is attributed only when the stream identity is exact, including the
+unique exact catalog-label-to-ID mapping where Cursor emits a display label;
+ambiguous or conflicting identity fails closed. Artifact correlation remains a
+bounded fallback, not a guess.
+
+The `mechanical` and `mechanical_grok` bindings set `managed_skills: disabled`
+for the orchestration hot path, preventing unrelated automatically selected
+skill bodies from consuming the provider prompt budget. Their current doctor
+state is `ready`; the intentionally parallel routes retain only the
+`serial-lock-disabled` warning.
+
+Provider invocation success is not review approval. A review is accepted only
+when its final non-empty line is the one unique exact marker
+`AGENT_RUN_REVIEW_VERDICT: PASS`. The corresponding `FAIL` marker, a missing
+marker, trailing text, or multiple/ambiguous markers fail closed, even if the
+provider process exited zero and returned a session receipt. Cleanup is allowed
+only after integration and that final review acceptance both succeed.
+
+Real local canaries exposed and then exercised this boundary. V1 exposed
+concurrent-attribution, skill-prompt-bloat, and process-cleanup defects. V2 and
+V3 exposed a further defect: the old scheduler marked the runs completed from
+review-provider exit zero even though their stored Claude verdicts were
+`FAIL`. The new verdict gate makes those artifacts retrospective negative
+evidence rather than accepted canaries. V4 completed two concurrent native
+producers, deterministic integration, and a Claude Opus review with the exact
+machine `PASS` marker, then performed eligible cleanup. A subsequent Fable 5
+Max audit passed with no P0/P1 and identified six fail-closed P2 gaps. Those
+gaps were remediated: stream attribution is accepted consistently, provider
+failures map to bounded retries with backoff, dirty writer retries stop before
+a new session, legacy review uses the same verdict projection, command-string
+interpreters and credential keys are rejected, and private candidate evidence
+now includes exact acceptance argv. A fresh incremental Fable audit confirmed
+all six groups closed and no P0/P1, then identified two residual P2 hardening
+items. The final validator now detects wrapped interpreters such as
+`env bash -c` and rejects acceptance declarations on read-only/no-writer plans
+instead of silently recording commands it cannot execute. A final fresh Fable
+closure review recorded in host-local evidence returned `PASS` with no
+remaining P0/P1/P2. The interpreter check is an auditability guard for canonical `-c`
+forms, not a universal executable sandbox; shell-free argv, frozen plans and
+acceptance/review remain the actual safety boundaries.
+
+V5 reran the final hardened path with an argv-native tracked verifier:
+
+- Composer: `composer-2.5-fast`, 19.898 s.
+- Cursor Grok: `cursor-grok-4.5-high-fast`, 23.248 s.
+- The producers launched 0.194 s apart; producer wall time was 25.555 s versus
+  a 43.146 s serial provider-time sum (about 1.69x for this canary only).
+- Claude review: `claude-opus-4-8`, 50.983 s, delivered prompt 1,410 bytes.
+
+These are capability and one-canary latency observations, not proof of a
+general quality or end-to-end speed improvement. The local evidence summary is
+under `~/.agent-runs/`; it remains host-local and is not a Git artifact.
+The final local regression result was 392 pytest passes, 47/47 agent-run
+functional checks, passing orchestrator functional QA, compilation, scoped
+Ruff and diff checks.
+
 ## Install the local entrypoint
 
 ```bash
@@ -135,7 +201,7 @@ agent-run run auto --task-shape codex_final_review \
 
 The current routes map mechanical work to Cursor `composer-2.5-fast`/low
 (Shuttle Seal 飞梭; alternate `mechanical_grok` →
-`cursor-grok-4.5-high`), ordinary bugs to Codex Terra/medium, judgment and
+`cursor-grok-4.5-high-fast`), ordinary bugs to Codex Terra/medium, judgment and
 restricted-zone direction to Claude Opus/high, and dual-seal final review to
 Fable max + GPT-5.6 Sol xhigh (`fable_final_review` / `codex_final_review`).
 Both Cursor routes queue on the same local provider-family lock only when
@@ -151,8 +217,12 @@ effort and seat fields are immutable. Explicit provider runs remain available fo
 Grok second opinions and Cursor named-model execution/review.
 
 Claude Opus/high remains a normalized-governance-xhigh `claude_final_review`
-route for Codex-produced work, including risk overlays. A `fable_final_review` route stays disabled until a live run succeeds. A
-broker may list a model whose CLI still returns a data-policy acknowledgement
+route for Codex-produced work, including risk overlays. The
+`fable_final_review` and `arbitration` routes request the exact native model ID
+`claude-fable-5`; they were enabled only after direct alias and exact-ID Fable 5
+Max read-only calls plus an attributed wrapped canary succeeded on 2026-07-18.
+Their exact receipts remain host-local. A broker may list a model
+whose CLI still returns a data-policy acknowledgement
 error until the account accepts that model's retention policy; catalogue presence alone does
 not enable the route. Provider
 runs default to a **300-second** timeout when the caller omits `--timeout-seconds`;
@@ -184,6 +254,11 @@ Failure receipts inspect both stdout and stderr. Auth expiry, quota exhaustion,
 rate limiting and provider overload are separated as `auth-expired`,
 `quota-exhausted`, `rate-limited`, and `upstream-overload`; textual deadline or
 timeout failures remain `timeout` rather than generic `provider-error`.
+When a provider emits a terminal failure before a local wall-clock or idle
+deadline, that observed provider failure wins over the later timeout. In
+particular, a real in-run usage-limit/credits response is recorded as
+`quota-exhausted`; this is result classification, not quota monitoring or a
+preflight probe.
 
 `agent-run routes` and `agent-run doctor` expose effective route timeout and
 serial group. Doctor emits `serial-lock-disabled` when no lock group can be
@@ -197,7 +272,10 @@ budget; authentication and repository files remain available.
 Review routes resolve `--producer-run-id` only from the current repository's
 append-only journal. They require a successful write-capable producer run, reject
 same-seat producers before launch, and reject same-session reuse after native
-session attribution. The checkpoint must be open and claimed by the exact run seat;
+session attribution. Brokered producers additionally require verified health evidence
+plus exactly one accepted attribution state: `attributed-single-artifact`,
+`attributed-correlated-artifacts`, or `attributed-stream-json`; unknown and ambiguous
+states fail closed. The checkpoint must be open and claimed by the exact run seat;
 malformed ledger rows fail closed instead of being skipped.
 Risk triggers are passed with repeated `--risk-trigger` flags. Non-restricted
 execution routes fail closed and direct the caller to `restricted_zone`; a final
@@ -233,12 +311,52 @@ daily-work or ship gate: missing / stale / health-unverified evidence may show a
 evidence ages out after `live_evidence_max_age_seconds` (currently six hours) as
 `stale-live-evidence` for honesty of that diagnostic view; it also rejects
 timestamps more than five minutes in the future, while tolerating minor host
-clock skew. Quota cooldown stays unknown unless a structured reset was observed.
+clock skew. Subscription quota/cooldown is deliberately outside the pilot
+preflight contract: it is neither collected nor inferred, and an in-run rate
+limit is recorded as an execution outcome rather than a preflight blocker.
+Likewise, a historical journal `quota-exhausted` receipt is presented only as
+the neutral `recent-in-run-provider-outcome` warning; doctor does not infer a
+cooldown or turn it into a readiness blocker.
 
 `model_observed` is honest audit metadata for every provider: when adapters still
 report `unknown`, the journal records `run-succeeded-health-unverified` rather
 than forging identity from `model_requested`. That is recoverability, not a
 doctor-green ritual.
+
+### Governance runtime health
+
+`python3 scripts/governance_health.py inspect` is the non-generative host
+inspection for the governance layer itself. Its operation policy forbids
+network, model, quota, and bytecode-write paths; tests statically reject common
+network/provider client imports. It validates the
+single routing canon, provider manifest, routing runtime/eval, checkpoint CLI,
+Claude hook registration, and Codex skill visibility. It never probes quota or
+provider usage.
+
+`python3 scripts/governance_health.py probe` is an explicit black-box router
+probe. It sends fixed positive, negative, and system-injection inputs through
+the real stdin/stdout contract with `SKILL_ROUTER_INSPECT_NO_WRITE=1`, then
+proves the router cache and log were unchanged. It is not installed in any hot
+path and never invokes an LLM.
+
+### Repository and evidence boundary
+
+The governance repository remains the only authority for routing policy,
+provider bindings, schemas, review rules, and gates. `scripts/agent_orchestrate.py`
+is deliberately a thin adapter: it validates `orchestrator.lock.json`, requires
+the pinned private checkout to be clean and at the exact commit, exports this
+governance checkout as `AGENT_RUN_GOVERNANCE_ROOT`, and then delegates.
+
+The private `agent-run-orchestrator` package owns DAG execution, dependency
+scheduling, retries, semantic result projection, and aggregation. It imports
+governance through the narrow adapter contract; it must not vendor or redefine
+the routing canon. A runtime upgrade therefore follows review/test private
+commit -> update public lock -> run both regression suites.
+
+Provider sessions, prompts, responses, semantic artifacts, review bundles,
+journals, checkpoint ledgers, credentials, and temporary worktrees are local
+evidence. Keep them under their local stores with restrictive permissions and
+never commit them to either repository.
 
 ## Live verification lessons (synthetic examples)
 
@@ -255,7 +373,11 @@ These patterns are worth preserving as timeless protocol guidance:
   one session rather than guessing by newest mtime. Concurrent sessions can yield
   `ambiguous-concurrent-artifacts`; model matching cannot prove ownership.
 - **Headless workspace trust**: Cursor read-only smokes fail fast without explicit
-  `--trust-workspace`; adding trust makes subsequent smokes pass.
+  `--trust-workspace` when the provider is selected explicitly. For a governed
+  `run auto --task-shape ...` route, `agent-run` derives the same native trust
+  decision from the fixed provider manifest and compiled route binding; an
+  orchestrator adapter neither passes nor overrides that flag. The journal
+  records whether trust came from `explicit-cli` or `governed-route-binding`.
 - **Spending-limit signals**: HTTP 402 and similar spending-limit classes are
   transient live states, not evidence that the CLI never worked and not an
   authentication failure. The portable manifest remains capability configuration;

@@ -20,6 +20,15 @@ def load_routing_module():
     return module
 
 
+def load_hook_module():
+    spec = importlib.util.spec_from_file_location("skill_router_hook", HOOK)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def make_skill(root: Path, name: str, description: str) -> None:
     d = root / name
     d.mkdir(parents=True)
@@ -239,6 +248,33 @@ def test_new_skill_invalidates_cache(tmp_path):
     run("第二 任务")
     names = {s["name"] for s in json.loads(cache.read_text())["skills"]}
     assert "second-skill" in names, "cache did not rebuild after new skill install"
+
+
+def test_fleet_fingerprint_matches_audit_hidden_directory_boundaries(tmp_path):
+    hook = load_hook_module()
+    skills_root = tmp_path / "skills"
+    make_skill(skills_root, "visible", "Use when the visible skill is requested.")
+    audit = type(
+        "Audit",
+        (),
+        {"SKILL_ROOTS": {"test": skills_root}, "SKIP_DIRS": {"node_modules"}},
+    )
+    initial = hook.fleet_fingerprint(audit)
+
+    make_skill(skills_root / ".git", "hidden", "Must not enter the routing fleet.")
+    make_skill(
+        skills_root / "node_modules",
+        "dependency",
+        "Must not enter the routing fleet.",
+    )
+    assert hook.fleet_fingerprint(audit) == initial
+
+    make_skill(
+        skills_root / ".system",
+        "system-visible",
+        "The audit explicitly includes the .system skill root.",
+    )
+    assert hook.fleet_fingerprint(audit) != initial
 
 
 def test_chosen_candidates_matches_production_rule():

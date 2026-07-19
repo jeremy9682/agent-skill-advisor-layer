@@ -75,6 +75,17 @@ FIRE_THRESHOLD = 1.35
 # while keeping legitimate co-candidates.
 COMPANION_RATIO = 0.6
 
+# Canonical production hot-route shrink. The hook may replace this set with a
+# host-local list, while CI evaluates the reviewed default.
+DEFAULT_HOT_ROUTE_EXCLUDE = {
+    "huashu-design",
+    "social-monitor",
+    "huashu-data-pro",
+    "huashu-research",
+    "huashu-article-edit",
+    "grilling",
+}
+
 AGENT_TO_AGENT_PATTERN_WINDOW = 240
 AGENT_TO_AGENT_PATTERNS = (
     "<task-notification>",
@@ -489,7 +500,7 @@ def run_eval(
 
     results: list[dict[str, Any]] = []
     recall_hits = recall_total = 0
-    displayed_hits = 0  # expected skill actually shown by the production display rule
+    displayed_hits = displayed_total = 0
     gate_events: list[dict[str, Any]] = []
     unexpected_high_cost: list[dict[str, Any]] = []
     known_leak_events: list[dict[str, Any]] = []
@@ -504,7 +515,10 @@ def run_eval(
         top = [] if skip_reason else index.rank(case["prompt"])
         top_names = [name for name, _ in top]
         scores = dict(top)
-        shown = {n for n, _ in chosen_candidates(top, fire_threshold=fire_threshold)}
+        lexical_shown = {
+            n for n, _ in chosen_candidates(top, fire_threshold=fire_threshold)
+        }
+        shown = lexical_shown - DEFAULT_HOT_ROUTE_EXCLUDE
         if not expect and not high_cost_ok and not known_leaks:
             # Codex 终审 H1（2026-07-11）：被 should_skip_prompt 拦截的负例
             # 没经过评分器，混进 precision 分母会虚高"阈值挡住了负例"的证据。
@@ -537,8 +551,13 @@ def run_eval(
             recall_hits += bool(hit)
             # displayed recall: would production actually SHOW the expected skill,
             # after the firing threshold + companion + top-k rule? (Codex finding)
-            displayed_hit = any(e in shown for e in expect_installed)
-            displayed_hits += bool(displayed_hit)
+            production_eligible = [
+                e for e in expect_installed if e not in DEFAULT_HOT_ROUTE_EXCLUDE
+            ]
+            if production_eligible:
+                displayed_total += 1
+                displayed_hit = any(e in shown for e in production_eligible)
+                displayed_hits += bool(displayed_hit)
         case_high_cost = [n for n in top_names if policy.get(n) == "suggest-confirm"]
         for name in case_high_cost:
             event = {
@@ -566,12 +585,14 @@ def run_eval(
                 "displayed_hit": displayed_hit,
                 "skipped_missing_skill": skipped,
                 "high_cost_in_top": case_high_cost,
+                "lexical_shown": sorted(lexical_shown),
+                "shown": sorted(shown),
                 "skip_reason": skip_reason,
             }
         )
 
     recall = recall_hits / recall_total if recall_total else 1.0
-    displayed_recall = displayed_hits / recall_total if recall_total else 1.0
+    displayed_recall = displayed_hits / displayed_total if displayed_total else 1.0
     negative_precision = negative_silent_hits / negative_total if negative_total else 1.0
 
     # Cross-lingual reachability: a description with zero CJK characters is
@@ -589,6 +610,7 @@ def run_eval(
         "recall_total": recall_total,
         "displayed_recall": round(displayed_recall, 3),
         "displayed_hits": displayed_hits,
+        "displayed_total": displayed_total,
         "negative_precision": round(negative_precision, 3),
         "negative_silent_hits": negative_silent_hits,
         "negative_total": negative_total,
@@ -599,6 +621,89 @@ def run_eval(
         "unexpected_high_cost_candidates": unexpected_high_cost,
         "false_positive_candidates": false_positive_events,
         "cases": results,
+    }
+
+
+def run_rule_coverage(
+    rules: list[dict[str, Any]],
+    eval_report: dict[str, Any],
+    policies: dict[str, str],
+    hot_route_exclude: set[str] | None = None,
+) -> dict[str, Any]:
+    """Prove policy plus positive, negative, and rejected behavior per rule."""
+
+    cases = {row["id"]: row for row in eval_report.get("cases", [])}
+    installed = set(policies)
+    excluded = (
+        DEFAULT_HOT_ROUTE_EXCLUDE
+        if hot_route_exclude is None
+        else hot_route_exclude
+    )
+    results: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for raw in rules:
+        rule = str(raw.get("rule") or "")
+        targets = [str(item) for item in raw.get("targets", []) if str(item)]
+        enabled = sorted(set(targets) & installed)
+        required_policy = str(raw.get("required_policy") or "suggest-confirm")
+        hot_route = str(raw.get("hot_route") or "allowed")
+        row: dict[str, Any] = {
+            "rule": rule,
+            "targets": targets,
+            "installed_targets": enabled,
+            "status": "skipped-missing-skill" if not enabled else "passed",
+            "failures": [],
+            "required_policy": required_policy,
+            "hot_route": hot_route,
+        }
+        if enabled and any(policies.get(name) != required_policy for name in enabled):
+            row["failures"].append("target-policy-mismatch")
+        if hot_route not in {"allowed", "excluded"}:
+            row["failures"].append("hot-route-policy-invalid")
+        elif enabled:
+            actually_excluded = {name for name in enabled if name in excluded}
+            if hot_route == "excluded" and actually_excluded != set(enabled):
+                row["failures"].append("target-not-hot-route-excluded")
+            elif hot_route == "allowed" and actually_excluded:
+                row["failures"].append("target-unexpectedly-hot-route-excluded")
+        for proof in ("positive", "negative", "rejection"):
+            case_id = raw.get(proof)
+            case = cases.get(str(case_id))
+            if case is None:
+                row["failures"].append(f"{proof}-case-missing")
+                continue
+            shown = set(case.get("shown", []))
+            lexical_shown = set(case.get("lexical_shown", shown))
+            if proof == "positive" and enabled:
+                if hot_route == "excluded":
+                    if lexical_shown.isdisjoint(enabled):
+                        row["failures"].append(
+                            "positive-target-not-lexically-retrieved"
+                        )
+                    if not shown.isdisjoint(enabled):
+                        row["failures"].append("excluded-target-production-shown")
+                elif shown.isdisjoint(enabled):
+                    row["failures"].append("positive-target-not-shown")
+            elif proof == "negative" and not shown.isdisjoint(enabled):
+                row["failures"].append("negative-target-shown")
+            elif proof == "rejection" and case.get("skip_reason") not in {
+                "agent_to_agent_prompt",
+                "system_injection",
+            }:
+                row["failures"].append("rejection-guard-not-hit")
+        if row["failures"]:
+            row["status"] = "failed"
+            failures.append(row)
+        results.append(row)
+    return {
+        "metric": "high-cost-rule-coverage-v1",
+        "total": len(results),
+        "passed": sum(row["status"] == "passed" for row in results),
+        "skipped_missing_skill": sum(
+            row["status"] == "skipped-missing-skill" for row in results
+        ),
+        "failures": failures,
+        "rules": results,
     }
 
 
@@ -855,7 +960,7 @@ def main() -> int:
         )
         print(
             f"displayed recall (would fire): {eval_report['displayed_recall']:.0%}"
-            f" ({eval_report['displayed_hits']}/{eval_report['recall_total']})"
+            f" ({eval_report['displayed_hits']}/{eval_report['displayed_total']})"
         )
         print(
             f"negative precision (should stay silent, scored only): "
@@ -894,6 +999,25 @@ def main() -> int:
         if eval_report["unexpected_high_cost_candidates"]:
             failed = True
         if eval_report["false_positive_candidates"]:
+            failed = True
+
+        coverage_report = run_rule_coverage(
+            case_data.get("rule_coverage", []) or [],
+            eval_report,
+            {skill["name"]: skill["policy"] for skill in skills},
+        )
+        report["rule_coverage"] = coverage_report
+        print(
+            "high-cost rule coverage: "
+            f"{coverage_report['passed']}/{coverage_report['total']} passed, "
+            f"{coverage_report['skipped_missing_skill']} optional targets missing"
+        )
+        for failure in coverage_report["failures"]:
+            print(
+                f"  !! rule {failure['rule']}: "
+                + ", ".join(failure["failures"])
+            )
+        if coverage_report["failures"]:
             failed = True
 
         model_cases = case_data.get("model_routing_cases", []) or []
