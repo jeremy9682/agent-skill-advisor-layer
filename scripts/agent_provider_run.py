@@ -2589,7 +2589,11 @@ def run_codex_json_process(
         completed = subprocess.CompletedProcess(
             command,
             returncode,
-            stdout=display if display else raw,
+            # A failed JSON turn may contain private provider error detail.
+            # Classification consumes the bounded in-memory terminal events;
+            # never fall back to printing the raw stream when no agent message
+            # was produced.
+            stdout=display if display or run_status == "provider-failed" else raw,
             stderr="".join(stderr_chunks)
             + ("\nprovider-timeout" if run_status == "timed-out" else ""),
         )

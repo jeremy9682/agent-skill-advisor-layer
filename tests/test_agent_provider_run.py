@@ -4074,8 +4074,9 @@ def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypat
     ) == "gpt-5.6-sol"
 
 
+@pytest.mark.parametrize("include_agent_message", [True, False])
 def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limit(
-    monkeypatch,
+    monkeypatch, include_agent_message: bool,
 ):
     # This is shaped like the V12 failure stream: Codex begins the thread and
     # turn, reports an item-level error and top-level error, then emits its
@@ -4083,41 +4084,50 @@ def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limi
     lines = [
         json.dumps({"type": "thread.started", "thread_id": "v12-thread"}) + "\n",
         json.dumps({"type": "turn.started"}) + "\n",
-        json.dumps(
-            {
-                "type": "item.completed",
-                "item": {
-                    "type": "agent_message",
-                    "text": "Partial result before the provider failure.",
-                },
-            }
+    ]
+    if include_agent_message:
+        lines.append(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "Partial result before the provider failure.",
+                    },
+                }
+            )
+            + "\n"
         )
-        + "\n",
-        json.dumps(
-            {
-                "type": "item.completed",
-                "item": {
+    lines.extend(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "error",
+                        "message": "You have hit your usage limit. Try again later.",
+                    },
+                }
+            )
+            + "\n",
+            json.dumps(
+                {
                     "type": "error",
                     "message": "You have hit your usage limit. Try again later.",
-                },
-            }
-        )
-        + "\n",
-        json.dumps(
-            {
-                "type": "error",
-                "message": "You have hit your usage limit. Try again later.",
-            }
-        )
-        + "\n",
-        json.dumps(
-            {
-                "type": "turn.failed",
-                "error": {"message": "You have hit your usage limit. Try again later."},
-            }
-        )
-        + "\n",
-    ]
+                }
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {
+                        "message": "You have hit your usage limit. Try again later."
+                    },
+                }
+            )
+            + "\n",
+        ]
+    )
 
     class _QueueStream:
         def __init__(self, queued):
@@ -4183,20 +4193,23 @@ def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limi
     # Reaping can still hit its local deadline, but it cannot overwrite the
     # already observed terminal provider failure.
     assert proc.returncode == -9
-    assert proc.stdout == "Partial result before the provider failure."
+    assert proc.stdout == (
+        "Partial result before the provider failure." if include_agent_message else ""
+    )
     assert "usage limit" not in proc.stdout.lower()
     assert fake_proc.wait_timeouts
     assert 0 < fake_proc.wait_timeouts[0] <= 2.0
     assert telemetry["turn_completed_at"]
     assert telemetry["timeout_class"] is None
-    assert [event["type"] for event in events] == [
+    expected_event_types = [
         "thread.started",
         "turn.started",
-        "item.completed",
+        *(["item.completed"] if include_agent_message else []),
         "item.completed",
         "error",
         "turn.failed",
     ]
+    assert [event["type"] for event in events] == expected_event_types
     classification_evidence = agent_run.extract_codex_terminal_failure_evidence(events)
     assert "usage limit" in classification_evidence.lower()
     assert (
