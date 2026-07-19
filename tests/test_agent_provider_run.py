@@ -4368,6 +4368,7 @@ def test_no_skills_does_not_require_local_skill_manifest(tmp_path, monkeypatch, 
         agent_run, "binary_version", lambda _binary, _provider: "test-cli"
     )
     monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(agent_run, "repo_slug", lambda _cwd: "ci-no-skills")
     monkeypatch.setattr(
         agent_run,
         "discover_provider_models",
