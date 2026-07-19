@@ -5,3 +5,6 @@ skills-manifest.json
 reports/*.json
 
 _knowledge_base/
+
+# Machine-local cross-model review artifacts; never publish from this repo.
+.orchestration-review-*.txt

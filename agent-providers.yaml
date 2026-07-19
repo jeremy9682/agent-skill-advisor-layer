@@ -13,11 +13,12 @@ providers:
     binary_candidates: [~/.local/bin/claude, claude]
     version_args: [--version]
     model_requested: opus
-    model_options: [sonnet, opus, fable]
+    model_options: [sonnet, opus, fable, claude-fable-5]
     effort_requested: high
     effort_options: [low, medium, high, xhigh, max]
     billing_policy: existing-subscription-login-only
     strip_environment: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL]
+    force_environment: {PYTHONDONTWRITEBYTECODE: "1"}
     commands:
       read-only:
         - "{binary}"
@@ -59,8 +60,13 @@ providers:
     model_options: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
     effort_requested: medium
     effort_options: [low, medium, high, xhigh, max]
+    # Codex may legitimately spend more than two minutes between JSON events
+    # while reasoning.  Keep this below the ordinary 300s total deadline so a
+    # genuinely silent process is still bounded.
+    stream_idle_timeout_seconds: 240
     billing_policy: existing-subscription-login-only
     strip_environment: [OPENAI_API_KEY, OPENAI_BASE_URL]
+    force_environment: {PYTHONDONTWRITEBYTECODE: "1"}
     commands:
       read-only:
         - "{binary}"
@@ -106,6 +112,7 @@ providers:
     effort_options: [low, medium, high]
     billing_policy: existing-login-only
     strip_environment: [XAI_API_KEY, XAI_BASE_URL]
+    force_environment: {PYTHONDONTWRITEBYTECODE: "1"}
     commands:
       read-only:
         - "{binary}"
@@ -174,6 +181,7 @@ providers:
       - {glob: kimi-*, family: moonshot}
       - {glob: glm-*, family: zhipu}
     strip_environment: [CURSOR_API_KEY]
+    force_environment: {PYTHONDONTWRITEBYTECODE: "1"}
     commands:
       read-only:
         - "{binary}"

@@ -123,6 +123,13 @@ def resolve_binding(canon: dict, route_name: str) -> dict:
                 f"route {route_name!r} has invalid serial_group"
             )
         binding["serial_group"] = serial_group.strip()
+    if "managed_skills" in route:
+        managed_skills = route["managed_skills"]
+        if managed_skills not in {"auto", "disabled"}:
+            raise RoutingRuntimeError(
+                f"route {route_name!r} has invalid managed_skills policy"
+            )
+        binding["managed_skills"] = managed_skills
     return binding
 
 

@@ -42,6 +42,21 @@ schemas/                    intent 与 solution note 格式规范
 tests/                      轻量 pytest 测试
 ```
 
+## 仓库所有权
+
+本公共仓库是唯一的治理 canon：路由策略、provider 绑定、schema、gate、健康检查
+和 orchestrator 薄适配器都归这里维护。可执行 DAG 调度器及其 package/CI 放在独立的
+私有 `agent-run-orchestrator` 仓库；本仓库通过 `orchestrator.lock.json` 精确固定
+已审核的私有 commit。
+
+运行证据只留本机。journal、checkpoint ledger、provider session、凭据、临时
+worktree、prompt、response 和 review bundle 都不得提交到任一仓库。这样既能公开
+审查治理规则，又不会暴露 provider/运行时内部信息，也不会产生第二套路由真相源。
+
+升级私有运行时时，应先审核并测试新的私有 commit，再只更新本仓库的
+`orchestrator.lock.json`，并回归公共 adapter 与治理测试。不要把 routing policy
+复制进私有 package。
+
 ## 默认覆盖的高成本 Skill
 
 | Skill | 什么时候建议 | 默认动作 |

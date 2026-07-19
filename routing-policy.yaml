@@ -19,7 +19,7 @@ version: 1
 enums:
   execution_seat: [claude, codex, cursor]  # family that PRODUCES the diff
   execution_model:                       # producer model tiers, keyed by family
-    claude: [sonnet, opus, fable]
+    claude: [sonnet, opus, fable, claude-fable-5]
     codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
     # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）
     cursor: [composer-2.5-fast, composer-2.5, cursor-grok-4.5-high, cursor-grok-4.5-high-fast]
@@ -28,6 +28,13 @@ enums:
   execution_mode: [fast, careful]
   review_seat: [codex, fable]           # who may hold the final-review seat
   review_independence: [cross_family_blind, same_family_independent]
+  route_concurrency: [family_serial, explicitly_parallel]
+
+# Declarative scheduler admission limits. These do not override a route's own
+# serial-group requirement.
+concurrency_policy:
+  provider_family_limits:
+    cursor: 2
 
 # --- Design-domain phase 1 -------------------------------------------------
 # Offline governance only. The catalog records authority/provenance and the
@@ -97,7 +104,7 @@ task_shapes:
   arbitration:                     # cross-family tie-break / adversarial judgment seat
     execution_seat: [claude]
     execution_model:
-      claude: fable
+      claude: claude-fable-5
     execution_effort: max
     execution_mode: careful
     review_effort_floor: high
@@ -153,6 +160,11 @@ final_review:
 # Optional per-route keys (agent-run consumes these):
 #   timeout_seconds — default wall clock when caller omits --timeout-seconds
 #   serial_group    — flock lock name; same group never runs concurrently on one host
+#   concurrency     — family_serial requires serial_group; explicitly_parallel
+#                      is reserved for the two Cursor mechanical routes
+#   managed_skills  — disabled prevents auto-selected skill bodies from
+#                      inflating frozen mechanical prompts; explicit plan
+#                      context remains available through input_ref/bundles
 #
 # Review routes MUST run serially within their provider family. Claude-family
 # seats (direction + Fable + Opus final review) share serial_group claude-family;
@@ -164,22 +176,30 @@ runtime_routes:
     policy_family: cursor
     provider: cursor
     seat: claude-landing
-  # 飞梭第二梭：仍属机械落盘，终审走双印；无 serial_group，可与 mechanical 并行
+    concurrency: explicitly_parallel
+    managed_skills: disabled
+  # 飞梭第二梭：仍属机械落盘，终审走双印；可与 mechanical 并行。
   mechanical_grok:
     provider: cursor
-    model: cursor-grok-4.5-high
+    model: cursor-grok-4.5-high-fast
     effort: high
     seat: claude-landing
+    concurrency: explicitly_parallel
+    managed_skills: disabled
   ordinary_bug_fix:
     policy_ref: task_shapes.ordinary_bug_fix
     policy_family: codex
     provider: codex
     seat: codex-landing
+    concurrency: family_serial
+    serial_group: codex-family
   standard_feature:
     policy_ref: task_shapes.standard_feature
     policy_family: claude
     provider: claude
     seat: claude-landing
+    concurrency: family_serial
+    serial_group: claude-family
   judgment:
     policy_ref: task_shapes.judgment
     policy_family: claude
@@ -187,6 +207,7 @@ runtime_routes:
     seat: claude-direction
     timeout_seconds: 600
     serial_group: claude-family
+    concurrency: family_serial
   external_second_opinion:
     provider: grok
     model: grok-4.5
@@ -194,6 +215,7 @@ runtime_routes:
     seat: claude-direction
     timeout_seconds: 600
     serial_group: grok-family
+    concurrency: family_serial
   restricted_zone:
     policy_ref: task_shapes.restricted_zone
     policy_family: claude
@@ -201,6 +223,7 @@ runtime_routes:
     seat: claude-direction
     timeout_seconds: 600
     serial_group: claude-family
+    concurrency: family_serial
   final_review:
     provider: grok
     model: grok-4.5
@@ -210,6 +233,8 @@ runtime_routes:
     review_independence: cross-family
     timeout_seconds: 900
     serial_group: grok-family
+    concurrency: family_serial
+    managed_skills: disabled
   claude_final_review:
     provider: claude
     model: opus
@@ -219,15 +244,18 @@ runtime_routes:
     review_independence: cross-family
     timeout_seconds: 900
     serial_group: claude-family
+    concurrency: family_serial
+    managed_skills: disabled
   fable_final_review:
     provider: claude
-    model: fable
+    model: claude-fable-5
     effort: max
     seat: fable-final-review
     review_independence: cross-family
-    route_policy: disabled-fable-live-canary-required
     timeout_seconds: 900
     serial_group: claude-family
+    concurrency: family_serial
+    managed_skills: disabled
   secondary_final_review:
     provider: codex
     model: gpt-5.6-sol
@@ -237,6 +265,8 @@ runtime_routes:
     eligible_producer_routes: [ordinary_bug_fix]
     timeout_seconds: 900
     serial_group: codex-family
+    concurrency: family_serial
+    managed_skills: disabled
   codex_final_review:
     provider: codex
     model: gpt-5.6-sol
@@ -246,15 +276,17 @@ runtime_routes:
     review_independence: cross-family
     timeout_seconds: 900
     serial_group: codex-family
+    concurrency: family_serial
+    managed_skills: disabled
   arbitration:
     policy_ref: task_shapes.arbitration
     policy_family: claude
     provider: claude
     seat: fable-final-review
     review_independence: cross-family
-    route_policy: disabled-fable-live-canary-required
     timeout_seconds: 900
     serial_group: claude-family
+    concurrency: family_serial
 
 # --- Degradation chain ------------------------------------------------------
 # When the Codex (cross-family) reviewer is unavailable.

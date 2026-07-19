@@ -76,6 +76,142 @@ def verified_producer_model(provider_id: str, model: str, family: str) -> dict:
     return evidence
 
 
+def _private_json(path: Path, value: dict) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return agent_run.sha256_bytes(path.read_bytes())
+
+
+def test_private_review_bundle_accepts_read_only_producer_and_detects_candidate_drift(tmp_path):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journals")
+    artifact = tmp_path / "producer-answer.txt"
+    artifact.write_text("answer\n", encoding="utf-8")
+    artifact.chmod(0o600)
+    artifact_sha = agent_run.sha256_bytes(artifact.read_bytes())
+    row = {
+        "run_id": "producer-read-only",
+        "provider_id": "cursor",
+        "model_requested": "composer-2.5-fast",
+        "model_observed": "composer-2.5-fast",
+        "model_family": "cursor",
+        "provider_health_evidence": {
+            "status": "verified-stream-session-model",
+            "model_observed": "composer-2.5-fast",
+        },
+        "seat": "codex-landing",
+        "session_id": "session-producer",
+        "session_status": "attributed-stream-json",
+        "repo": "demo",
+        "route": "ordinary_bug_fix",
+        "run_status": "completed",
+        "exit_code": 0,
+        "mode": "read-only",
+        "risk_overlay": {"triggers": []},
+    }
+    journal = Path(data["journal"]["root"]) / "demo.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.json"
+    candidate_sha = _private_json(
+        candidate, {"integration_head": "read-only", "producer_artifacts": []}
+    )
+    bundle_value = {
+        "version": 1,
+        "orchestration_run_id": "orch-1",
+        "generation": 2,
+        "fencing_token": "fence-2",
+        "reviewer_task_id": "review",
+        "reviewer_attempt_id": "attempt-review",
+        "repo": "demo",
+        "producers": [
+            {
+                "task_id": "producer",
+                "run_id": "producer-read-only",
+                "provider_id": "cursor",
+                "model_observed": "composer-2.5-fast",
+                "model_family": "cursor",
+                "session_id": "session-producer",
+                "session_status": "attributed-stream-json",
+                "mode": "read-only",
+                "artifact_path": str(artifact),
+                "artifact_sha256": artifact_sha,
+            }
+        ],
+        "candidate": {
+            "kind": "read-only-artifact-set",
+            "artifact_path": str(candidate),
+            "artifact_sha256": candidate_sha,
+            "integration_head": "read-only",
+        },
+    }
+    bundle = tmp_path / "bundle.json"
+    bundle_sha = _private_json(bundle, bundle_value)
+    args = SimpleNamespace(
+        producer_review_bundle=str(bundle),
+        producer_review_bundle_sha256=bundle_sha,
+        producer_run_id=None,
+        producer_provider=None,
+        orchestration_run_id="orch-1",
+        orchestration_generation=2,
+        orchestration_fencing_token="fence-2",
+        orchestration_reviewer_task_id="review",
+        orchestration_reviewer_attempt_id="attempt-review",
+    )
+    policy, ref = agent_run.validate_review_independence(
+        "claude_final_review", "claude", args, data, "demo"
+    )
+    assert policy == "cross-family"
+    assert ref["status"] == "verified-private-review-bundle"
+    assert ref["session_ids"] == ["session-producer"]
+
+    integration = tmp_path / "integration"
+    integration.mkdir()
+    subprocess.run(["git", "-C", str(integration), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(integration), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(integration), "config", "user.name", "Test"], check=True
+    )
+    (integration / "frozen.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(integration), "add", "frozen.txt"], check=True)
+    subprocess.run(["git", "-C", str(integration), "commit", "-qm", "frozen"], check=True)
+    head = subprocess.run(
+        ["git", "-C", str(integration), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    candidate_sha = _private_json(
+        candidate, {"integration_head": head, "integration_path": str(integration)}
+    )
+    bundle_value["candidate"] = {
+        "kind": "controller-integration",
+        "artifact_path": str(candidate),
+        "artifact_sha256": candidate_sha,
+        "integration_head": head,
+    }
+    args.producer_review_bundle_sha256 = _private_json(bundle, bundle_value)
+    agent_run.validate_review_independence(
+        "claude_final_review", "claude", args, data, "demo"
+    )
+    (integration / "frozen.txt").write_text("two\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(integration), "commit", "-qam", "drift"], check=True)
+    with pytest.raises(agent_run.ProviderRunError, match="integration HEAD drift"):
+        agent_run.validate_review_independence(
+            "claude_final_review", "claude", args, data, "demo"
+        )
+
+    candidate.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(agent_run.ProviderRunError, match="candidate type, mode, or hash drift"):
+        agent_run.validate_review_independence(
+            "claude_final_review", "claude", args, data, "demo"
+        )
+
+
 def test_manifest_has_safe_existing_login_providers():
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     assert set(data["providers"]) == {"claude", "codex", "grok", "cursor"}
@@ -85,6 +221,10 @@ def test_manifest_has_safe_existing_login_providers():
     assert data["provider_aliases"]["cursor-auto"] == "cursor"
     assert "XAI_API_KEY" in data["providers"]["grok"]["strip_environment"]
     assert "CURSOR_API_KEY" in data["providers"]["cursor"]["strip_environment"]
+    assert {
+        provider["force_environment"]["PYTHONDONTWRITEBYTECODE"]
+        for provider in data["providers"].values()
+    } == {"1"}
     assert data["journal"]["live_evidence_max_age_seconds"] == 21600
     assert data["journal"]["live_evidence_future_skew_seconds"] == 300
 
@@ -153,13 +293,250 @@ def test_cursor_alias_and_discovered_model_validation(monkeypatch):
         )
 
 
+def test_cursor_catalog_preflight_retries_are_bounded_and_never_run_the_provider(
+    monkeypatch,
+):
+    """A transient Cursor catalog probe may retry before any provider run exists."""
+
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    provider = data["providers"]["cursor"]
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(list(command))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="temporary")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="Available models\n\ncomposer-2.5-fast - Composer 2.5 Fast\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_run.subprocess, "run", fake_run)
+    agent_run.validate_provider_model(
+        "cursor",
+        provider,
+        Path("/bin/echo"),
+        "composer-2.5-fast",
+        preflight_retry=True,
+    )
+    assert calls == [["/bin/echo", "models"], ["/bin/echo", "models"]]
+
+
+def test_catalog_exhaustion_emits_strict_sessionless_preflight_rejection(capsys):
+    error = agent_run.CatalogPreflightError(
+        run_id="preflight-run-1",
+        provider="cursor",
+        model="composer-2.5-fast",
+        seat="cursor-producer",
+        catalog_status="catalog-unavailable",
+        catalog_attempts=2,
+    )
+    agent_run.emit_catalog_preflight_rejection(error)
+    output = json.loads(capsys.readouterr().err)
+    receipt = output["agent_run"]
+    assert receipt == {
+        "receipt_kind": "preflight-rejection-v1",
+        "run_id": "preflight-run-1",
+        "provider": "cursor",
+        "seat": "cursor-producer",
+        "model": "composer-2.5-fast",
+        "exit_code": 2,
+        "failure_class": "provider-catalog-unavailable",
+        "session_status": "not-started",
+        "preflight_stage": "model-catalog",
+        "catalog_status": "catalog-unavailable",
+        "catalog_attempts": 2,
+    }
+    assert "session_id" not in receipt
+    assert "prompt" not in json.dumps(receipt)
+
+
+def test_catalog_preflight_exhaustion_never_launches_provider_or_writes_journal(
+    tmp_path, monkeypatch,
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    calls = 0
+
+    def unavailable_catalog(_provider, _binary):
+        nonlocal calls
+        calls += 1
+        return {"status": "catalog-unavailable", "models": []}
+
+    monkeypatch.setattr(agent_run, "discover_provider_models", unavailable_catalog)
+    monkeypatch.setattr(
+        agent_run,
+        "run_cursor_stream_json_process",
+        lambda *_args, **_kwargs: pytest.fail("provider main execution must not start"),
+    )
+    args = SimpleNamespace(
+        provider="cursor",
+        task_shape=None,
+        model="composer-2.5-fast",
+        effort=None,
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=True,
+        prompt="must never leave preflight",
+    )
+    with pytest.raises(agent_run.CatalogPreflightError) as raised:
+        agent_run.run_provider(args, data)
+    assert raised.value.catalog_attempts == 2
+    assert calls == 2
+    assert not (tmp_path / "journal").exists()
+
+
+def test_auto_skill_router_retries_exactly_once_after_a_known_timeout(
+    tmp_path, monkeypatch,
+):
+    config = {"skills": {"router_hook": "scripts/skill_router_hook.py"}}
+    calls = 0
+
+    def timed_then_ok(command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.TimeoutExpired(command, 8)
+        return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(agent_run.subprocess, "run", timed_then_ok)
+    names, status = agent_run.auto_skill_names("inspect", tmp_path, config)
+    assert names == []
+    assert status == "ok"
+    assert calls == 2
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [
+        (OSError("router unavailable"), "router-exec-error"),
+        (subprocess.CompletedProcess([], 0, stdout="not-json", stderr=""), "router-malformed-output"),
+    ],
+)
+def test_auto_skill_router_does_not_retry_unknown_or_non_timeout_failures(
+    tmp_path, monkeypatch, failure, expected_status,
+):
+    config = {"skills": {"router_hook": "scripts/skill_router_hook.py"}}
+    calls = 0
+
+    def failing_run(_command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(agent_run.subprocess, "run", failing_run)
+    assert agent_run.auto_skill_names("inspect", tmp_path, config) == ([], expected_status)
+    assert calls == 1
+
+
+def test_router_timeout_preflight_has_no_provider_run_or_journal(tmp_path, monkeypatch):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "validate_checkpoint", lambda *_args: {})
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(
+        agent_run,
+        "validate_provider_model",
+        lambda *_args, **_kwargs: {"status": "static-config", "models": []},
+    )
+    monkeypatch.setattr(
+        agent_run,
+        "select_skills",
+        lambda *_args, **_kwargs: {
+            "manifest_sha256": "a" * 64,
+            "available_count": 0,
+            "chosen": [],
+            "deferred": [],
+            "entries": {},
+            "routing_status": "router-timeout",
+        },
+    )
+    monkeypatch.setattr(
+        agent_run,
+        "run_codex_json_process",
+        lambda *_args, **_kwargs: pytest.fail("provider main execution must not start"),
+    )
+    args = SimpleNamespace(
+        provider="auto",
+        task_shape="ordinary_bug_fix",
+        model=None,
+        effort=None,
+        seat=None,
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event="evt-20260718T000000.000000Z-codex-landing",
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=False,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=False,
+        prompt="must never leave router preflight",
+    )
+    with pytest.raises(agent_run.RouterPreflightError) as raised:
+        agent_run.run_provider(args, data)
+    assert raised.value.router_attempts == 2
+    assert not (tmp_path / "journal").exists()
+
+
+def test_router_timeout_emits_strict_sessionless_preflight_rejection(capsys):
+    error = agent_run.RouterPreflightError(
+        run_id="router-preflight-run-1",
+        provider="codex",
+        model="gpt-5.6-terra",
+        seat="codex-landing",
+        router_attempts=2,
+    )
+    agent_run.emit_router_preflight_rejection(error)
+    receipt = json.loads(capsys.readouterr().err)["agent_run"]
+    assert receipt == {
+        "receipt_kind": "preflight-rejection-v1",
+        "run_id": "router-preflight-run-1",
+        "provider": "codex",
+        "seat": "codex-landing",
+        "model": "gpt-5.6-terra",
+        "exit_code": 2,
+        "failure_class": "provider-skill-router-timeout",
+        "session_status": "not-started",
+        "preflight_stage": "skill-router",
+        "router_status": "router-timeout",
+        "router_attempts": 2,
+    }
+    assert "session_id" not in receipt
+    assert "prompt" not in json.dumps(receipt)
+
+
 def test_model_discovery_strips_provider_billing_environment(monkeypatch):
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     provider = data["providers"]["cursor"]
     monkeypatch.setenv("CURSOR_API_KEY", "must-not-reach-child")
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "0")
 
     def fake_run(_command, **kwargs):
         assert "CURSOR_API_KEY" not in kwargs["env"]
+        assert kwargs["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
         return subprocess.CompletedProcess(
             [], 0, stdout="Available models\n\nauto - Auto\n", stderr=""
         )
@@ -404,7 +781,7 @@ def test_run_public_seam_named_cursor_health_unverified_exits_three(
     assert row["provider_health_evidence"]["status"] == "unverified"
 
 
-def test_route_doctor_explains_catalog_quota_evidence_and_blockers(
+def test_route_doctor_keeps_historical_quota_outcome_as_nonblocking_warning(
     tmp_path,
     monkeypatch,
 ):
@@ -427,6 +804,7 @@ def test_route_doctor_explains_catalog_quota_evidence_and_blockers(
     with (tmp_path / "agent-skill-advisor-layer.jsonl").open("a") as handle:
         for provider_id, model in (
             ("claude", "opus"),
+            ("claude", "claude-fable-5"),
             ("codex", "gpt-5.6-sol"),
         ):
             handle.write(
@@ -476,34 +854,29 @@ def test_route_doctor_explains_catalog_quota_evidence_and_blockers(
     assert cursor["catalog_model_count"] == 3
     assert len(cursor["catalog_sha256"]) == 64
     grok = next(row for row in report["providers"] if row["provider_id"] == "grok")
-    assert grok["live_evidence"]["status"] == "quota-exhausted"
-    assert grok["live_evidence"]["cooldown"] == "unknown"
-    assert grok["model_evidence"]["grok-4.5"]["status"] == "quota-exhausted"
+    assert grok["live_evidence"] == {
+        "status": "recent-in-run-provider-outcome",
+        "observed_at": active_now,
+        "failure_class": "quota-exhausted",
+    }
+    assert grok["model_evidence"]["grok-4.5"]["status"] == "recent-in-run-provider-outcome"
 
     route = report["routes"][0]
     assert route["route"] == "fable_final_review"
-    assert route["status"] == "disabled"
-    assert route["blockers"] == [
-        {
-            "code": "route-policy-disabled",
-            "detail": "disabled-fable-live-canary-required",
-        },
-        {
-            "code": "live-evidence-unverified",
-            "detail": "no-live-evidence",
-        },
-    ]
-    assert report["reviewer_graph"]["anthropic"] == ["openai"]
-    assert report["reviewer_graph"]["google"] == ["anthropic", "openai"]
+    assert route["status"] == "ready"
+    assert route["blockers"] == []
+    assert report["reviewer_graph"]["anthropic"] == ["openai", "xai"]
+    assert report["reviewer_graph"]["google"] == ["anthropic", "openai", "xai"]
 
     quota_report = agent_run.build_route_doctor(
         data, route_name="final_review", repo="agent-skill-advisor-layer"
     )
-    assert quota_report["routes"][0]["status"] == "blocked"
-    assert quota_report["routes"][0]["blockers"] == [
+    assert quota_report["routes"][0]["status"] == "ready"
+    assert quota_report["routes"][0]["blockers"] == []
+    assert quota_report["routes"][0]["warnings"] == [
         {
-            "code": "live-quota-exhausted",
-            "detail": "cooldown:unknown",
+            "code": "recent-in-run-provider-outcome",
+            "detail": "quota-exhausted",
         }
     ]
 
@@ -547,6 +920,32 @@ def test_live_evidence_requires_verified_health_for_broker_model(tmp_path):
                     "session_status": "attributed-correlated-artifacts",
                     "provider_health_evidence": {
                         "status": "verified-native-session-model",
+                        "model_observed": "composer-2.5",
+                    },
+                    "started_at": active_now,
+                }
+            )
+            + "\n"
+        )
+    assert (
+        agent_run.latest_provider_evidence(data, "demo", "cursor", "composer-2.5")[
+            "status"
+        ]
+        == "live-run-verified"
+    )
+
+    with path.open("a") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "provider_id": "cursor",
+                    "model_requested": "composer-2.5",
+                    "model_observed": "composer-2.5",
+                    "run_status": "completed",
+                    "exit_code": 0,
+                    "session_status": "attributed-stream-json",
+                    "provider_health_evidence": {
+                        "status": "verified-stream-session-model",
                         "model_observed": "composer-2.5",
                     },
                     "started_at": active_now,
@@ -1112,6 +1511,45 @@ def test_cross_family_review_reconciles_cursor_auto_producer_from_observed_famil
     assert producer_ref["model_family"] == "xai"
 
 
+def test_cross_family_review_accepts_cursor_stream_json_producer(tmp_path):
+    """A native Cursor stream identity is as strong as artifact correlation."""
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    (tmp_path / "demo.jsonl").write_text(
+        json.dumps(
+            {
+                "run_id": "cursor-stream-json-producer",
+                "provider_id": "cursor",
+                "model_requested": "composer-2.5-fast",
+                "model_observed": "composer-2.5-fast",
+                "model_family": "cursor",
+                "session_status": "attributed-stream-json",
+                "provider_health_evidence": {
+                    "status": "verified-stream-session-model",
+                    "model_observed": "composer-2.5-fast",
+                },
+                "seat": "claude-landing",
+                "session_id": "cursor-stream-session",
+                "repo": "demo",
+                "run_status": "completed",
+                "exit_code": 0,
+                "mode": "execute",
+                "risk_overlay": {"triggers": []},
+            }
+        )
+        + "\n"
+    )
+    args = SimpleNamespace(
+        producer_provider="cursor",
+        producer_run_id="cursor-stream-json-producer",
+    )
+    policy, producer_ref = agent_run.validate_review_independence(
+        "codex_final_review", "codex", args, data, "demo"
+    )
+    assert policy == "cross-family"
+    assert producer_ref["model_family"] == "cursor"
+
+
 def test_cross_family_review_accepts_cursor_producer_with_disclosed_family(tmp_path):
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     data["journal"]["root"] = str(tmp_path)
@@ -1491,7 +1929,7 @@ def test_risk_review_uses_normalized_governance_effort(tmp_path):
     assert policy == "cross-family"
 
 
-def test_grok_review_route_is_enabled_but_fable_routes_fail_closed():
+def test_governed_review_and_fable_routes_resolve_exact_bindings():
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     args = type(
         "Args",
@@ -1535,8 +1973,13 @@ def test_grok_review_route_is_enabled_but_fable_routes_fail_closed():
                 "seat": None,
             },
         )()
-        with pytest.raises(agent_run.ProviderRunError, match="disabled"):
-            agent_run.resolve_route(args, data)
+        assert agent_run.resolve_route(args, data) == (
+            "claude",
+            "claude-fable-5",
+            "max",
+            "fable-final-review",
+            shape,
+        )
 
 
 def test_environment_strips_api_billing_keys(monkeypatch):
@@ -1544,6 +1987,18 @@ def test_environment_strips_api_billing_keys(monkeypatch):
     env, stripped = agent_run.scrub_environment({"strip_environment": ["XAI_API_KEY"]})
     assert "XAI_API_KEY" not in env
     assert stripped == ["XAI_API_KEY"]
+
+
+def test_provider_environment_forces_bytecode_suppression_over_caller_value(monkeypatch):
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "0")
+    env, stripped = agent_run.scrub_environment(
+        {
+            "strip_environment": [],
+            "force_environment": {"PYTHONDONTWRITEBYTECODE": "1"},
+        }
+    )
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert stripped == []
 
 
 def test_failure_classifies_quota_without_storing_error_body():
@@ -1677,6 +2132,102 @@ def test_extract_claude_session_from_stream_events():
         {"type": "assistant", "message": {}},
     ]
     assert agent_run.extract_claude_session_from_events(events) == "sess-abc"
+
+
+def test_cursor_stream_identity_uses_exact_catalog_id_from_init_and_result():
+    identity = agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-abc",
+                "model_id": "composer-2.5-fast",
+            },
+            {
+                "type": "result",
+                "session_id": "cursor-stream-abc",
+                "model_id": "composer-2.5-fast",
+                "result": "OK",
+            },
+        ],
+        [{"id": "composer-2.5-fast", "label": "Composer 2.5 Fast"}],
+    )
+    assert identity == {
+        "session_id": "cursor-stream-abc",
+        "model_observed": "composer-2.5-fast",
+    }
+
+
+def test_cursor_stream_identity_maps_unique_catalog_label_and_rejects_conflict():
+    catalog = [{"id": "composer-2.5-fast", "label": "Composer 2.5 Fast"}]
+    assert agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-abc",
+                "model": "Composer 2.5 Fast",
+            },
+            {
+                "type": "result",
+                "session_id": "cursor-stream-abc",
+                "result": "OK",
+            },
+        ],
+        catalog,
+    ) == {
+        "session_id": "cursor-stream-abc",
+        "model_observed": "composer-2.5-fast",
+    }
+    assert agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-a",
+                "model_id": "composer-2.5-fast",
+            },
+            {
+                "type": "result",
+                "session_id": "cursor-stream-b",
+                "model_id": "composer-2.5-fast",
+            },
+        ],
+        catalog,
+    ) is None
+
+    duplicate_label_catalog = [
+        {"id": "composer-a", "label": "Composer"},
+        {"id": "composer-b", "label": "Composer"},
+    ]
+    assert agent_run.extract_cursor_stream_identity(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "cursor-stream-abc",
+                "model": "Composer",
+            }
+        ],
+        duplicate_label_catalog,
+    ) is None
+
+
+def test_cursor_stream_json_configuration_and_health_are_native_not_file_diff():
+    command = ["cursor-agent", "--print", "--model", "composer-2.5-fast", "prompt"]
+    assert agent_run.configure_cursor_stream_json("cursor", command) is True
+    assert command[-3:] == ["--output-format", "stream-json", "prompt"]
+    session = agent_run.cursor_stream_session_record(
+        "cursor-stream-abc", "composer-2.5-fast", {}
+    )
+    assert session["session_ref"] == "stream-json:cursor-stream-abc"
+    assert session["model_observation_reason"] == "cursor-stream-json"
+    assert agent_run.provider_health_evidence(
+        "cursor", "composer-2.5-fast", session
+    ) == {
+        "status": "verified-stream-session-model",
+        "model_observed": "composer-2.5-fast",
+    }
 
 
 def test_extract_codex_session_and_claude_result_from_stream_events(tmp_path):
@@ -1982,7 +2533,11 @@ def test_run_claude_stream_json_extracts_result_and_session(monkeypatch, tmp_pat
             self._streams.append((stream, label))
 
         def unregister(self, stream):
-            self._streams = [(s, l) for s, l in self._streams if s is not stream]
+            self._streams = [
+                (registered_stream, label)
+                for registered_stream, label in self._streams
+                if registered_stream is not stream
+            ]
 
         def select(self, timeout=None):
             for stream, label in list(self._streams):
@@ -2056,7 +2611,7 @@ def test_cursor_session_parser_reads_model_only_from_native_blob_metadata(tmp_pa
     assert "private response" not in json.dumps(parsed)
 
 
-def test_cursor_attribution_rejects_concurrent_sessions_even_when_model_matches(
+def test_cursor_attribution_correlates_unique_exact_model_across_concurrent_sessions(
     tmp_path,
 ):
     def make_session(name, model):
@@ -2091,8 +2646,258 @@ def test_cursor_attribution_rejects_concurrent_sessions_even_when_model_matches(
         "cursor", {}, after, requested_model="composer-2.5"
     )
     assert changed == 3
+    assert session["session_id"] == "composer-session"
+    assert session["model_observed"] == "composer-2.5"
+    assert session["session_status"] == "attributed-correlated-artifacts"
+
+
+def test_cursor_attribution_correlates_both_overlapping_distinct_session_pairs(
+    tmp_path,
+):
+    def make_pair(session_id: str, model: str) -> tuple[Path, Path]:
+        db = tmp_path / "chats" / session_id / "store.db"
+        db.parent.mkdir(parents=True)
+        conn = sqlite3.connect(db)
+        conn.execute("create table meta (key text, value blob)")
+        conn.execute("create table blobs (id text primary key, data blob)")
+        conn.execute(
+            "insert into meta values ('0', ?)",
+            (json.dumps({"agentId": session_id, "lastUsedModel": model}).encode().hex(),),
+        )
+        conn.commit()
+        conn.close()
+        transcript = tmp_path / "projects" / session_id / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("{}\n")
+        return db, transcript
+
+    grok_id = "04956bfc-5b5d-4847-bf83-789965c80754"
+    composer_id = "ef9142d7-5fd7-4bd0-8f3f-e822a7c51d77"
+    grok = make_pair(grok_id, "cursor-grok-4.5-high-fast")
+    composer = make_pair(composer_id, "composer-2.5-fast")
+    after = {
+        str(path): agent_run.file_fingerprint(path)
+        for path in (*grok, *composer)
+    }
+
+    grok_session, grok_count = agent_run.attribute_session(
+        "cursor", {}, after, requested_model="cursor-grok-4.5-high-fast"
+    )
+    composer_session, composer_count = agent_run.attribute_session(
+        "cursor", {}, after, requested_model="composer-2.5-fast"
+    )
+
+    assert grok_count == composer_count == 4
+    assert grok_session["session_id"] == grok_id
+    assert grok_session["model_observed"] == "cursor-grok-4.5-high-fast"
+    assert composer_session["session_id"] == composer_id
+    assert composer_session["model_observed"] == "composer-2.5-fast"
+    assert grok_session["session_status"] == "attributed-correlated-artifacts"
+    assert composer_session["session_status"] == "attributed-correlated-artifacts"
+
+
+def test_cursor_attribution_same_model_concurrency_remains_ambiguous(tmp_path):
+    after = {}
+    for session_id in ("first", "second"):
+        db = tmp_path / session_id / "store.db"
+        db.parent.mkdir()
+        conn = sqlite3.connect(db)
+        conn.execute("create table meta (key text, value blob)")
+        conn.execute("create table blobs (id text primary key, data blob)")
+        conn.execute(
+            "insert into meta values ('0', ?)",
+            (json.dumps({"agentId": session_id, "lastUsedModel": "composer-2.5-fast"}).encode().hex(),),
+        )
+        conn.commit()
+        conn.close()
+        after[str(db)] = agent_run.file_fingerprint(db)
+    session, changed = agent_run.attribute_session(
+        "cursor", {}, after, requested_model="composer-2.5-fast"
+    )
+    assert changed == 2
     assert session["session_id"] == "unknown"
     assert session["session_status"] == "ambiguous-concurrent-artifacts"
+
+
+def test_cursor_settle_correlates_when_other_session_flushes_later(tmp_path):
+    def make_store(session_id: str, model: str) -> Path:
+        db = tmp_path / "chats" / session_id / "store.db"
+        db.parent.mkdir(parents=True)
+        conn = sqlite3.connect(db)
+        conn.execute("create table meta (key text, value blob)")
+        conn.execute("create table blobs (id text primary key, data blob)")
+        conn.execute(
+            "insert into meta values ('0', ?)",
+            (json.dumps({"agentId": session_id, "lastUsedModel": model}).encode().hex(),),
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    composer = make_store("composer-session", "composer-2.5-fast")
+    grok = make_store("grok-session", "cursor-grok-4.5-high-fast")
+    grok_transcript = tmp_path / "projects" / "grok-session" / "grok-session.jsonl"
+    grok_transcript.parent.mkdir(parents=True)
+    grok_transcript.write_text("{}\n")
+    initial = {
+        str(composer): agent_run.file_fingerprint(composer),
+        str(grok_transcript): agent_run.file_fingerprint(grok_transcript),
+    }
+    complete = dict(initial, **{str(grok): agent_run.file_fingerprint(grok)})
+    snapshots = [initial, initial, complete, complete]
+
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = FakeClock()
+
+    session, changed, settled_after, telemetry = agent_run.settle_cursor_attribution(
+        provider={"session": {"adapter": "cursor"}},
+        before={},
+        after=initial,
+        requested_model="composer-2.5-fast",
+        overall_started=0.0,
+        timeout_seconds=10.0,
+        snapshot_fn=lambda _provider: snapshots.pop(0),
+        monotonic_fn=clock.monotonic,
+        sleep_fn=clock.sleep,
+        max_wait_seconds=3.0,
+        poll_seconds=0.5,
+    )
+
+    assert session["session_id"] == "composer-session"
+    assert session["model_observed"] == "composer-2.5-fast"
+    assert changed == 3
+    assert settled_after == complete
+    assert telemetry == {
+        "status": "settled",
+        "poll_count": 4,
+        "waited_ms": 2000,
+        "budget_ms": 3000,
+        "stable_samples_required": 2,
+    }
+
+
+def test_cursor_settle_timeout_remains_fail_closed(tmp_path):
+    composer = tmp_path / "composer" / "store.db"
+    composer.parent.mkdir()
+    conn = sqlite3.connect(composer)
+    conn.execute("create table meta (key text, value blob)")
+    conn.execute("create table blobs (id text primary key, data blob)")
+    conn.execute(
+        "insert into meta values ('0', ?)",
+        (json.dumps({"agentId": "composer", "lastUsedModel": "composer-2.5-fast"}).encode().hex(),),
+    )
+    conn.commit()
+    conn.close()
+    incomplete = tmp_path / "grok" / "grok.jsonl"
+    incomplete.parent.mkdir()
+    incomplete.write_text("{}\n")
+    after = {
+        str(composer): agent_run.file_fingerprint(composer),
+        str(incomplete): agent_run.file_fingerprint(incomplete),
+    }
+
+    class FakeClock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = FakeClock()
+    session, changed, _settled_after, telemetry = agent_run.settle_cursor_attribution(
+        provider={}, before={}, after=after, requested_model="composer-2.5-fast",
+        overall_started=0.0, timeout_seconds=10.0,
+        snapshot_fn=lambda _provider: after,
+        monotonic_fn=clock.monotonic, sleep_fn=clock.sleep,
+        max_wait_seconds=0.5, poll_seconds=0.25,
+    )
+    assert changed == 2
+    assert session["session_id"] == "unknown"
+    assert session["session_status"] == "ambiguous-concurrent-artifacts"
+    assert telemetry["status"] == "timeout-ambiguous"
+    assert telemetry["poll_count"] == 2
+    assert telemetry["waited_ms"] == 500
+
+
+def test_cursor_settle_is_clamped_by_remaining_total_timeout(tmp_path):
+    transcripts = [tmp_path / "one.jsonl", tmp_path / "two.jsonl"]
+    for transcript in transcripts:
+        transcript.write_text("{}\n")
+    after = {
+        str(transcript): agent_run.file_fingerprint(transcript)
+        for transcript in transcripts
+    }
+
+    class FakeClock:
+        now = 9.8
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = FakeClock()
+    session, _changed, _after, telemetry = agent_run.settle_cursor_attribution(
+        provider={}, before={}, after=after, requested_model="composer-2.5-fast",
+        overall_started=0.0, timeout_seconds=10.0,
+        snapshot_fn=lambda _provider: after,
+        monotonic_fn=clock.monotonic, sleep_fn=clock.sleep,
+        max_wait_seconds=3.0, poll_seconds=0.5,
+    )
+    assert session["session_id"] == "unknown"
+    assert telemetry["status"] == "timeout-ambiguous"
+    assert telemetry["budget_ms"] == 200
+    assert telemetry["waited_ms"] == 200
+    assert clock.now == 10.0
+
+
+def test_governed_cursor_route_applies_manifest_trust_without_bridge_flag():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    args = SimpleNamespace(
+        provider="auto", task_shape="mechanical", model=None, effort=None, seat=None
+    )
+    provider_id, model, effort, seat, route_name = agent_run.resolve_route(args, data)
+    assert (provider_id, model, effort, seat, route_name) == (
+        "cursor", "composer-2.5-fast", "low", "claude-landing", "mechanical"
+    )
+    command = agent_run.build_command(
+        data["providers"][provider_id], "read-only", Path("/bin/echo"),
+        Path("/tmp/work"), "prompt", model, effort
+    )
+    source = agent_run.apply_workspace_trust(
+        data["providers"][provider_id], command,
+        governed_route=True, explicit_trust=False,
+    )
+    assert source == "governed-route-binding"
+    assert "--trust" in command
+
+
+def test_workspace_trust_cannot_be_borrowed_by_explicit_or_unrelated_provider():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    cursor_command = ["cursor-agent", "prompt"]
+    with pytest.raises(agent_run.ProviderRunError, match="explicit --trust-workspace"):
+        agent_run.apply_workspace_trust(
+            data["providers"]["cursor"], cursor_command,
+            governed_route=False, explicit_trust=False,
+        )
+    codex_command = ["codex", "prompt"]
+    with pytest.raises(agent_run.ProviderRunError, match="only valid"):
+        agent_run.apply_workspace_trust(
+            data["providers"]["codex"], codex_command,
+            governed_route=False, explicit_trust=True,
+        )
+    assert "--trust" not in cursor_command + codex_command
 
 
 def test_cursor_attribution_does_not_hijack_concurrent_same_model_store(tmp_path):
@@ -2555,6 +3360,88 @@ def test_augment_prompt_hashes_exact_skill_bytes(tmp_path):
     assert f'content_sha256="{expected}"' in delivered
 
 
+def test_augment_prompt_defers_oversized_auto_skill_and_embeds_later_candidate(tmp_path):
+    large = tmp_path / "large" / "SKILL.md"
+    small = tmp_path / "small" / "SKILL.md"
+    large.parent.mkdir()
+    small.parent.mkdir()
+    large.write_text("x" * 100)
+    small.write_text("small")
+    selection = {
+        "chosen": [
+            {
+                "name": "large",
+                "digest": "large-digest",
+                "selection_source": "auto",
+            },
+            {
+                "name": "small",
+                "digest": "small-digest",
+                "selection_source": "auto",
+            },
+        ],
+        "deferred": [],
+        "entries": {
+            "large": {"skill_md": str(large)},
+            "small": {"skill_md": str(small)},
+        },
+        "trusted_content_roots": [str(tmp_path)],
+    }
+
+    delivered = agent_run.augment_prompt("task", selection, 20)
+
+    assert "name=\"large\"" not in delivered
+    assert "name=\"small\"" in delivered
+    assert [row["name"] for row in selection["chosen"]] == ["small"]
+    assert selection["deferred"] == [
+        {
+            "name": "large",
+            "digest": "large-digest",
+            "selection_source": "auto",
+            "deferred_reason": "managed-skill-content-exceeds-max-embedded-bytes",
+        }
+    ]
+
+
+def test_augment_prompt_rejects_oversized_explicit_skill(tmp_path):
+    skill = tmp_path / "explicit" / "SKILL.md"
+    skill.parent.mkdir()
+    skill.write_text("x" * 100)
+    selection = {
+        "chosen": [
+            {"name": "explicit", "digest": "tree", "selection_source": "explicit"}
+        ],
+        "deferred": [],
+        "entries": {"explicit": {"skill_md": str(skill)}},
+        "trusted_content_roots": [str(tmp_path)],
+    }
+
+    with pytest.raises(agent_run.ProviderRunError, match="max_embedded_bytes"):
+        agent_run.augment_prompt("task", selection, 20)
+
+
+def test_skill_evidence_includes_auto_budget_deferral_reason():
+    selection = {
+        "manifest_sha256": "m",
+        "available_count": 1,
+        "chosen": [],
+        "deferred": [
+            {
+                "name": "large",
+                "digest": "d",
+                "selection_source": "auto",
+                "deferred_reason": "managed-skill-content-exceeds-max-embedded-bytes",
+            }
+        ],
+    }
+
+    evidence = agent_run.sanitized_skill_evidence(selection)
+
+    assert evidence["deferred_by_policy"][0]["deferred_reason"] == (
+        "managed-skill-content-exceeds-max-embedded-bytes"
+    )
+
+
 def test_augment_prompt_rejects_skill_outside_trusted_roots(tmp_path):
     trusted = tmp_path / "trusted"
     trusted.mkdir()
@@ -2696,12 +3583,6 @@ def test_classify_route_status_ready_degraded_blocked_disabled():
     )
     assert (
         agent_run.classify_route_status(
-            [{"code": "live-quota-exhausted", "detail": "cooldown:unknown"}]
-        )
-        == "blocked"
-    )
-    assert (
-        agent_run.classify_route_status(
             [
                 {"code": "route-policy-disabled", "detail": "x"},
                 {"code": "live-evidence-unverified", "detail": "y"},
@@ -2711,6 +3592,135 @@ def test_classify_route_status_ready_degraded_blocked_disabled():
     )
 
 
+def test_route_doctor_treats_intentionally_unlocked_mechanical_route_as_warning(
+    tmp_path,
+    monkeypatch,
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    active_now = agent_run.utc_now()
+    (tmp_path / "demo.jsonl").write_text(
+        json.dumps(
+            {
+                "provider_id": "cursor",
+                "model_requested": "composer-2.5-fast",
+                "model_observed": "composer-2.5-fast",
+                "model_family": "cursor",
+                "run_status": "completed",
+                "exit_code": 0,
+                "failure_class": "none",
+                "started_at": active_now,
+                "session_id": "cursor-mechanical-session",
+                "session_status": "attributed-correlated-artifacts",
+                "provider_health_evidence": {
+                    "status": "verified-native-session-model",
+                    "model_observed": "composer-2.5-fast",
+                },
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        agent_run, "resolve_binary", lambda _provider: Path("/bin/echo")
+    )
+    monkeypatch.setattr(
+        agent_run, "binary_version", lambda _binary, _provider: "test-cli"
+    )
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda provider, _binary: {
+            "status": (
+                "catalog-listed"
+                if provider.get("display_name") == "Cursor"
+                else "static-config"
+            ),
+            "models": [
+                {"id": model}
+                for model in (
+                    ["auto", "composer-2.5-fast", "cursor-grok-4.5-high-fast"]
+                    if provider.get("display_name") == "Cursor"
+                    else provider.get("model_options", [])
+                )
+            ],
+        },
+    )
+
+    report = agent_run.build_route_doctor(
+        data, route_name="mechanical", repo="demo"
+    )
+    route = report["routes"][0]
+    assert route["status"] == "ready"
+    assert route["blockers"] == []
+    assert route["warnings"] == [
+        {"code": "serial-lock-disabled", "detail": "cursor"}
+    ]
+    assert report["warnings"] == [
+        {
+            "code": "serial-lock-disabled",
+            "route": "mechanical",
+            "provider_id": "cursor",
+        },
+        {
+            "code": "serial-lock-disabled",
+            "route": "mechanical_grok",
+            "provider_id": "cursor",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("route_name", "mutate", "expected"),
+    [
+        (
+            "ordinary_bug_fix",
+            lambda route: route.pop("serial_group"),
+            {"code": "serial-lock-required", "detail": "codex"},
+        ),
+        (
+            "mechanical",
+            lambda route: route.update(serial_group="cursor-family"),
+            {
+                "code": "serial-lock-contradicts-parallel",
+                "detail": "cursor-family",
+            },
+        ),
+    ],
+)
+def test_route_doctor_fails_closed_for_invalid_concurrency_contract(
+    tmp_path, monkeypatch, route_name, mutate, expected
+):
+    canon = yaml.safe_load((ROOT / "routing-policy.yaml").read_text())
+    mutate(canon["runtime_routes"][route_name])
+    canon_path = tmp_path / "routing-policy.yaml"
+    canon_path.write_text(yaml.safe_dump(canon))
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["routing_canon"] = str(canon_path)
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(agent_run, "binary_version", lambda *_args: "test-cli")
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda provider, _binary: {
+            "status": "catalog-listed" if provider.get("display_name") == "Cursor" else "static-config",
+            "models": [{"id": model} for model in provider.get("model_options", [])],
+        },
+    )
+    route = agent_run.build_route_doctor(data, route_name=route_name, repo="demo")["routes"][0]
+    assert expected in route["blockers"]
+
+
+def test_governed_run_concurrency_validation_rejects_missing_serial_group():
+    canon = yaml.safe_load((ROOT / "routing-policy.yaml").read_text())
+    canon["runtime_routes"]["ordinary_bug_fix"].pop("serial_group")
+    binding = agent_run.resolve_binding(canon, "ordinary_bug_fix")
+    with pytest.raises(agent_run.ProviderRunError, match="requires a serial_group"):
+        agent_run.validate_route_concurrency(canon, "ordinary_bug_fix", binding)
+
+
 def test_classify_failure_uses_timeout_class():
     assert agent_run.classify_failure("timed-out", 124, "") == "timeout"
     assert (
@@ -2718,6 +3728,19 @@ def test_classify_failure_uses_timeout_class():
             "timed-out", 124, "", timeout_class="timeout_first_event"
         )
         == "timeout_first_event"
+    )
+
+
+def test_classify_failure_preserves_observed_usage_limit_over_timeout():
+    assert (
+        agent_run.classify_failure(
+            "provider-failed",
+            1,
+            "provider-timeout",
+            timeout_class="timeout_total",
+            stdout='{"message":"You have hit your usage limit. Try again later."}',
+        )
+        == "quota-exhausted"
     )
 
 
@@ -2802,6 +3825,17 @@ def test_codex_command_template_includes_json():
     )
     assert cmd[1] == "exec"
     assert cmd[2] == "--json"
+
+
+def test_codex_stream_idle_budget_is_configured_and_capped_by_total_timeout():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    provider = data["providers"]["codex"]
+    assert agent_run.codex_stream_idle_seconds(provider, 300) == 240
+    assert agent_run.codex_stream_idle_seconds(provider, 90) == 90
+    with pytest.raises(agent_run.ProviderRunError, match="positive integer"):
+        agent_run.codex_stream_idle_seconds(
+            {"stream_idle_timeout_seconds": True}, 300
+        )
 
 
 def test_run_codex_json_process_classifies_idle_timeout(monkeypatch):
@@ -3007,7 +4041,11 @@ def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypat
             self._streams.append((stream, label))
 
         def unregister(self, stream):
-            self._streams = [(s, l) for s, l in self._streams if s is not stream]
+            self._streams = [
+                (registered_stream, label)
+                for registered_stream, label in self._streams
+                if registered_stream is not stream
+            ]
 
         def select(self, timeout=None):
             for stream, label in list(self._streams):
@@ -3036,6 +4074,263 @@ def test_run_codex_json_process_success_extracts_message_and_telemetry(monkeypat
     ) == "gpt-5.6-sol"
 
 
+@pytest.mark.parametrize("include_agent_message", [True, False])
+def test_run_codex_json_process_turn_failed_is_terminal_and_preserves_usage_limit(
+    monkeypatch, include_agent_message: bool,
+):
+    # This is shaped like the V12 failure stream: Codex begins the thread and
+    # turn, reports an item-level error and top-level error, then emits its
+    # terminal turn.failed event. It is a replay only; no provider is called.
+    lines = [
+        json.dumps({"type": "thread.started", "thread_id": "v12-thread"}) + "\n",
+        json.dumps({"type": "turn.started"}) + "\n",
+    ]
+    if include_agent_message:
+        lines.append(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "Partial result before the provider failure.",
+                    },
+                }
+            )
+            + "\n"
+        )
+    lines.extend(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "error",
+                        "message": "You have hit your usage limit. Try again later.",
+                    },
+                }
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "type": "error",
+                    "message": "You have hit your usage limit. Try again later.",
+                }
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {
+                        "message": "You have hit your usage limit. Try again later."
+                    },
+                }
+            )
+            + "\n",
+        ]
+    )
+
+    class _QueueStream:
+        def __init__(self, queued):
+            self._lines = list(queued)
+
+        def readline(self):
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = _QueueStream(lines)
+            self.stderr = _QueueStream([])
+            self.returncode = None
+            self.wait_timeouts = []
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.wait_timeouts.append(timeout)
+            raise subprocess.TimeoutExpired("codex", timeout)
+
+    fake_proc = FakeProc()
+    monkeypatch.setattr(agent_run.subprocess, "Popen", lambda *a, **k: fake_proc)
+
+    class RecordingSelector:
+        def __init__(self):
+            self._streams = []
+
+        def register(self, stream, _mask, label):
+            self._streams.append((stream, label))
+
+        def unregister(self, stream):
+            self._streams = [
+                (registered_stream, label)
+                for registered_stream, label in self._streams
+                if registered_stream is not stream
+            ]
+
+        def select(self, timeout=None):
+            for stream, label in list(self._streams):
+                if label == "stdout" and stream._lines:
+                    return [((type("K", (), {"fileobj": stream, "data": label})()), None)]
+            return []
+
+    import selectors as _selectors
+
+    monkeypatch.setattr(_selectors, "DefaultSelector", RecordingSelector)
+    proc, status, telemetry, events = agent_run.run_codex_json_process(
+        ["codex", "exec", "--json", "hi"],
+        cwd=Path("."),
+        env={},
+        timeout_seconds=10,
+    )
+
+    assert status == "provider-failed"
+    # Reaping can still hit its local deadline, but it cannot overwrite the
+    # already observed terminal provider failure.
+    assert proc.returncode == -9
+    assert proc.stdout == (
+        "Partial result before the provider failure." if include_agent_message else ""
+    )
+    assert "usage limit" not in proc.stdout.lower()
+    assert fake_proc.wait_timeouts
+    assert 0 < fake_proc.wait_timeouts[0] <= 2.0
+    assert telemetry["turn_completed_at"]
+    assert telemetry["timeout_class"] is None
+    expected_event_types = [
+        "thread.started",
+        "turn.started",
+        *(["item.completed"] if include_agent_message else []),
+        "item.completed",
+        "error",
+        "turn.failed",
+    ]
+    assert [event["type"] for event in events] == expected_event_types
+    classification_evidence = agent_run.extract_codex_terminal_failure_evidence(events)
+    assert "usage limit" in classification_evidence.lower()
+    assert (
+        agent_run.classify_failure(
+            status,
+            proc.returncode,
+            proc.stderr,
+            timeout_class=telemetry["timeout_class"],
+            stdout=f"{proc.stdout}\n{classification_evidence}",
+        )
+        == "quota-exhausted"
+    )
+
+
+def test_codex_terminal_failure_classification_evidence_is_not_journaled(
+    tmp_path, monkeypatch, capsys
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(agent_run, "binary_version", lambda *_args: "test-codex")
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    private_error = "You have hit your usage limit. private-terminal-marker"
+    stream_events = [
+        {"type": "thread.started", "thread_id": "terminal-evidence-thread"},
+        {"type": "turn.started"},
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "Visible partial result.",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {"type": "error", "message": private_error},
+        },
+        {"type": "error", "message": private_error},
+        {"type": "turn.failed", "error": {"message": private_error}},
+    ]
+
+    def fake_codex_stream(command, **_kwargs):
+        telemetry = agent_run.empty_stage_telemetry()
+        telemetry["turn_completed_at"] = agent_run.utc_now()
+        telemetry["stream_mode"] = "codex-json"
+        return (
+            subprocess.CompletedProcess(
+                command, -9, stdout="Visible partial result.", stderr=""
+            ),
+            "provider-failed",
+            telemetry,
+            stream_events,
+        )
+
+    monkeypatch.setattr(agent_run, "run_codex_json_process", fake_codex_stream)
+    args = SimpleNamespace(
+        provider="codex",
+        task_shape=None,
+        model="gpt-5.6-terra",
+        effort="medium",
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=False,
+        prompt="terminal evidence replay",
+    )
+
+    assert agent_run.run_provider(args, data) == -9
+    captured = capsys.readouterr()
+    assert "Visible partial result." in captured.out
+    assert private_error not in captured.out
+    assert private_error not in captured.err
+    journal_path = next((tmp_path / "journal").glob("*.jsonl"))
+    journal_text = journal_path.read_text()
+    assert private_error not in journal_text
+    row = json.loads(journal_text.splitlines()[-1])
+    assert row["failure_class"] == "quota-exhausted"
+    assert row["run_status"] == "provider-failed"
+    assert row["stdout_sha256"] == agent_run.sha256_text("Visible partial result.")
+    assert row["stdout_length"] == len("Visible partial result.")
+
+
+def test_codex_terminal_error_evidence_outranks_misleading_agent_message():
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "The UI label says usage limit, but this is not the failure.",
+            },
+        },
+        {
+            "type": "turn.failed",
+            "error": {"message": "HTTP 401 Unauthorized: token expired"},
+        },
+    ]
+    classification_stdout = agent_run.codex_failure_classification_stdout(
+        "The UI label says usage limit, but this is not the failure.", events
+    )
+
+    assert "usage limit" not in classification_stdout.lower()
+    assert "401 unauthorized" in classification_stdout.lower()
+    assert (
+        agent_run.classify_failure(
+            "provider-failed", 1, "", stdout=classification_stdout
+        )
+        == "auth-expired"
+    )
+
+
 def test_doctor_task_focus_and_reviewer_graph_gaps(tmp_path, monkeypatch):
     data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
     data["journal"]["root"] = str(tmp_path)
@@ -3056,7 +4351,7 @@ def test_doctor_task_focus_and_reviewer_graph_gaps(tmp_path, monkeypatch):
     report = agent_run.build_route_doctor(data, route_name="judgment", repo="demo")
     assert report["task_focus"]["task_shape"] == "judgment"
     assert report["task_focus"]["required_routes"] == ["judgment"]
-    assert "fable_final_review" in report["task_focus"]["optional_or_disabled_routes"]
+    assert "fable_final_review" not in report["task_focus"]["optional_or_disabled_routes"]
     assert report["routes"][0]["status"] == "degraded"
     assert isinstance(report["reviewer_graph_gaps"], dict)
     assert "anthropic" in report["reviewer_graph_gaps"]
@@ -3117,3 +4412,82 @@ def test_no_skills_does_not_require_local_skill_manifest(tmp_path, monkeypatch, 
     assert len(journals) == 1, journals
     row = json.loads(journals[0].read_text().strip().splitlines()[-1])
     assert row["skill_evidence"]["routing_status"] == "explicitly-disabled-for-run"
+
+
+def test_cursor_run_prefers_native_stream_identity_over_ambiguous_file_diff(
+    tmp_path, monkeypatch
+):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(agent_run, "binary_version", lambda *_args: "test-cursor")
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "discover_provider_models",
+        lambda _provider, _binary: {
+            "status": "catalog-listed",
+            "models": [
+                {"id": "composer-2.5-fast", "label": "Composer 2.5 Fast"}
+            ],
+        },
+    )
+    observed = {}
+
+    def fake_stream(command, **_kwargs):
+        observed["command"] = command
+        return (
+            subprocess.CompletedProcess(command, 0, stdout="OK", stderr=""),
+            "completed",
+            agent_run.empty_stage_telemetry(),
+            [
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "session_id": "cursor-native-session",
+                    "model_id": "composer-2.5-fast",
+                },
+                {
+                    "type": "result",
+                    "session_id": "cursor-native-session",
+                    "model_id": "composer-2.5-fast",
+                    "result": "OK",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(agent_run, "run_cursor_stream_json_process", fake_stream)
+    monkeypatch.setattr(
+        agent_run,
+        "attribute_session",
+        lambda *_args, **_kwargs: pytest.fail("native stream must precede file diff"),
+    )
+    args = SimpleNamespace(
+        provider="cursor",
+        task_shape=None,
+        model="composer-2.5-fast",
+        effort=None,
+        seat="codex-landing",
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event=None,
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=True,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=True,
+        prompt="native cursor identity",
+    )
+    assert agent_run.run_provider(args, data) == 0
+    assert observed["command"][-3:] == ["--output-format", "stream-json", "native cursor identity"]
+    row = json.loads(next((tmp_path / "journal").glob("*.jsonl")).read_text().splitlines()[-1])
+    assert row["session_attribution"] == "stream-json"
+    assert row["session_id"] == "cursor-native-session"
+    assert row["model_observed"] == "composer-2.5-fast"
+    assert row["provider_health_evidence"]["status"] == "verified-stream-session-model"

@@ -26,6 +26,8 @@ def test_runtime_routes_have_one_canon_and_preserve_existing_binding():
         "policy_family": "codex",
         "provider": "codex",
         "seat": "codex-landing",
+        "concurrency": "family_serial",
+        "serial_group": "codex-family",
     }
     binding = routing.resolve_binding(canon, "ordinary_bug_fix")
 
@@ -37,6 +39,7 @@ def test_runtime_routes_have_one_canon_and_preserve_existing_binding():
         "route_policy": "enabled",
         "review_independence": "not-applicable",
         "governance_effort": "medium",
+        "serial_group": "codex-family",
     }
 
 
@@ -69,6 +72,25 @@ Tip: use --model <id>
     assert (
         routing.resolve_model_family(provider, "future-opaque-model") == "undisclosed"
     )
+
+
+def test_mechanical_parallel_routes_disable_automatic_skill_body_injection():
+    canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
+    assert routing.resolve_binding(canon, "mechanical")["managed_skills"] == "disabled"
+    assert (
+        routing.resolve_binding(canon, "mechanical_grok")["managed_skills"]
+        == "disabled"
+    )
+    assert "managed_skills" not in routing.resolve_binding(canon, "ordinary_bug_fix")
+
+    for route in (
+        "final_review",
+        "claude_final_review",
+        "fable_final_review",
+        "secondary_final_review",
+        "codex_final_review",
+    ):
+        assert routing.resolve_binding(canon, route)["managed_skills"] == "disabled"
 
 
 def test_independent_supplement_preserves_canon_eligible_producer_routes():

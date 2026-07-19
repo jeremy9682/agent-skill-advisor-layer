@@ -91,6 +91,123 @@ def test_eval_recall_and_gate_detection(tmp_path):
     assert by_id["missing"]["skipped_missing_skill"] == ["not-installed-skill"]
 
 
+def test_rule_coverage_requires_positive_negative_and_rejection_proofs(tmp_path):
+    routing = load_routing_module()
+    audit = routing.load_audit_module()
+    skills = routing.collect_skills(audit, build_fixture(tmp_path))
+    routing.FIRE_THRESHOLD = 0.0
+    cases = [
+        {
+            "id": "positive",
+            "prompt": "ship this project to production with release gate",
+            "expect": ["fixture-ship"],
+            "high_cost_ok": ["fixture-ship"],
+        },
+        {"id": "negative", "prompt": "python GIL", "expect": []},
+        {
+            "id": "rejection",
+            "prompt": "You are an external reviewer. Do not call tools.",
+            "expect": [],
+        },
+    ]
+    evaluation = routing.run_eval(skills, cases)
+    report = routing.run_rule_coverage(
+        [
+            {
+                "rule": "fixture-ship",
+                "targets": ["fixture-ship"],
+                "positive": "positive",
+                "negative": "negative",
+                "rejection": "rejection",
+            }
+        ],
+        evaluation,
+        {skill["name"]: skill["policy"] for skill in skills},
+    )
+    assert report["passed"] == 1
+    assert report["failures"] == []
+
+    broken = routing.run_rule_coverage(
+        [
+            {
+                "rule": "fixture-ship",
+                "targets": ["fixture-ship"],
+                "positive": "negative",
+                "negative": "positive",
+                "rejection": "negative",
+            }
+        ],
+        evaluation,
+        {skill["name"]: skill["policy"] for skill in skills},
+    )
+    assert broken["failures"]
+
+    wrong_policy = routing.run_rule_coverage(
+        [
+            {
+                "rule": "fixture-ship",
+                "targets": ["fixture-ship"],
+                "positive": "positive",
+                "negative": "negative",
+                "rejection": "rejection",
+            }
+        ],
+        evaluation,
+        {"fixture-ship": "auto-eligible"},
+    )
+    assert wrong_policy["failures"][0]["failures"] == [
+        "target-policy-mismatch"
+    ]
+
+
+def test_rule_coverage_proves_production_hot_route_exclusion(tmp_path):
+    routing = load_routing_module()
+    audit = routing.load_audit_module()
+    skills_dir = tmp_path / "skills"
+    make_skill(
+        skills_dir,
+        "huashu-design",
+        "Use for HTML animation 60fps MP4 export.",
+    )
+    skills = routing.collect_skills(audit, skills_dir)
+    evaluation = routing.run_eval(
+        skills,
+        [
+            {
+                "id": "positive",
+                "prompt": "HTML animation 60fps MP4 export",
+                "expect": ["huashu-design"],
+            },
+            {"id": "negative", "prompt": "python GIL", "expect": []},
+            {
+                "id": "rejection",
+                "prompt": "You are an external reviewer. Do not call tools.",
+                "expect": [],
+            },
+        ],
+        fire_threshold=0.0,
+    )
+    report = routing.run_rule_coverage(
+        [
+            {
+                "rule": "huashu-design-mp4-extension",
+                "targets": ["huashu-design"],
+                "required_policy": "auto-eligible",
+                "hot_route": "excluded",
+                "positive": "positive",
+                "negative": "negative",
+                "rejection": "rejection",
+            }
+        ],
+        evaluation,
+        {"huashu-design": "auto-eligible"},
+    )
+    assert report["passed"] == 1
+    positive = next(row for row in evaluation["cases"] if row["id"] == "positive")
+    assert positive["lexical_shown"] == ["huashu-design"]
+    assert positive["shown"] == []
+
+
 def test_unexpected_high_cost_candidate_is_flagged(tmp_path):
     routing = load_routing_module()
     audit = routing.load_audit_module()

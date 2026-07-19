@@ -44,6 +44,24 @@ schemas/                    Intent and solution note schemas
 tests/                      Lightweight pytest coverage
 ```
 
+## Repository ownership
+
+This public repository is the single governance canon: routing policy, provider
+bindings, schemas, gates, health inspection, and the thin orchestrator adapter
+live here. The executable DAG scheduler and its package/CI live in the separate
+private `agent-run-orchestrator` repository; `orchestrator.lock.json` pins the
+exact reviewed commit used by the adapter.
+
+Run evidence stays local. Journals, checkpoint ledgers, provider sessions,
+credentials, temporary worktrees, prompts, responses, and review bundles must
+not be committed to either repository. This split keeps policy reviewable
+without publishing provider/runtime internals or creating a second routing
+canon.
+
+To update the private runtime, review and test its new commit first, then update
+only `orchestrator.lock.json` here and run the public adapter and governance
+regression suite. Never copy routing policy into the private package.
+
 ## Default Routing Targets
 
 The bundled advisor covers these high-cost workflows by default:
