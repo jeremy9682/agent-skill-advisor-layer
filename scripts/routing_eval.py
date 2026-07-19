@@ -960,7 +960,7 @@ def main() -> int:
         )
         print(
             f"displayed recall (would fire): {eval_report['displayed_recall']:.0%}"
-            f" ({eval_report['displayed_hits']}/{eval_report['recall_total']})"
+            f" ({eval_report['displayed_hits']}/{eval_report['displayed_total']})"
         )
         print(
             f"negative precision (should stay silent, scored only): "
