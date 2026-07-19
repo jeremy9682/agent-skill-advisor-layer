@@ -4491,3 +4491,55 @@ def test_cursor_run_prefers_native_stream_identity_over_ambiguous_file_diff(
     assert row["session_id"] == "cursor-native-session"
     assert row["model_observed"] == "composer-2.5-fast"
     assert row["provider_health_evidence"]["status"] == "verified-stream-session-model"
+
+
+def test_repo_slug_is_shared_by_main_checkout_and_linked_worktree(tmp_path):
+    source = tmp_path / "canonical-project"
+    linked = tmp_path / "linked-worktree"
+    source.mkdir()
+    subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.name", "Test"], check=True
+    )
+    (source / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-qm", "base"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "worktree", "add", "-qb", "linked", str(linked)],
+        check=True,
+    )
+
+    assert agent_run.repo_slug(source) == "canonical-project"
+    assert agent_run.repo_slug(linked) == "canonical-project"
+
+
+def test_repo_slug_rejects_conflicting_linked_worktree_override(tmp_path):
+    source = tmp_path / "canonical-project"
+    linked = tmp_path / "linked-worktree"
+    source.mkdir()
+    subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "config", "user.name", "Test"], check=True
+    )
+    (source / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-qm", "base"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "worktree", "add", "-qb", "linked", str(linked)],
+        check=True,
+    )
+    (linked / ".agents").mkdir()
+    (linked / ".agents" / "ledger-slug").write_text(
+        "different-project\n", encoding="utf-8"
+    )
+
+    with pytest.raises(agent_run.ProviderRunError, match="conflicts"):
+        agent_run.repo_slug(linked)
