@@ -344,8 +344,10 @@ path and never invokes an LLM.
 The governance repository remains the only authority for routing policy,
 provider bindings, schemas, review rules, and gates. `scripts/agent_orchestrate.py`
 is deliberately a thin adapter: it validates `orchestrator.lock.json`, requires
-the pinned private checkout to be clean and at the exact commit, exports this
-governance checkout as `AGENT_RUN_GOVERNANCE_ROOT`, and then delegates.
+the locked commit to be materialised into its own clean worktree and runs from
+there -- the development checkout's own HEAD and dirtiness are irrelevant --
+exports this governance checkout as `AGENT_RUN_GOVERNANCE_ROOT`, and then
+delegates.
 
 The private `agent-run-orchestrator` package owns DAG execution, dependency
 scheduling, retries, semantic result projection, and aggregation. It imports
