@@ -39,6 +39,47 @@ reasoning effort by default and must escalate to maximum effort when the diff
 touches any restricted-zone trigger. Downshifting under a process budget
 shrinks review scope, never review depth.
 
+## Review Escalation
+
+Machine form: `routing-policy.yaml` → `review_escalation`. That block wins on
+conflict; this section is why it exists and how to apply it.
+
+**The incident (2026-07-19).** A session building a daily fast lane for
+`agent-run-orchestrator` ran successive multi-model reviews. Each seat, finding
+no declared trust boundary in the target repo, imported a production /
+multi-tenant threat model and demanded OS sandboxes, network default-deny and
+credential brokers — for a local tool that runs at the trust level of typing
+`cursor` yourself. The reviews had *just diagnosed* over-engineering as the
+failure mode and then performed it. Reviewers ratchet in one direction: a
+finding scores, a REJECT costs the reviewer nothing. Knowing the anti-pattern
+did not prevent it. A stop rule does.
+
+**The rules.**
+
+- **One pass by default.** An ordinary change gets at most one independent final
+  review, at the task shape's `review_effort_floor` — not a panel.
+- **Escalate only on a listed trigger** (`escalate_on`): a risk-overlay trigger,
+  restricted zone, a flip-list hit, an unresolved blocker from the first review,
+  an irreversible operation, or the operator asking. `user_request` is in the
+  list deliberately: the cap budgets the *machine's* reflex to keep asking, and
+  must never override the operator's judgement.
+- **One re-review after a fix, then stop.** If two passes have not converged,
+  escalate to the operator. Do not keep iterating, and do not swap in another
+  model on the same question — "run it by another model" is not free; rounds are
+  a budget, not a reflex.
+- **Assume the target's declared trust model** (`trust_model_source:
+  target-repo-declared`), e.g. `agent-run-orchestrator`'s README "Trust model"
+  section. A finding that only holds by importing a broader threat model than
+  the target declares is out of scope: **surface it, do not REJECT on it**
+  (`out_of_scope_findings: surface-not-reject`).
+
+**What is actually enforced.** `scripts/governance_health.py` validates the
+block's shape — fields present, triggers known, `user_request` retained,
+`enforced_by` non-empty. Nothing yet stops a second re-review at dispatch time;
+`enforced_by` carries a `pending:` reference until the orchestrator gains a
+round cap. That field must stay truthful. A machine-shaped field that no runtime
+reads is worse than prose, because prose does not masquerade as enforcement.
+
 ## Finding Classes
 
 | Class | Meaning | Default action |

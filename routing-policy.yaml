@@ -13,6 +13,27 @@
 
 version: 1
 
+# Review escalation bounds. Rationale, the 2026-07-19 incident that produced
+# them, and worked examples live in docs/gate-policy.md "Review Escalation";
+# this block is the machine form and wins on conflict.
+review_escalation:
+  default_review_passes: 1
+  max_re_review_rounds: 1
+  escalate_on:
+    - risk_overlay_trigger
+    - restricted_zone
+    - flip_list_hit
+    - unresolved_blocker
+    - irreversible_operation
+    - user_request
+  trust_model_source: target-repo-declared
+  out_of_scope_findings: surface-not-reject
+  # Honest about what is and is not mechanically enforced today: this block is
+  # validated for shape by scripts/governance_health.py, but nothing yet stops a
+  # second re-review at dispatch time. Naming the gap beats letting a field that
+  # no runtime reads pass for enforcement.
+  enforced_by: pending:orchestrator-review-round-cap
+
 # Effort is TWO independent dimensions. execution_effort may downshift by task
 # difficulty (review is the safety net); review_effort_floor may NOT follow it
 # down. execution_mode is a work posture (fast/careful), NOT a reasoning effort.
