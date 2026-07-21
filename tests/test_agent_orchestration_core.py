@@ -391,6 +391,15 @@ def test_plan_input_ref_and_metadata_cannot_hide_prompt_or_authority(tmp_path):
     value = raw_plan(tmp_path, metadata={"provider": "codex"})
     with pytest.raises(PlanValidationError, match="forbidden metadata"):
         validate_plan(value)
+
+
+def test_plan_accepts_only_versioned_analysis_result_contract(tmp_path):
+    value = raw_plan(tmp_path)
+    value["tasks"][0]["result_contract"] = "analysis-v1"
+    assert validate_plan(value)["tasks"][0]["result_contract"] == "analysis-v1"
+    value["tasks"][0]["result_contract"] = "free-form"
+    with pytest.raises(PlanValidationError, match="result_contract"):
+        validate_plan(value)
     value = raw_plan(tmp_path)
     value["tasks"][0]["metadata"] = {"prompt": "do hidden work"}
     with pytest.raises(PlanValidationError, match="forbidden metadata"):

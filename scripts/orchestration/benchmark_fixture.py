@@ -26,6 +26,7 @@ from .benchmark import (
     sha256_value,
     write_private_json,
 )
+from .governance import routing_canon_path
 
 
 class BenchmarkFixtureError(ValueError):
@@ -430,7 +431,7 @@ def build_pilot_fixture(root: Path) -> PilotFixture:
     evaluator = target / "evaluator"
     _mkdir(evaluator)
     _mkdir(evaluator / "tasks")
-    canon = Path(__file__).resolve().parents[2] / "routing-policy.yaml"
+    canon = routing_canon_path()
     if not canon.is_file():
         raise BenchmarkFixtureError("routing policy is unavailable")
     route_policy_sha256 = hashlib.sha256(canon.read_bytes()).hexdigest()

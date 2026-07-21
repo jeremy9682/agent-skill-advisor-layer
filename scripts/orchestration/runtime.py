@@ -28,6 +28,8 @@ from .bridge import (
     NativeAgentRunBridge,
     review_verdict_failure,
 )
+from .analysis_result import CONSUMED_MARKER, MARKER, MAX_RESULT_BYTES
+from .governance import governance_root, provider_manifest_path, routing_canon_path
 from .journal import write_replaceable_manifest
 from .journal import EventJournal
 from .join import JoinDispute, join_candidates
@@ -72,6 +74,8 @@ POST_PROVIDER_EVIDENCE_FIELDS = (
     "exit_code",
     "artifact_path",
     "artifact_sha256",
+    "analysis_result_path",
+    "analysis_result_sha256",
     "provider_duration_ms",
     "bridge_wall_ms",
     "wrapper_pid",
@@ -466,11 +470,13 @@ class BenchmarkLiveRuntimeAdapter:
 
     def _fingerprint(self) -> str:
         digest = hashlib.sha256()
-        for relative in ("routing-policy.yaml", "agent-providers.yaml"):
-            path = self.checkout_root / relative
+        for label, path in (
+            ("routing-policy.yaml", routing_canon_path()),
+            ("agent-providers.yaml", provider_manifest_path()),
+        ):
             if not path.is_file() or path.is_symlink():
-                raise RuntimeErrorSafe(f"benchmark runtime input unavailable: {relative}")
-            digest.update(relative.encode())
+                raise RuntimeErrorSafe(f"benchmark runtime input unavailable: {label}")
+            digest.update(label.encode())
             digest.update(b"\0")
             # Preflight deliberately does not parse provider configuration.
             # Attested route/config digests are validated by the strict
@@ -478,18 +484,25 @@ class BenchmarkLiveRuntimeAdapter:
             state = path.stat()
             digest.update(f"{state.st_dev}:{state.st_ino}:{state.st_size}:{state.st_mtime_ns}".encode())
             digest.update(b"\0")
-        for relative in (
-            "scripts/agent_orchestrate.py",
+        governance = governance_root()
+        governed_files = (
             "scripts/agent_provider_run.py",
             "scripts/skill_audit.py",
             "scripts/skill_router_hook.py",
             "scripts/routing_eval.py",
             "routing-evals/hints.yaml",
+        )
+        orchestrator_files = (
+            "scripts/agent_orchestrate.py",
             "scripts/orchestration/attestation.py",
             "scripts/orchestration/benchmark.py",
             "scripts/orchestration/runtime.py",
+        )
+        for root, relative in (
+            *((governance, item) for item in governed_files),
+            *((self.checkout_root, item) for item in orchestrator_files),
         ):
-            path = self.checkout_root / relative
+            path = root / relative
             if not path.is_file() or path.is_symlink():
                 raise RuntimeErrorSafe(f"benchmark runtime input unavailable: {relative}")
             digest.update(relative.encode())
@@ -1326,9 +1339,19 @@ class OrchestrationRuntime:
         if len(data) > 1_000_000:
             raise RuntimeErrorSafe("input exceeds bounded prompt size")
         try:
-            return data.decode("utf-8")
+            prompt = data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise RuntimeErrorSafe("input_ref must be UTF-8 text") from exc
+        if task.get("result_contract") == "analysis-v1":
+            prompt += (
+                "\n\nStructured handoff contract: include exactly one single-line marker "
+                f"`{MARKER} <JSON>` in your answer. JSON must use version 1 and only "
+                "summary, findings, decisions, open_questions, verification. Each finding "
+                "uses id, severity, title, evidence_refs, recommendation, and optional "
+                "confidence. Do not place prompts, transcripts, credentials, commands, or "
+                "provider configuration in that object."
+            )
+        return prompt
 
     def _task_cwd(self, task: Mapping[str, Any]) -> Path:
         review_cwd = self._review_cwds.get(str(task["id"]))
@@ -1412,6 +1435,16 @@ class OrchestrationRuntime:
                 )
                 record["artifact_path"] = str(verified_path)
                 record["artifact_sha256"] = verified_sha
+            analysis_path = result.get("analysis_result_path")
+            analysis_sha = result.get("analysis_result_sha256")
+            if analysis_path is not None or analysis_sha is not None:
+                verified_path, verified_sha = self._verified_private_artifact(
+                    analysis_path, analysis_sha
+                )
+                if verified_path.stat().st_size > MAX_RESULT_BYTES:
+                    raise RuntimeErrorSafe("analysis result exceeds bounded size")
+                record["analysis_result_path"] = str(verified_path)
+                record["analysis_result_sha256"] = verified_sha
             candidate_commit = record.get("candidate_commit")
             if candidate_commit is not None:
                 manifest = self._read_controller_manifest(
@@ -1518,8 +1551,7 @@ class OrchestrationRuntime:
             artifact_path, artifact_sha = self._verified_private_artifact(
                 result["artifact_path"], result["artifact_sha256"]
             )
-            producers.append(
-                {
+            producer_record = {
                     "task_id": str(target),
                     "run_id": str(result["provider_run_id"]),
                     "provider_id": str(result["provider"]),
@@ -1531,7 +1563,16 @@ class OrchestrationRuntime:
                     "artifact_path": str(artifact_path),
                     "artifact_sha256": artifact_sha,
                 }
-            )
+            if producer_task.get("result_contract") == "analysis-v1":
+                analysis_path, analysis_sha = self._verified_private_artifact(
+                    result.get("analysis_result_path"),
+                    result.get("analysis_result_sha256"),
+                )
+                if analysis_path.stat().st_size > MAX_RESULT_BYTES:
+                    raise RuntimeErrorSafe("analysis result exceeds bounded size")
+                producer_record["analysis_result_path"] = str(analysis_path)
+                producer_record["analysis_result_sha256"] = analysis_sha
+            producers.append(producer_record)
         run_ids = [row["run_id"] for row in producers]
         sessions = [row["session_id"] for row in producers]
         identities = [
@@ -1616,6 +1657,11 @@ class OrchestrationRuntime:
             "orchestration_fencing_token": fencing_token,
             "orchestration_reviewer_task_id": str(task["id"]),
             "orchestration_reviewer_attempt_id": attempt_id,
+            "required_consumed_artifact_hashes": [
+                row["analysis_result_sha256"]
+                for row in producers
+                if "analysis_result_sha256" in row
+            ],
             "review_appendix": (
                 "\n\nGoverned review input: inspect the private review bundle at "
                 f"{bundle_path} (sha256 {bundle_sha}). Review the frozen candidate only."
@@ -1871,6 +1917,8 @@ class OrchestrationRuntime:
             "compiled_seat": _compiled_execution_seat(task),
             "prompt": self._prompt(task),
         }
+        if task.get("result_contract") is not None:
+            projected["result_contract"] = task["result_contract"]
         if task["binding"].get("managed_skills") == "disabled":
             projected["disable_managed_skills"] = True
         dependencies = list(task.get("depends_on") or [])
@@ -1894,6 +1942,13 @@ class OrchestrationRuntime:
             projected.update({key: value for key, value in context.items() if key != "review_appendix"})
             projected["prompt"] += (
                 str(context["review_appendix"])
+                + (
+                    "\n\nConsumption contract: after reading every structured analysis "
+                    f"artifact, emit one line `{CONSUMED_MARKER} <JSON array>` containing "
+                    "exactly their SHA-256 values."
+                    if context.get("required_consumed_artifact_hashes")
+                    else ""
+                )
                 + "\n\nVerdict contract: after your findings, your final non-empty line "
                 "MUST be exactly AGENT_RUN_REVIEW_VERDICT: PASS or "
                 "AGENT_RUN_REVIEW_VERDICT: FAIL."
@@ -2040,7 +2095,10 @@ class OrchestrationRuntime:
                     if artifact.stat().st_size > DEPENDENCY_BUNDLE_MAX_BYTES:
                         raise RuntimeErrorSafe("review result exceeds bounded size")
                     verdict_failure = review_verdict_failure(
-                        artifact.read_text(encoding="utf-8")
+                        artifact.read_text(encoding="utf-8"),
+                        self._review_contexts.get(
+                            (str(task["id"]), attempt_id), {}
+                        ).get("required_consumed_artifact_hashes", []),
                     )
                 except (RuntimeErrorSafe, OSError, UnicodeError):
                     result.update(

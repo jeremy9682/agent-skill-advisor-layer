@@ -345,6 +345,8 @@ def binary_version(binary: Path, provider: dict) -> str:
 
 
 def repo_slug(cwd: Path) -> str:
+    """Return one ledger identity for a repository and all linked worktrees."""
+
     try:
         top = subprocess.run(
             ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
@@ -354,13 +356,43 @@ def repo_slug(cwd: Path) -> str:
             check=False,
         )
         if top.returncode == 0 and top.stdout.strip():
-            root = Path(top.stdout.strip())
-            override = root / ".agents" / "ledger-slug"
-            if override.is_file():
+            root = Path(top.stdout.strip()).resolve()
+            common = subprocess.run(
+                ["git", "-C", str(cwd), "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if common.returncode or not common.stdout.strip():
+                raise ProviderRunError("cannot resolve canonical Git ledger identity")
+            common_path = Path(common.stdout.strip())
+            if not common_path.is_absolute():
+                common_path = (root / common_path).resolve()
+            else:
+                common_path = common_path.resolve()
+            if common_path.name != ".git" or not common_path.is_dir():
+                raise ProviderRunError("unsupported Git common directory layout")
+            source_root = common_path.parent.resolve()
+
+            def declared_slug(repo: Path) -> str | None:
+                override = repo / ".agents" / "ledger-slug"
+                if not override.is_file():
+                    return None
                 value = override.read_text(encoding="utf-8").strip()
-                if re.fullmatch(r"[A-Za-z0-9._-]+", value):
-                    return value
-            return root.name
+                if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+                    raise ProviderRunError("canonical ledger slug is invalid")
+                return value
+
+            source_slug = declared_slug(source_root) or source_root.name
+            if not re.fullmatch(r"[A-Za-z0-9._-]+", source_slug):
+                raise ProviderRunError("canonical ledger slug is invalid")
+            local_slug = declared_slug(root)
+            if local_slug is not None and local_slug != source_slug:
+                raise ProviderRunError("worktree ledger slug conflicts with source")
+            return source_slug
+    except ProviderRunError:
+        raise
     except (OSError, subprocess.TimeoutExpired):
         pass
     return cwd.name or "projectless"

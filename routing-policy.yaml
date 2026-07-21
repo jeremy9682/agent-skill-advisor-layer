@@ -10,6 +10,24 @@
 # RUNTIME: scripts/routing_runtime.py compiles the executable bindings below;
 #   provider manifests contain adapters/capabilities only and may not redefine
 #   routes.
+#
+# REVIEW ESCALATION POLICY (added 2026-07-19 after a session where successive
+#   multi-model reviews ratcheted a LOCAL dev tool toward a production-security
+#   platform — the exact over-engineering anti-pattern those reviews had just
+#   diagnosed. Knowing the anti-pattern did not prevent it; a stop rule does.):
+#   - DEFAULT single-model. An ordinary change gets AT MOST ONE independent final
+#     review (at the task-shape's review_effort_floor below), not a panel.
+#   - ESCALATE to multi-model / cross-family review ONLY when one holds: a
+#     risk_overlays trigger or restricted_zone / flip-list hit; an unresolved
+#     blocker in the first review; an irreversible operation; or the user asks.
+#   - ROUND CAP: after a fix, re-review AT MOST ONCE. If it has not converged,
+#     escalate to the user — do NOT keep iterating or swapping models on one
+#     question. "Run it by another model" is not free; treat rounds as a budget.
+#   - CHARTER: a review MUST assume the target repo's declared trust model (e.g.
+#     agent-run-orchestrator README "Trust model": operator-permission,
+#     Cursor/Claude-Code-level, NOT a production/multi-tenant platform). A finding
+#     that only holds by importing a broader threat model than the target declares
+#     is OUT OF SCOPE and does not justify escalation or a REJECT.
 
 version: 1
 

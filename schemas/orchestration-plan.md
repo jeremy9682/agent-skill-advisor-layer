@@ -34,7 +34,13 @@ Optional fields:
 
 Required: `id` and governed `task_shape`. Optional fields are `depends_on`,
 `workspace`, `deadline_seconds`, `retry`, `input_ref`, `acceptance`,
-`reviewer_for`, and non-authoritative `metadata`.
+`reviewer_for`, `result_contract`, and non-authoritative `metadata`.
+
+`result_contract`, when present, is exactly `analysis-v1`. The provider must
+emit one bounded `AGENT_RUN_ANALYSIS_RESULT:` JSON marker. The controller
+validates its allowlisted semantic fields and writes a separate mode-`0600`,
+SHA-256-bound artifact. Raw prose remains private and is never substituted for
+the structured contract.
 
 `acceptance` is valid only on an `isolated-writer` task. Read-only tasks and
 no-writer plans may not declare acceptance commands that the runtime cannot
@@ -82,6 +88,10 @@ review rejects undisclosed families and equal producer/reviewer families.
 `eligible_producer_routes`. Every accepted review receives a
 `reviewer_independence_projection` requiring a distinct attempt and fresh
 session; plans cannot provide or reuse a session ID.
+When a reviewed producer declares `analysis-v1`, the review bundle contains the
+validated semantic artifact pointer and digest. A passing reviewer must emit an
+`AGENT_RUN_CONSUMED_ARTIFACTS:` list matching every such digest before its final
+verdict; missing or mismatched consumption fails closed.
 
 `input_ref`, when present, is either an existing repository-relative file or
 an opaque `evaluator:<id>` pointer. Inline prompts and escaping paths are not

@@ -22,6 +22,7 @@ import uuid
 from typing import Any, Callable, Mapping, Protocol
 
 from .benchmark import BenchmarkProtocolError, LaunchContract, canonical_json, sha256_value
+from .governance import routing_canon_path
 from .plan import PlanValidationError, validate_plan
 
 
@@ -174,7 +175,7 @@ def compile_lifecycle_launch(
     if len(base_sha) < 7:
         _fail("launch contract base_commit is unavailable")
     head, ledger_slug = _fixture_identity(fixture)
-    route_policy = Path(__file__).resolve().parents[2] / "routing-policy.yaml"
+    route_policy = routing_canon_path()
     if not route_policy.is_file() or hashlib.sha256(route_policy.read_bytes()).hexdigest() != contract.payload.get("route_policy_sha256"):
         _fail("frozen route policy hash drift")
     try:

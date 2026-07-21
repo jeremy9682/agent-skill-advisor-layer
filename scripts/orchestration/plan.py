@@ -16,23 +16,17 @@ from typing import Any, Mapping
 
 import yaml
 
-try:
-    from scripts.routing_runtime import (
-        load_routing_canon,
-        resolve_binding,
-        resolve_model_family,
-    )
-except ModuleNotFoundError:  # direct imports with scripts/ on sys.path
-    from routing_runtime import (
-        load_routing_canon,
-        resolve_binding,
-        resolve_model_family,
-    )
+from .governance import (
+    load_routing_canon,
+    provider_manifest_path,
+    resolve_binding,
+    resolve_model_family,
+    routing_canon_path,
+)
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CANON = ROOT / "routing-policy.yaml"
-DEFAULT_PROVIDER_MANIFEST = ROOT / "agent-providers.yaml"
+DEFAULT_CANON = routing_canon_path()
+DEFAULT_PROVIDER_MANIFEST = provider_manifest_path()
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 FORBIDDEN_AUTHORITY_KEYS = {
@@ -89,6 +83,7 @@ ALLOWED_TASK_KEYS = {
     "input_ref",
     "acceptance",
     "reviewer_for",
+    "result_contract",
     "metadata",
 }
 ALLOWED_WORKSPACE_KEYS = {
@@ -543,6 +538,11 @@ def validate_plan(
                         f"task {task_id}.input_ref must name an existing repository file or evaluator pointer"
                     )
             task["input_ref"] = input_ref
+        result_contract = task.get("result_contract")
+        if result_contract not in {None, "analysis-v1"}:
+            _fail(
+                f"task {task_id}.result_contract must be omitted or analysis-v1"
+            )
         task["metadata"] = _validate_metadata(
             task.get("metadata"), f"task {task_id}.metadata"
         )
@@ -582,6 +582,7 @@ def validate_plan(
                 "retry": {"max_attempts": max_attempts, "retry_on": retry_on},
                 "acceptance": acceptance,
                 "reviewer_for": reviewers,
+                "result_contract": result_contract,
                 "binding": binding,
                 "model_family": model_family,
                 "family": family,

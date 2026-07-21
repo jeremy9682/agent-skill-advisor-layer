@@ -91,6 +91,58 @@ def test_eval_recall_and_gate_detection(tmp_path):
     assert by_id["missing"]["skipped_missing_skill"] == ["not-installed-skill"]
 
 
+def test_rule_coverage_requires_positive_negative_and_rejection_proofs(tmp_path):
+    routing = load_routing_module()
+    audit = routing.load_audit_module()
+    skills = routing.collect_skills(audit, build_fixture(tmp_path))
+    routing.FIRE_THRESHOLD = 0.0
+    cases = [
+        {
+            "id": "positive",
+            "prompt": "ship this project to production with release gate",
+            "expect": ["fixture-ship"],
+            "high_cost_ok": ["fixture-ship"],
+        },
+        {"id": "negative", "prompt": "python GIL", "expect": []},
+        {
+            "id": "rejection",
+            "prompt": "You are an external reviewer. Do not call tools.",
+            "expect": [],
+        },
+    ]
+    evaluation = routing.run_eval(skills, cases)
+    report = routing.run_rule_coverage(
+        [
+            {
+                "rule": "fixture-ship",
+                "targets": ["fixture-ship"],
+                "positive": "positive",
+                "negative": "negative",
+                "rejection": "rejection",
+            }
+        ],
+        evaluation,
+        {skill["name"] for skill in skills},
+    )
+    assert report["passed"] == 1
+    assert report["failures"] == []
+
+    broken = routing.run_rule_coverage(
+        [
+            {
+                "rule": "fixture-ship",
+                "targets": ["fixture-ship"],
+                "positive": "negative",
+                "negative": "positive",
+                "rejection": "negative",
+            }
+        ],
+        evaluation,
+        {skill["name"] for skill in skills},
+    )
+    assert broken["failures"]
+
+
 def test_unexpected_high_cost_candidate_is_flagged(tmp_path):
     routing = load_routing_module()
     audit = routing.load_audit_module()

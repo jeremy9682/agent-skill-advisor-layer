@@ -138,7 +138,7 @@ hints:
     source: "mattpocock full-bundle integration 2026-07-12"
   - skill: writing-great-skills
     extra_triggers: ["写好 SKILL.md 的方法", "skill 信息层级", "leading words skill", "/writing-great-skills"]
-    negative_triggers: ["安装 skill", "运行 skill"]
+    negative_triggers: ["安装 skill", "运行 skill", "按照你们的建议执行", "根据任务的难度分配"]
     rationale: "route skill-authoring methodology without colliding with installation or invocation"
     source: "mattpocock full-bundle integration 2026-07-12"
   - skill: qa
@@ -272,7 +272,19 @@ hints:
     source: "lint 2026-07-06"
   - skill: benchmark-models
     extra_triggers: ["模型对比", "比较模型", "跨模型评测", "比较两个模型", "哪个模型好"]
-    negative_triggers: []
+    negative_triggers: ["按照你们的建议执行", "根据任务的难度分配"]
     domains: []
     rationale: "'模型' became a stop-bigram 2026-07-11 (generic process word in exec directives); phrase-level triggers restore Chinese reachability for the one skill that genuinely routes on it"
     source: "Codex final-review H2 2026-07-11"
+  - skill: full-throttle
+    extra_triggers: []
+    negative_triggers: ["按照你们的建议执行", "根据任务的难度分配"]
+    domains: []
+    rationale: "generic execution/effort instructions are not approval for a full autonomous workflow"
+    source: "routing eval false-positive regression 2026-07-19"
+  - skill: land-and-deploy
+    extra_triggers: []
+    negative_triggers: ["明确运行 lfg"]
+    domains: []
+    rationale: "explicit approval for the lfg workflow is not approval for a separate deployment workflow"
+    source: "high-cost rule coverage regression 2026-07-19"

@@ -33,6 +33,12 @@ provider/model/session attribution, candidate commit/diff/path summary, and a
 mode-`0600` artifact pointer plus digest. Arbitrary result fields are ignored;
 prompt/response/chat/checkpoint/permission material is never propagated.
 
+For tasks declaring `result_contract: analysis-v1`, success additionally
+requires a separate bounded semantic artifact with only `summary`, `findings`,
+`decisions`, `open_questions`, and `verification`. Its mode and digest are
+rechecked at every handoff. Reviews attest the exact set of consumed semantic
+artifact hashes; the raw provider answer is not treated as that attestation.
+
 After all nodes succeed, adapters may expose
 `finalize_run(plan, state, *, run_id, generation, fencing_token)`. It returns
 the same status envelope plus privacy-safe integration evidence such as an

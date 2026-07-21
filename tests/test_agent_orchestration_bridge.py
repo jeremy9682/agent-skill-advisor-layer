@@ -86,6 +86,81 @@ def test_parse_requires_one_complete_attributed_receipt():
         bridge_mod.parse_agent_run_output(bad)
 
 
+def test_analysis_result_is_private_bounded_and_review_consumption_is_attested(tmp_path):
+    semantic = {
+        "version": 1,
+        "summary": "The seam is sound.",
+        "findings": [
+            {
+                "id": "F1",
+                "severity": "medium",
+                "title": "One explicit gap",
+                "evidence_refs": ["src/module.py:10"],
+                "recommendation": "Add the contract test.",
+                "confidence": 0.9,
+            }
+        ],
+        "decisions": ["Keep one canon"],
+        "open_questions": [],
+        "verification": ["pytest -q"],
+    }
+    answer = "analysis\nAGENT_RUN_ANALYSIS_RESULT: " + json.dumps(semantic)
+
+    def runner(command, **_kwargs):
+        output = json.dumps({"agent_run": receipt()}) + "\n" + answer
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    task = dict(base_task(tmp_path), result_contract="analysis-v1")
+    result = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", runner=runner
+    ).run_task(task, run_id="semantic-run", attempt_id="attempt-1", generation=1)
+    artifact = Path(result["analysis_result_path"])
+    assert result["status"] == "succeeded"
+    assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+    assert json.loads(artifact.read_text())["summary"] == "The seam is sound."
+
+    digest = result["analysis_result_sha256"]
+    reviewed = (
+        "findings\nAGENT_RUN_CONSUMED_ARTIFACTS: "
+        + json.dumps([digest])
+        + "\nAGENT_RUN_REVIEW_VERDICT: PASS"
+    )
+    assert bridge_mod.review_verdict_failure(reviewed, [digest]) is None
+    assert (
+        bridge_mod.review_verdict_failure(
+            "AGENT_RUN_REVIEW_VERDICT: PASS", [digest]
+        )
+        == "review-consumption-attestation-missing"
+    )
+    assert (
+        bridge_mod.review_verdict_failure(
+            "AGENT_RUN_CONSUMED_ARTIFACTS: "
+            + json.dumps(["0" * 64])
+            + "\nAGENT_RUN_REVIEW_VERDICT: PASS",
+            [digest],
+        )
+        == "review-consumption-attestation-mismatch"
+    )
+
+
+def test_invalid_required_analysis_result_fails_closed(tmp_path):
+    def runner(command, **_kwargs):
+        output = json.dumps({"agent_run": receipt()}) + "\nplain prose only"
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    result = bridge_mod.NativeAgentRunBridge(
+        artifact_root=tmp_path / "artifacts", runner=runner
+    ).run_task(
+        dict(base_task(tmp_path), result_contract="analysis-v1"),
+        run_id="semantic-invalid",
+        attempt_id="attempt-1",
+        generation=1,
+    )
+    assert result["status"] == "failed"
+    assert result["failure_class"] == "analysis-result-invalid"
+    assert "analysis_result_path" not in result
+
+
 def preflight_rejection_receipt(**overrides) -> dict:
     value = {
         "receipt_kind": "preflight-rejection-v1",

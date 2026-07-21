@@ -22,6 +22,23 @@ import tempfile
 import time
 from typing import Any, Callable, Mapping, Sequence
 
+try:
+    from .analysis_result import (
+        AnalysisResultError,
+        analysis_result_bytes,
+        consumed_hashes,
+        extract_analysis_result,
+    )
+    from .governance import provider_wrapper_path
+except ImportError:  # direct source-file loading in contract tests
+    from scripts.orchestration.analysis_result import (
+        AnalysisResultError,
+        analysis_result_bytes,
+        consumed_hashes,
+        extract_analysis_result,
+    )
+    from scripts.orchestration.governance import provider_wrapper_path
+
 
 class BridgeError(RuntimeError):
     """A task cannot be dispatched without violating the bridge contract."""
@@ -258,7 +275,9 @@ def parse_agent_run_output(stdout: str, stderr: str = "") -> tuple[dict[str, Any
     return dict(receipt), "\n".join(answer_lines).strip()
 
 
-def review_verdict_failure(answer: str) -> str | None:
+def review_verdict_failure(
+    answer: str, required_artifact_hashes: Sequence[str] = ()
+) -> str | None:
     """Return a fail-closed reviewer verdict error, or ``None`` for PASS.
 
     Provider exit status only proves the invocation completed.  A governed
@@ -277,6 +296,13 @@ def review_verdict_failure(answer: str) -> str | None:
         return "review-verdict-missing"
     if markers[0] == REVIEW_VERDICT_FAIL:
         return "review-verdict-fail"
+    if required_artifact_hashes:
+        try:
+            observed = consumed_hashes(answer)
+        except AnalysisResultError:
+            return "review-consumption-attestation-missing"
+        if observed != set(required_artifact_hashes):
+            return "review-consumption-attestation-mismatch"
     return None
 
 
@@ -408,10 +434,9 @@ class NativeAgentRunBridge:
         natural_exit_settle_seconds: float = 0.20,
     ) -> None:
         self.artifact_root = artifact_root.expanduser().resolve()
-        # Never dispatch through a host-global ``agent-run`` symlink: it may
-        # point at another checkout and silently lack the lifecycle contract
-        # this bridge was compiled against.
-        local_wrapper = Path(__file__).resolve().parents[1] / "agent_provider_run.py"
+        # Resolve the wrapper through the governance adapter.  The private
+        # orchestrator never ships a copied routing/provider control plane.
+        local_wrapper = provider_wrapper_path()
         self.binary_prefix = [binary] if binary else [sys.executable, str(local_wrapper)]
         self.runner = runner
         self.popen_factory = popen_factory
@@ -565,6 +590,10 @@ class NativeAgentRunBridge:
             # Persist only the review-role bit: recovery must enforce the same
             # verdict contract without serialising task graph details.
             "reviewer_for": bool(task.get("reviewer_for")),
+            "result_contract": task.get("result_contract"),
+            "required_consumed_artifact_hashes": list(
+                task.get("required_consumed_artifact_hashes") or []
+            ),
         }
         if task.get("producer_review_bundle") is not None:
             created.update(
@@ -775,8 +804,12 @@ class NativeAgentRunBridge:
             raise BridgeError("provider answer artifact drifted during recovery")
         failure_class = orchestration_failure_class(receipt["failure_class"])
         status = "succeeded" if receipt_exit == 0 and failure_class == "none" else "failed"
-        if status == "succeeded" and self._read_manifest(launch.manifest_path).get("reviewer_for"):
-            verdict_failure = review_verdict_failure(answer)
+        attempt_manifest = self._read_manifest(launch.manifest_path)
+        if status == "succeeded" and attempt_manifest.get("reviewer_for"):
+            verdict_failure = review_verdict_failure(
+                answer,
+                attempt_manifest.get("required_consumed_artifact_hashes") or [],
+            )
             if verdict_failure is not None:
                 status, failure_class = "failed", verdict_failure
         preflight_rejection = _is_strict_catalog_preflight_rejection(receipt)
@@ -800,6 +833,19 @@ class NativeAgentRunBridge:
             result["model_observed"] = str(receipt["model_observed"])
         if receipt.get("model_family"):
             result["model_family"] = str(receipt["model_family"])
+        if status == "succeeded" and attempt_manifest.get("result_contract") == "analysis-v1":
+            try:
+                semantic = analysis_result_bytes(extract_analysis_result(answer))
+            except AnalysisResultError:
+                result.update(status="failed", failure_class="analysis-result-invalid")
+            else:
+                semantic_path = launch.manifest_path.parent / "analysis-result.json"
+                if not semantic_path.exists():
+                    _private_write(semantic_path, semantic)
+                elif _private_read(semantic_path) != semantic:
+                    raise BridgeError("analysis result artifact drifted during recovery")
+                result["analysis_result_path"] = str(semantic_path)
+                result["analysis_result_sha256"] = _sha256(semantic)
         _private_atomic_json(
             launch.manifest_path,
             {**self._read_manifest(launch.manifest_path), "status": "terminal",
@@ -949,7 +995,9 @@ class NativeAgentRunBridge:
         failure_class = orchestration_failure_class(receipt["failure_class"])
         status = "succeeded" if receipt_exit == 0 and failure_class == "none" else "failed"
         if status == "succeeded" and task.get("reviewer_for"):
-            verdict_failure = review_verdict_failure(answer)
+            verdict_failure = review_verdict_failure(
+                answer, task.get("required_consumed_artifact_hashes") or []
+            )
             if verdict_failure is not None:
                 status, failure_class = "failed", verdict_failure
         preflight_rejection = _is_strict_catalog_preflight_rejection(receipt)
@@ -966,6 +1014,16 @@ class NativeAgentRunBridge:
         }
         if not preflight_rejection:
             result["session_id"] = str(receipt["session_id"])
+        if status == "succeeded" and task.get("result_contract") == "analysis-v1":
+            try:
+                semantic = analysis_result_bytes(extract_analysis_result(answer))
+            except AnalysisResultError:
+                result.update(status="failed", failure_class="analysis-result-invalid")
+            else:
+                semantic_path = directory / "analysis-result.json"
+                _private_write(semantic_path, semantic)
+                result["analysis_result_path"] = str(semantic_path)
+                result["analysis_result_sha256"] = _sha256(semantic)
         return result
 
     def run_task(self, task: Mapping[str, Any], *, run_id: str, attempt_id: str, generation: int) -> dict[str, Any]:

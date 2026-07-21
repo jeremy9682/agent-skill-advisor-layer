@@ -190,6 +190,21 @@ cases:
     expect: [wayfinder]
     high_cost_ok: [wayfinder]
 
+  - id: persistent-project-brain
+    prompt: "运行 setup-gbrain，为这个长期项目配置 MCP-backed project brain"
+    expect: [setup-gbrain, gstack-setup-gbrain]
+    high_cost_ok: [setup-gbrain, gstack-setup-gbrain]
+
+  - id: no-mistakes-release-gate
+    prompt: "运行 no-mistakes，做 safe push、PR 和 CI 的完整发布验证"
+    expect: [no-mistakes]
+    high_cost_ok: [no-mistakes, ship, land-and-deploy]
+
+  - id: hands-off-plan-to-pr
+    prompt: "明确运行 lfg，从 plan 一直自主执行到 PR 和 CI watch"
+    expect: [lfg]
+    high_cost_ok: [lfg]
+
   # --- negative cases: no skill should be needed;
   #     assert only that no high-cost skill surfaces ---
   - id: plain-question
@@ -253,6 +268,26 @@ cases:
   - id: prod-handoff-instruction
     prompt: "你把具体指令或者谁handoff告诉我，我让生产环节的Claude去做"
     expect: []
+
+# Every governed high-cost rule must name a positive route case, a normal
+# negative case, and an agent/system-brief rejection case. Aliases bridge the
+# prose governance name to the installed skill name without creating a second
+# routing authority. Missing optional skills are reported as skipped; installed
+# targets must pass all three proofs.
+rule_coverage:
+  - {rule: huashu-agent-swarm, targets: [huashu-agent-swarm], positive: parallel-swarm, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: gstack-pair-agent, targets: [gstack-pair-agent, pair-agent], positive: shared-browser-debug, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: gstack-retro, targets: [gstack-retro, gstack-openclaw-retro, retro], positive: sprint-retro, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: gstack-setup-gbrain, targets: [gstack-setup-gbrain, setup-gbrain], positive: persistent-project-brain, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: no-mistakes, targets: [no-mistakes], positive: no-mistakes-release-gate, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: lfg, targets: [lfg], positive: hands-off-plan-to-pr, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: huashu-design, targets: [huashu-design], positive: html-to-mp4, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: ship, targets: [ship], positive: ship-to-prod, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: overnight-execution, targets: [overnight-execution], positive: overnight-run, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: research, targets: [research], positive: matt-background-research, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: code-review, targets: [code-review], positive: matt-two-axis-code-review, negative: ordinary-review-not-matt-parallel, rejection: fable-final-reviewer-brief-leak}
+  - {rule: improve-codebase-architecture, targets: [improve-codebase-architecture], positive: matt-architecture-health-scan, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
+  - {rule: wayfinder, targets: [wayfinder], positive: matt-wayfinder, negative: plain-question, rejection: fable-final-reviewer-brief-leak}
 
 # --- model routing policy cases ---
 # These are offline policy checks for task scale, not prompt routing cases.

@@ -323,6 +323,20 @@ report `unknown`, the journal records `run-succeeded-health-unverified` rather
 than forging identity from `model_requested`. That is recoverability, not a
 doctor-green ritual.
 
+### Governance runtime health
+
+`python3 scripts/governance_health.py inspect` is the zero-write, zero-network,
+zero-model host inspection for the governance layer itself. It validates the
+single routing canon, provider manifest, routing runtime/eval, checkpoint CLI,
+Claude hook registration, and Codex skill visibility. It never probes quota or
+provider usage.
+
+`python3 scripts/governance_health.py probe` is an explicit black-box router
+probe. It sends fixed positive, negative, and system-injection inputs through
+the real stdin/stdout contract with `SKILL_ROUTER_INSPECT_NO_WRITE=1`, then
+proves the router cache and log were unchanged. It is not installed in any hot
+path and never invokes an LLM.
+
 ## Live verification lessons (synthetic examples)
 
 These patterns are worth preserving as timeless protocol guidance:

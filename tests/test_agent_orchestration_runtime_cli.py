@@ -211,7 +211,12 @@ def test_runtime_prepares_bounded_private_dependency_bundle_and_reverifies_dispa
             "run_id": "dependency-seam",
             "repo_root": str(repo),
             "tasks": [
-                {"id": "producer", "task_shape": "mechanical", "input_ref": "prompt.txt"},
+                {
+                    "id": "producer",
+                    "task_shape": "mechanical",
+                    "input_ref": "prompt.txt",
+                    "result_contract": "analysis-v1",
+                },
                 {
                     "id": "consumer",
                     "task_shape": "mechanical",
@@ -225,6 +230,14 @@ def test_runtime_prepares_bounded_private_dependency_bundle_and_reverifies_dispa
     artifact.write_text("safe result\n", encoding="utf-8")
     artifact.chmod(0o600)
     digest = __import__("hashlib").sha256(artifact.read_bytes()).hexdigest()
+    semantic = tmp_path / "analysis-result.json"
+    semantic.write_text(
+        '{"decisions":[],"findings":[],"open_questions":[],"summary":"safe",'
+        '"verification":[],"version":1}\n',
+        encoding="utf-8",
+    )
+    semantic.chmod(0o600)
+    semantic_digest = __import__("hashlib").sha256(semantic.read_bytes()).hexdigest()
     runtime = OrchestrationRuntime(
         plan,
         artifact_root=tmp_path / "artifacts",
@@ -249,6 +262,8 @@ def test_runtime_prepares_bounded_private_dependency_bundle_and_reverifies_dispa
                         "session_status": "attributed-stream-json",
                         "artifact_path": str(artifact),
                         "artifact_sha256": digest,
+                        "analysis_result_path": str(semantic),
+                        "analysis_result_sha256": semantic_digest,
                         "prompt": "must never propagate",
                     },
                 }
@@ -263,6 +278,7 @@ def test_runtime_prepares_bounded_private_dependency_bundle_and_reverifies_dispa
     assert bundle.stat().st_mode & 0o777 == 0o600
     body = json.loads(bundle.read_text(encoding="utf-8"))
     assert body["dependencies"][0]["provider_run_id"] == "provider-run"
+    assert body["dependencies"][0]["analysis_result_sha256"] == semantic_digest
     assert "prompt" not in bundle.read_text(encoding="utf-8")
     projected = runtime._project_task(
         consumer,
