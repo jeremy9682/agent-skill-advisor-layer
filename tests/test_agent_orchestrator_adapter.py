@@ -28,10 +28,21 @@ def test_lock_is_strict_and_points_to_private_runtime():
     assert lock["entrypoint"] == "scripts/agent_orchestrate.py"
 
 
-def test_adapter_rejects_commit_or_dirty_drift(monkeypatch, tmp_path):
+def test_adapter_rejects_a_dirty_pin(monkeypatch, tmp_path):
+    """Drift protection moved from the development checkout to the pin.
+
+    The adapter used to reject a development checkout whose HEAD differed from
+    the lock or whose tree was dirty. That guarded the wrong thing: the lock
+    decides which revision is consumed, and where a developer is working is
+    unrelated -- so the check only ever fired on ordinary days. The tree that
+    must stay pristine is the materialised pin, because a write into it means
+    what runs is no longer the reviewed commit it claims to be.
+    """
+
     module = _module()
-    entrypoint = tmp_path / "scripts" / "agent_orchestrate.py"
-    entrypoint.parent.mkdir()
+    pin = tmp_path / "pin"
+    entrypoint = pin / "scripts" / "agent_orchestrate.py"
+    entrypoint.parent.mkdir(parents=True)
     entrypoint.write_text("pass\n", encoding="utf-8")
     lock = {
         "version": 1,
@@ -39,19 +50,15 @@ def test_adapter_rejects_commit_or_dirty_drift(monkeypatch, tmp_path):
         "commit": "a" * 40,
         "entrypoint": "scripts/agent_orchestrate.py",
     }
-    monkeypatch.setattr(module, "_git", lambda *_args: "b" * 40)
-    with pytest.raises(module.OrchestratorAdapterError, match="differs"):
-        module._verified_entrypoint(tmp_path, lock)
+    monkeypatch.setattr(module, "_materialise_pin", lambda *_args: pin)
 
-    responses = iter(["a" * 40, " M scripts/agent_orchestrate.py"])
-    monkeypatch.setattr(module, "_git", lambda *_args: next(responses))
-    with pytest.raises(module.OrchestratorAdapterError, match="dirty"):
-        module._verified_entrypoint(tmp_path, lock)
+    for status in (" M scripts/agent_orchestrate.py", "?? untracked-provider-wrapper.py"):
+        monkeypatch.setattr(module, "_git", lambda *_args, _s=status: _s)
+        with pytest.raises(module.OrchestratorAdapterError, match="dirty"):
+            module._verified_entrypoint(tmp_path, lock)
 
-    responses = iter(["a" * 40, "?? untracked-provider-wrapper.py"])
-    monkeypatch.setattr(module, "_git", lambda *_args: next(responses))
-    with pytest.raises(module.OrchestratorAdapterError, match="dirty"):
-        module._verified_entrypoint(tmp_path, lock)
+    monkeypatch.setattr(module, "_git", lambda *_args: "")
+    assert module._verified_entrypoint(tmp_path, lock) == entrypoint.resolve()
 
 
 def test_delegated_environment_forces_one_governance_root(monkeypatch):
