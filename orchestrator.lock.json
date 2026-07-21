@@ -1,6 +1,6 @@
 {
   "version": 1,
   "repository": "https://github.com/jeremy9682/agent-run-orchestrator",
-  "commit": "65683428b9f2cfa27bb56fb21031797373e754e7",
+  "commit": "cc84d9034747fad6a030dfbbb3be797c18bfba0c",
   "entrypoint": "scripts/agent_orchestrate.py"
 }
