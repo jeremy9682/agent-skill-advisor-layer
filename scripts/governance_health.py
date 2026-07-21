@@ -13,6 +13,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+
+import yaml
 import shutil
 import shlex
 import subprocess
@@ -100,6 +102,93 @@ def _codex_skill_visible() -> tuple[bool, str]:
     return any(path.is_file() for path in candidates), "Codex skill-advisor entrypoint"
 
 
+# The canon's stop rule, spelled out exactly. Validating "shape" is not enough:
+# a block with default_review_passes: 99 is well-shaped and means the rule is
+# gone. These are the values the rule *is*, so the checker compares against
+# them rather than against a type.
+REVIEW_ESCALATION_REQUIRED_TRIGGERS = (
+    "risk_overlay_trigger",
+    "restricted_zone",
+    "flip_list_hit",
+    "unresolved_blocker",
+    "irreversible_operation",
+    "user_request",
+)
+REVIEW_ESCALATION_EXPECTED = {
+    "default_review_passes": 1,
+    "max_re_review_rounds": 1,
+    "trust_model_source": "target-repo-declared",
+    "out_of_scope_findings": "surface-not-reject",
+    # Only the pending marker is accepted today. When the orchestrator gains a
+    # real round cap, this constant and its tests change together -- which is
+    # the point: the allowed value cannot drift ahead of the enforcement it
+    # claims, and "fully-enforced-by-nobody" cannot pass for a guarantee.
+    "enforced_by": "pending:orchestrator-review-round-cap",
+}
+REVIEW_ESCALATION_FIELDS = frozenset(REVIEW_ESCALATION_EXPECTED) | {"escalate_on"}
+
+
+def _review_escalation_contract() -> tuple[bool, str]:
+    """Check the canon's review-escalation block against the rule itself.
+
+    The block bounds how many review passes a change may draw, after the
+    2026-07-19 session where successive multi-model reviews ratcheted a local
+    dev tool toward a production-security platform. An earlier version of this
+    checker validated only types and a trigger subset, so the stop rule could be
+    weakened to nothing while health stayed green; it now pins exact values, the
+    exact trigger set, and the exact field set.
+    """
+
+    try:
+        canon = yaml.safe_load(POLICY.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return False, type(exc).__name__
+    block = (canon or {}).get("review_escalation")
+    if not isinstance(block, Mapping):
+        return False, "review_escalation block is missing"
+
+    present = set(block)
+    if present != REVIEW_ESCALATION_FIELDS:
+        missing = sorted(REVIEW_ESCALATION_FIELDS - present)
+        extra = sorted(present - REVIEW_ESCALATION_FIELDS)
+        parts = []
+        if missing:
+            parts.append(f"missing {', '.join(missing)}")
+        if extra:
+            # An unrecognised field is either a typo for a real one or a rule no
+            # consumer reads; both are worse than a hard failure here.
+            parts.append(f"unrecognised {', '.join(extra)}")
+        return False, "; ".join(parts)
+
+    for field, expected in REVIEW_ESCALATION_EXPECTED.items():
+        actual = block.get(field)
+        if isinstance(expected, int) and isinstance(actual, bool):
+            return False, f"{field} must be {expected!r}, got a boolean"
+        if actual != expected:
+            return False, f"{field} must be {expected!r}, got {actual!r}"
+
+    triggers = block.get("escalate_on")
+    if not isinstance(triggers, list):
+        return False, "escalate_on must be a list"
+    if len(triggers) != len(set(map(str, triggers))):
+        return False, "escalate_on contains duplicates"
+    if tuple(map(str, triggers)) != REVIEW_ESCALATION_REQUIRED_TRIGGERS:
+        # Order is pinned too, so a reviewer diffing the canon sees a real change
+        # rather than a reshuffle, and so no trigger can be quietly dropped --
+        # dropping user_request would turn a budget on the machine's reflex into
+        # a ceiling on the operator's judgement.
+        return False, (
+            "escalate_on must be exactly "
+            f"{list(REVIEW_ESCALATION_REQUIRED_TRIGGERS)}, got {list(map(str, triggers))}"
+        )
+
+    return True, (
+        f"passes={block['default_review_passes']}, "
+        f"rounds<={block['max_re_review_rounds']}, "
+        f"enforced_by={block['enforced_by']}"
+    )
+
+
 def inspect() -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     for name, path in (
@@ -118,6 +207,9 @@ def inspect() -> dict[str, Any]:
     except Exception as exc:
         ok, detail = False, type(exc).__name__
     checks.append(_check("routing_runtime_contract", ok, detail))
+
+    escalation_ok, escalation_detail = _review_escalation_contract()
+    checks.append(_check("review_escalation_contract", escalation_ok, escalation_detail))
 
     evaluation = subprocess.run(
         [sys.executable, str(ROUTING_EVAL), "--check"],
