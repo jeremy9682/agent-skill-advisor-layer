@@ -85,6 +85,40 @@ VERIFIED_BROKER_SESSION_STATUSES = frozenset(
 )
 
 
+def _catalog_remedy(provider: str, catalog_status: str) -> str:
+    """Say what to do about an unusable catalog, not merely that it is unusable.
+
+    On a fresh machine this is the first failure anyone hits, and
+    "catalog-unavailable" told them nothing actionable. Not signed in is the
+    likeliest cause -- every provider here is declared `existing-*-login-only`,
+    so the subscription lives in the CLI -- but it is not the only one: the same
+    status covers an OSError, a discovery timeout, and any non-zero exit,
+    which includes a network fault or an incompatible CLI. The wording is
+    therefore a first guess with a second step, not a diagnosis; asserting
+    "you are not signed in" at someone who is would send them the wrong way,
+    which is the failure this whole change exists to stop.
+    """
+
+    if catalog_status != "catalog-unavailable":
+        return ""
+    # Each command below was run against the installed CLI before being quoted.
+    # A remedy nobody verified is worse than none: it sends the reader chasing a
+    # subcommand that does not exist. grok has `login` but no way to ask whether
+    # you already are, so it gets the sign-in command rather than an invented
+    # status probe.
+    probe = {
+        "cursor": "cursor-agent status",
+        "claude": "claude auth status",
+        "codex": "codex login status",
+        "grok": "grok login",
+    }.get(provider)
+    first = f" -- check with `{probe}`" if probe else ""
+    return (
+        f"; most often the CLI is not signed in{first}. "
+        "If it is, check network reach and the CLI version"
+    )
+
+
 class ProviderRunError(RuntimeError):
     pass
 
@@ -110,7 +144,8 @@ class CatalogPreflightError(ProviderRunError):
         catalog_attempts: int,
     ):
         super().__init__(
-            f"model catalog is unavailable for provider {provider!r}: {catalog_status}"
+            f"model catalog is unavailable for provider {provider!r}: "
+            f"{catalog_status}{_catalog_remedy(provider, catalog_status)}"
         )
         self.run_id = run_id
         self.provider = provider
@@ -300,7 +335,8 @@ def validate_provider_model(
         if preflight_retry and catalog["status"] == "catalog-unavailable":
             raise CatalogUnavailableError(str(catalog["status"]), attempts)
         raise ProviderRunError(
-            f"model catalog is unavailable for provider {provider_id!r}: {catalog['status']}"
+            f"model catalog is unavailable for provider {provider_id!r}: "
+            f"{catalog['status']}{_catalog_remedy(provider_id, str(catalog['status']))}"
         )
     if model not in allowed:
         raise ProviderRunError(
