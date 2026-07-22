@@ -18,11 +18,16 @@ providers:
     effort_options: [low, medium, high, xhigh, max]
     billing_policy: existing-subscription-login-only
     strip_environment: [ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL]
-    force_environment: {PYTHONDONTWRITEBYTECODE: "1"}
+    # SAFE_MODE: skip user/project hooks+plugins for headless agent-run.
+    # Without it, SessionStart hooks (esp. security-guidance async SDK
+    # bootstrap) + Clash TUN blips produce aborted_streaming / timeout_total
+    # with duration_api_ms=0 even when OAuth is healthy.
+    force_environment: {PYTHONDONTWRITEBYTECODE: "1", CLAUDE_CODE_SAFE_MODE: "1"}
     commands:
       read-only:
         - "{binary}"
         - --print
+        - --safe-mode
         - --model
         - "{model}"
         - --effort
@@ -37,6 +42,7 @@ providers:
       execute:
         - "{binary}"
         - --print
+        - --safe-mode
         - --model
         - "{model}"
         - --effort
