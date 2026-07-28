@@ -30,6 +30,7 @@ skill-first 开发标准：
 - [Gate policy](docs/gate-policy.md)
 - [Intent statement schema](schemas/intent.md)
 - [Solution note schema](schemas/solution.md)
+- [OSS 参考政策](docs/oss-reference-policy.md) — 调研与原型阶段按技术价值判断；共享正文只保留在这一处。
 
 ## 包含内容
 
