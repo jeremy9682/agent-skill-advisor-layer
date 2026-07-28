@@ -200,13 +200,24 @@ agent-run run auto --task-shape codex_final_review \
 ```
 
 The current routes map mechanical work to Cursor `composer-2.5-fast`/low
-(Shuttle Seal 飞梭; alternate `mechanical_grok` →
-`cursor-grok-4.5-high-fast`), ordinary bugs to Codex Terra/medium, judgment and
+(Shuttle Seal 飞梭; `mechanical_grok` → `cursor-grok-4.5-high-fast` is the
+second **writer** only for genuinely independent mechanical work), ordinary
+bugs to Codex Terra/medium, judgment and
 restricted-zone direction to Claude Opus/high, and dual-seal final review to
 Fable max + GPT-5.6 Sol xhigh (`fable_final_review` / `codex_final_review`).
 Both Cursor routes queue on the same local provider-family lock only when
 `serial_group` is set on the route; `mechanical` / `mechanical_grok` omit it so
 parallel Cursor work is allowed.
+
+For the normal Composer-plus-Grok pattern, use Composer as the isolated writer
+and `cursor_grok_cross_review` as the read-only independent challenge seat. It
+uses the same Cursor broker but records `provider=cursor`, the exact requested
+and observed `cursor-grok-4.5-high-fast` model, and one fresh session receipt.
+It is deliberately serialised (`cursor-grok-review`) and must not be described
+as a native Codex subagent or as a substitute for the designated Codex final
+review. The intended critical path is `Composer writer -> Cursor Grok cross
+review -> designated final review`; only two disjoint mechanical writer tasks
+may use `mechanical` and `mechanical_grok` concurrently.
 A provider route is enabled only after both a direct CLI run and a wrapped
 canary prove its primary turn succeeds.
 GPT-5.6 Sol/xhigh has two distinct routes: `codex_final_review` is the canonical
