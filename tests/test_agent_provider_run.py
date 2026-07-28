@@ -3204,6 +3204,10 @@ def test_checkpoint_requires_existing_open_claim(tmp_path, monkeypatch):
         agent_run.validate_checkpoint("demo", event_id, "claude-direction")
 
 
+def test_cursor_grok_cross_review_seat_uses_the_checkpoint_vocabulary():
+    assert agent_run.SEAT_RE.fullmatch("cursor-grok-cross-review")
+
+
 def test_checkpoint_rejects_malformed_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
