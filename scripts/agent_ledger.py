@@ -41,8 +41,10 @@ def die(msg):
 
 
 # Seat vocabulary: {family}-{role} or a bare principal. Catches the real drill
-# failures (e.g. "judgment-claude" — wrong order; "codex-final-review" is fine).
-SEAT_RE = re.compile(r"^(?:claude|codex|fable|opus|sonnet|human|founder)"
+# failures (e.g. "judgment-claude" — wrong order; "codex-final-review" and
+# "cursor-grok-cross-review" are fine).  ``cursor-*`` is a real external
+# provider seat, never an alias for Codex.
+SEAT_RE = re.compile(r"^(?:claude|codex|cursor|fable|opus|sonnet|human|founder)"
                      r"(?:-[a-z]+(?:-[a-z]+)*)?$")
 # A frozen-intent path is ONE repo-relative path (+optional non-empty #anchor):
 # not absolute, not `..`-escaping, no whitespace / '+' / bare-anchor / empty or
@@ -64,8 +66,8 @@ def _validate_seat(key, val):
     and owner/closure provenance is corrupted (Codex PR#5 review)."""
     if not SEAT_RE.fullmatch(val or ""):
         die(f"{key} {val!r} not in seat vocabulary "
-            f"({{claude,codex,fable,opus,sonnet,human,founder}}[-role]); "
-            f"e.g. claude-direction / codex-final-review / human")
+            f"({{claude,codex,cursor,fable,opus,sonnet,human,founder}}[-role]); "
+            f"e.g. claude-direction / cursor-grok-cross-review / human")
 
 
 def _validate_open(ev):
