@@ -64,6 +64,19 @@ never facts already recoverable from git, tests, or the intent.
   has failed — fall back to a plain progress doc (pilot exit condition B).
 - Point at facts, do not copy them. `worktree` and `verification` reference git
   and test state; never restate the intent or paste diffs into the event.
+- Sub-agent model evidence (2026-08-06 ruling): when a child agent's result is
+  consumed into a diff / judgment / gate / final review / cross-seat handoff,
+  the closing event's `verification` MUST include a re-runnable jq command that
+  extracts the child's ACTUAL `model` + `effort` from that child session's
+  rollout `turn_context` (path pattern:
+  `~/.codex/sessions/<date>/rollout-*<thread-id>.jsonl`), plus the expected
+  tuple. Standard format: `child=<thread-id>; rollout=<path>; verify=<jq>;`
+  `expected=<model>/<effort>; observed=<model>/<effort>; family=<provider-family>;`
+  `result=pass|fail`. Both expected AND observed must be recorded (writing only
+  the expected tuple does not fix the observed value), and provider family must
+  be stated so cross-family independence is auditable. Config snapshots and
+  spawn return statuses are NOT evidence; the child's own turn_context is the
+  fact source. Discarded throwaway probes are exempt.
 - Store no mailbox and no transcript in the ledger. It is decisions and open
   questions only.
 - `taint: true` means downstream verification evidence must be re-run, not

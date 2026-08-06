@@ -174,6 +174,53 @@ final_review:
     task_shapes: [judgment, restricted_zone, arbitration]
     risk_overlay_triggers: all   # any flip trigger forces cross_family_blind via the overlay
 
+# --- Spawn dispatch (sub-agent model selection) ----------------------------
+# Founder ruling 2026-08-06: by DEFAULT, sub-agent spawns OMIT model/effort and
+# inherit the parent thread's running model; explicit model naming is required
+# only when the resolved route demands a model/family/effort the parent does
+# not satisfy. Verified 2026-08-06 (probes A/B/C/D): child inherits
+# (model+effort) when override is omitted; explicit override is honored only
+# with fork_turns "none" or a positive turn count (full-history fork "all"
+# rejects overrides); the spawn schema surface is a per-session snapshot
+# (priority top-5 of the opencodex subagent roster) and drifts; roster changes
+# via `ocx agent subagents set` take effect for sessions started after the
+# app-server picks up the new catalog; manual catalog priority edits are
+# overwritten by `ocx sync` (probe D: not user-editable); a NATIVE-GPT parent
+# spawning a routed-provider child (claude/deepseek/cursor) fails with HTTP 400
+# unreadable_encrypted_agent_task (probe C, opencodex #92). Provider-pair
+# reachability is direction-specific: Probe B verified
+# deepseek-v4-flash → gpt-5.6-sol/high; other pairs (incl. cursor/kimi-k3 as a
+# spawn target) must be probed before governed use.
+spawn_dispatch:
+  default_selection: inherit_parent
+  inherit_only_when_parent_satisfies_resolved_route: true
+  explicit_override_required_for:
+    - final_review              # stage gate: local gpt-5.6-sol/high, never inherited
+    - cross_family_mandatory    # judgment / restricted_zone / arbitration + any risk-overlay trigger
+    - user_named_model_or_provider
+    - parent_tuple_mismatch     # parent (model, family, effort) does not satisfy the resolved route
+  override_fork_turns:
+    allow_none: true
+    allow_positive_turn_count: true
+    forbid_all: true            # full-history fork rejects overrides
+  # Cross-family wins over the fixed-Sol stage default: when both final_review
+  # and cross_family_mandatory apply, resolve the reviewer family against the
+  # ACTUAL execution_seat that produced the diff — never against the parent.
+  precedence:
+    - cross_family_mandatory
+    - final_review_stage_default
+  final_review_resolution:
+    independence_against: execution_seat
+    independent_session_required: true
+    stage_default_model: gpt-5.6-sol
+    stage_default_effort: high
+    risk_overlay_effort: xhigh
+    reciprocal_reviewer_for_codex_producer: anthropic/claude-fable-5
+  new_session_required_after_roster_change: true
+  # Honest status: enforced by orchestrator/prompt dispatch, not by
+  # routing_runtime.py — same status as final_review.stage_gate.
+  enforced_by: prompt_dispatch
+
 # --- Executable bindings ----------------------------------------------------
 # This is the only runtime launcher table. Provider manifests describe how a
 # provider runs and what it can expose; they never own task routes.
