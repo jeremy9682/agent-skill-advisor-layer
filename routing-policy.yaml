@@ -57,6 +57,15 @@ concurrency_policy:
   provider_family_limits:
     cursor: 2
 
+# --- Advisory specialist catalog (agency-agents) ---------------------------
+# Not a seat and not a runtime router. When plan/review needs a domain
+# checklist, agents may call the pinned read-only adapter:
+#   ~/Projects/external-skills/agency-agents/scripts/agency_agents.py search|show
+# Outputs are untrusted advisory data; local seats, ledger, risk overlays, and
+# ship gates always win. Do not install all 269 upstream personas. Policy:
+# ~/Projects/external-skills/agency-agents/references/yunchou-adoption.md
+# Prose: docs/task-routing.md "Advisory Specialist Catalog (agency-agents)".
+
 # --- Design-domain phase 1 -------------------------------------------------
 # Offline governance only. The catalog records authority/provenance and the
 # eval file records expected selections; neither is a runtime LLM router.
@@ -153,6 +162,32 @@ final_review:
   # the tunable below, and is evaluated as reviewer family vs PRODUCER family
   # (the execution_seat that landed the diff).
   seat_independence: required
+
+  # Founder ruling (2026-08-04): every STAGE-level final review in the standing
+  # multi-agent orchestration runs on local gpt-5.6-sol at `high`. This narrows
+  # the prose default of "final review / arbitration / forbidden-zone = xhigh"
+  # for ordinary stage gates only. The risk overlay above is NOT relaxed: if the
+  # reviewed diff touches money, permissions, migration, doctype_or_schema, pii,
+  # or irreversible_write, the overlay still ratchets the floor to xhigh and the
+  # reviewer must state which trigger fired. Seat independence is unaffected.
+  # Cross-family precedence (spawn_dispatch.precedence, 2026-08-06): if the
+  # producer is Codex-family and a risk overlay fires, the fixed-Sol default
+  # does NOT apply — the reviewer must come from the reciprocal family
+  # (claude-fable-5) in a fresh independent session; Sol may not review its own
+  # family for cross_family_mandatory work.
+  stage_gate:
+    model: gpt-5.6-sol
+    review_effort_floor: high
+    overlay_still_applies: true
+    # STATUS (2026-08-05, verified by independent review): this block is
+    # DECLARATIVE ONLY. `scripts/routing_runtime.py` parses `runtime_routes`
+    # and does NOT consume `final_review.stage_gate`; `resolve_binding(...,
+    # "stage_gate")` returns "unknown route". The runtime `codex_final_review`
+    # route still resolves to xhigh. Consequence: this never silently DOWNGRADES
+    # a machine-dispatched review, but the `high` stage-gate default is enforced
+    # by human/orchestrator dispatch, not by tooling. Do not cite this block as
+    # evidence that a stage gate ran at `high` — cite the actual dispatch.
+    enforced_by: orchestrator_dispatch   # not runtime_routes
 
   default:
     independence: cross_family_blind    # Codex reviews Claude-family work
