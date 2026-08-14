@@ -46,6 +46,10 @@ tests/                      Lightweight pytest coverage
 
 ## Repository ownership
 
+## DeepSeek Harness
+
+This layer is provider-neutral. For the DSH-facing entry point — which assets to use where, and a DSH-native end-to-end loop — see [docs/dsh.md](docs/dsh.md).
+
 This public repository is the single governance canon: routing policy, provider
 bindings, schemas, gates, health inspection, and the thin orchestrator adapter
 live here. The executable DAG scheduler and its package/CI live in the separate
