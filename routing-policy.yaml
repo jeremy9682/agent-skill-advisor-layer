@@ -297,7 +297,7 @@ runtime_routes:
   # review receipt has one unambiguous Cursor session/provider/model owner.
   cursor_grok_cross_review:
     provider: cursor
-    model: cursor-grok-4.5-high-fast
+    model: cursor-grok-4.6-high-fast
     effort: high
     seat: cursor-grok-cross-review
     review_independence: cross-family

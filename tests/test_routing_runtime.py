@@ -100,7 +100,7 @@ def test_cursor_grok_cross_review_is_serial_and_cross_family():
     canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
     binding = routing.resolve_binding(canon, "cursor_grok_cross_review")
     assert binding["provider"] == "cursor"
-    assert binding["model"] == "cursor-grok-4.5-high-fast"
+    assert binding["model"] == "cursor-grok-4.6-high-fast"
     assert binding["review_independence"] == "cross-family"
     assert binding["serial_group"] == "cursor-grok-review"
     assert binding["timeout_seconds"] == 900

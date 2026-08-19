@@ -1,11 +1,23 @@
 # LiteLLM proxy (quota routing only)
 
-LiteLLM is the **optional** spend/endpoint gateway. DSH still owns task grading
-and seats (`docs/model-dispatch-matrix.md`, `routing-policy.yaml`). This repo
-ships an example config and a start script. It does **not** rewrite
-`~/.dsh/settings.yaml`.
+LiteLLM is the **optional** spend/endpoint gateway. It is **not** on the
+required Quick Start path (`./scripts/install.sh` + `agent-run-dispatch`).
+DSH still owns task grading and seats (`docs/model-dispatch-matrix.md`,
+`routing-policy.yaml`). This repo ships an example config and a start script.
+It does **not** rewrite `~/.dsh/settings.yaml`.
 
-## Install (this host)
+On some hosts a VPN/DNS interceptor maps `api.commandcode.ai` to
+`198.18.0.123` (not the real origin). Check DNS before blaming the proxy.
+
+`GET /v1/models` **must** send the LiteLLM master key. A bare request is not a
+valid smoke check:
+
+```bash
+curl -sS http://127.0.0.1:4000/v1/models \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+```
+
+## Optional install (this host)
 
 Isolated user tool, no project venv, no git-config changes:
 

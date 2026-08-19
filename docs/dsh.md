@@ -2,6 +2,8 @@
 
 The routing canon, gate policy, and schemas in this repository are provider-neutral. This page is the DSH-facing entry point. **Clone this repository**; do not clone a separate skill-pack or cursor-codex repo.
 
+Daily dispatch from this clone is `agent-run-dispatch` / `agent-ledger-dispatch` (see the README Quick Start). PATH `agent-run` may be a Beads wrapper onto a different tree; do not use it for this canon. `install.sh` links `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-skill-filesystem` from the official DSH install into gitignored `node_modules` so headless plugin boot can resolve those peers.
+
 ## What to use where
 
 | Asset | DSH usage |
@@ -20,7 +22,7 @@ The routing canon, gate policy, and schemas in this repository are provider-neut
 ## A DSH-native loop, end to end
 
 1. Install official DSH if needed: `npm i -g @deepseek-ai/dsh`. See [harness-opt-in.md](harness-opt-in.md).
-2. From this clone: `./scripts/install.sh` (adds the dispatch pack and Cursor ACP adapter to **web** and **headless**).
+2. From this clone: `./scripts/install.sh` (adds the dispatch pack and Cursor ACP adapter to **web** and **headless**, then links headless peer packages from the installed DSH `node_modules`).
 3. Let `dsh-dispatch` pick seat/model/preset; let `skill-advisor` gate expensive workflows with one-suggestion-plus-approval.
 4. Route bounded edits to `dsh --profile headless` or `node gateway/local-gateway.mjs run --via dsh …`.
 5. Close every change the same way: green evidence, then read the diff before merge.

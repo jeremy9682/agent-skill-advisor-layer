@@ -1,12 +1,12 @@
 # Skill Advisor Layer
 
-**模型分派 canon + 本机对接套件。** 一个公开仓库：clone 之后跑 `./scripts/install.sh`，定级策略、`agent-run`、DSH 插件、ZCode/MCP 网关都在这棵树里。不必再 clone 我们其它仓。
+**模型分派 canon + 本机对接套件。** 一个公开仓库：clone 之后跑 `./scripts/install.sh`，定级策略、`agent-run-dispatch`、DSH 插件、ZCode/MCP 网关都在这棵树里。不必再 clone 我们其它仓。
 
 [English README](README.md)
 
 ## Quick Start
 
-**你需要已经有** Cursor **或** Claude **或** Codex 订阅（以及对应 CLI）。可选：官方 DeepSeek Harness、LiteLLM。它们是第三方运行时，像 Node 一样自己装。
+**必装：** 已有 Cursor **或** Claude **或** Codex 订阅（以及对应 CLI）。可选：官方 DeepSeek Harness。**LiteLLM 不是必装项**，不在这条路径上。
 
 ```bash
 git clone https://github.com/jeremy9682/agent-skill-advisor-layer.git
@@ -16,25 +16,57 @@ cd agent-skill-advisor-layer
 
 `install.sh` 会：
 
-1. 把 `agent-run` 链到**本 clone** 的 `scripts/agent_provider_run.py`。若 `~/.local/bin/agent-run` 已存在且不是这份启动器（例如 Beads 包装），则原文件不动，改为安装 `~/.local/bin/agent-run-dispatch`。
-2. 若 `PATH` 上有 `dsh`，对 **web** 和 **headless** 执行 `dsh plugin add`：**本 clone** 的 `plugins/dsh-dispatch-pack` 与 `plugins/dsh-llm-cursor-acp`。
+1. 安装**本 clone** 的启动器与 ledger。若 `~/.local/bin/agent-run` 已被占用（Beads `agent_run_beads_bridge.py` → `~/.agent-skill-advisor-layer-governance-clean`，仍是 Grok 4.5），**原文件不动**，改为安装 `~/.local/bin/agent-run-dispatch`。ledger 同理：`agent-ledger` 被占用时装 `agent-ledger-dispatch`；只有空闲时才链 `agent-ledger`。
+2. 若 `PATH` 上有 `dsh`，对 **web** 和 **headless** 执行 `dsh plugin add`：**本 clone** 的 `plugins/dsh-dispatch-pack` 与 `plugins/dsh-llm-cursor-acp`，再从已装 DSH 的 `node_modules` 把 `@deepseek-ai/schemastery`、`@deepseek-ai/dsh-skill-filesystem` 链到本仓 **gitignore 的** `node_modules`。
 3. 跑 `node gateway/local-gateway.mjs doctor`。
 
-然后：
+### 日常命令（本 clone）
+
+**PATH 上的 `agent-run` 若是 Beads（或其它包装），不要拿它做分派。** 那是另一套 canon。用 `-dispatch` 名字：
 
 ```bash
-agent-run routes                          # 或 agent-run-dispatch routes
-agent-run doctor --task-shape mechanical
+cd <clone>
+./scripts/install.sh
+agent-run-dispatch routes
+agent-run-dispatch doctor --task-shape mechanical
+python3 scripts/agent_ledger.py open …  # 或 agent-ledger-dispatch
+python3 scripts/agent_ledger.py claim …
+agent-run-dispatch run auto --task-shape mechanical --checkpoint-event "$EVT" --cwd "$PWD" --timeout-seconds 480 '…read-only…'
+```
+
+`node gateway/local-gateway.mjs run --via agent-run` **不是**日常入口：它不带 checkpoint，而且会打到 Beads。需要网关打到本 canon 时，设 `AGENT_RUN_BIN` 指向 `agent-run-dispatch`（或本 clone 的 `scripts/agent_provider_run.py`）。
+
+| 命令 | 典型目标 | Canon |
+| --- | --- | --- |
+| `agent-run` | Beads 桥 → `~/.agent-skill-advisor-layer-governance-clean` | Grok 4.5；**不要覆盖** |
+| `agent-run-dispatch` | 本 clone `scripts/agent_provider_run.py` | Grok 4.6 + `stage_gate` |
+| `agent-ledger` | 常常也是 governance-clean | 被占用就别动 |
+| `agent-ledger-dispatch` | 本 clone `scripts/agent_ledger.py` | 本 clone 的 ledger |
+
+不要去改 governance-clean 那棵 git 树。
+
+### Headless 插件 peer
+
+若 `dsh --profile headless` 启动失败（`Cannot find module '@deepseek-ai/schemastery'` 或 `@deepseek-ai/dsh-skill-filesystem`）：
+
+1. 安装官方 DSH：`npm i -g @deepseek-ai/dsh`
+2. 再跑 `./scripts/install.sh`（从 DSH 的 `node_modules` 做 gitignored 链接）
+3. 或在本 clone：`npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-skill-filesystem`
+
+不要把 `node_modules` 提交进 git。家目录手工 symlink 不是受支持的安装路径。
+
+```bash
 node gateway/local-gateway.mjs doctor
 ```
 
-可选额度代理：`examples/litellm/`（把示例配置拷到 git 外；不要提交密钥）。官方 DSH：`npm i -g @deepseek-ai/dsh`，见 [docs/harness-opt-in.md](docs/harness-opt-in.md)。**不必**再 clone `dsh-skill-pack`、`dsh-cursor-codex` 或 harness fork。
+官方 DSH：`npm i -g @deepseek-ai/dsh`，见 [docs/harness-opt-in.md](docs/harness-opt-in.md)。**不必**再 clone `dsh-skill-pack`、`dsh-cursor-codex` 或 harness fork。可选额度代理（非必装）：[docs/litellm-proxy.md](docs/litellm-proxy.md) / `examples/litellm/`（配置拷到 git 外；不要提交密钥）。本机 VPN/DNS 可能把 `api.commandcode.ai` 解析到 `198.18.0.123`。`GET /v1/models` 必须带 LiteLLM master key。
 
 本 clone 提供：
 
 ```text
 routing-policy.yaml              机器 canon（task_shape → 席位/模型）
-scripts/agent_provider_run.py    agent-run 启动器
+scripts/agent_provider_run.py    agent-run-dispatch 启动器
+scripts/agent_ledger.py          agent-ledger-dispatch 助手
 scripts/install.sh               一次安装
 skills/dsh-dispatch/             可移植分派 skill
 skills/skill-advisor/            高成本 skill 建议层

@@ -23,6 +23,9 @@
     "skills",
     "dispatch"
   ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-skill-filesystem": "*"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

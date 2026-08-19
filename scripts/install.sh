@@ -6,8 +6,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 LAUNCHER="${ROOT}/scripts/agent_provider_run.py"
+LEDGER_SRC="${ROOT}/scripts/agent_ledger.py"
 AGENT_RUN="${BIN_DIR}/agent-run"
 DISPATCH="${BIN_DIR}/agent-run-dispatch"
+AGENT_LEDGER="${BIN_DIR}/agent-ledger"
+LEDGER_DISPATCH="${BIN_DIR}/agent-ledger-dispatch"
 ADAPTER_DIR="${ROOT}/plugins/dsh-llm-cursor-acp"
 PACK_DIR="${ROOT}/plugins/dsh-dispatch-pack"
 
@@ -29,70 +32,115 @@ resolve_existing() {
   fi
 }
 
-is_this_clone_launcher() {
-  local target="$1"
-  [[ -n "$target" && "$target" == "$LAUNCHER" ]]
-}
+# Occupied names (Beads agent-run, governance-clean agent-ledger, …) stay
+# untouched. This clone is installed as the *-dispatch name instead.
+install_cli_symlink() {
+  local dest="$1"
+  local dispatch="$2"
+  local src="$3"
+  local name="$4"
+  local dispatch_name="$5"
 
-looks_like_foreign_wrapper() {
-  local path="$1"
-  local target
-  target="$(resolve_existing "$path")"
-  if [[ -z "$target" ]]; then
-    return 1
-  fi
-  if is_this_clone_launcher "$target"; then
-    return 1
-  fi
-  if grep -q 'Beads dispatch bridge' "$path" 2>/dev/null; then
-    return 0
-  fi
-  if [[ "$target" == *agent_run_beads_bridge.py ]]; then
-    return 0
-  fi
-  return 0
-}
-
-install_agent_run() {
   mkdir -p "$BIN_DIR"
-  chmod +x "$LAUNCHER"
+  chmod +x "$src"
 
-  if [[ ! -e "$AGENT_RUN" && ! -L "$AGENT_RUN" ]]; then
-    ln -s "$LAUNCHER" "$AGENT_RUN"
-    log "Linked ${AGENT_RUN} -> ${LAUNCHER}"
+  if [[ ! -e "$dest" && ! -L "$dest" ]]; then
+    ln -s "$src" "$dest"
+    log "Linked ${dest} -> ${src}"
     return 0
   fi
 
   local current
-  current="$(resolve_existing "$AGENT_RUN")"
-  if is_this_clone_launcher "$current"; then
-    log "agent-run already points at this clone."
+  current="$(resolve_existing "$dest")"
+  if [[ "$current" == "$src" ]]; then
+    log "${name} already points at this clone."
     return 0
   fi
 
-  if looks_like_foreign_wrapper "$AGENT_RUN"; then
-    if [[ -e "$DISPATCH" || -L "$DISPATCH" ]]; then
-      local dispatch_target
-      dispatch_target="$(resolve_existing "$DISPATCH")"
-      if ! is_this_clone_launcher "$dispatch_target"; then
-        local bak="${DISPATCH}.bak.$(date +%Y%m%d%H%M%S)"
-        mv "$DISPATCH" "$bak"
-        log "Backed up existing ${DISPATCH} -> ${bak}"
-      fi
+  if [[ -e "$dispatch" || -L "$dispatch" ]]; then
+    local dispatch_target
+    dispatch_target="$(resolve_existing "$dispatch")"
+    if [[ "$dispatch_target" != "$src" ]]; then
+      local bak="${dispatch}.bak.$(date +%Y%m%d%H%M%S)"
+      mv "$dispatch" "$bak"
+      log "Backed up existing ${dispatch} -> ${bak}"
     fi
-    ln -sfn "$LAUNCHER" "$DISPATCH"
-    warn "Existing ${AGENT_RUN} is not this clone (left untouched)."
-    warn "  current target: ${current}"
-    warn "Installed this clone as ${DISPATCH}"
-    warn "Use agent-run-dispatch, or put ${BIN_DIR} first on PATH after you choose to switch."
+  fi
+  ln -sfn "$src" "$dispatch"
+  warn "Existing ${dest} is not this clone (left untouched)."
+  warn "  current target: ${current}"
+  warn "Installed this clone as ${dispatch}"
+  warn "Use ${dispatch_name} for this clone. Do not point PATH ${name} at dispatch when Beads already owns it."
+}
+
+dsh_pkg_root() {
+  local bin
+  bin="$(command -v dsh 2>/dev/null || true)"
+  [[ -n "$bin" ]] || return 1
+  python3 - "$bin" <<'PY'
+import json, os, sys
+
+path = os.path.realpath(sys.argv[1])
+directory = os.path.dirname(path)
+while True:
+    pkg = os.path.join(directory, "package.json")
+    if os.path.isfile(pkg):
+        try:
+            name = json.load(open(pkg, encoding="utf-8")).get("name")
+        except Exception:
+            name = None
+        if name == "@deepseek-ai/dsh":
+            print(directory)
+            raise SystemExit(0)
+    parent = os.path.dirname(directory)
+    if parent == directory:
+        raise SystemExit(1)
+    directory = parent
+PY
+}
+
+find_dsh_dep() {
+  local name="$1"
+  local root cand
+  root="$(dsh_pkg_root)" || return 1
+  for cand in \
+    "${root}/node_modules/@deepseek-ai/${name}" \
+    "$(dirname "$root")/${name}"; do
+    if [[ -d "$cand" ]]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+link_nm_pkg() {
+  local dest_parent="$1"
+  local name="$2"
+  local src="$3"
+  mkdir -p "${dest_parent}/@deepseek-ai"
+  ln -sfn "$src" "${dest_parent}/@deepseek-ai/${name}"
+  log "Linked ${dest_parent}/@deepseek-ai/${name} -> ${src}"
+}
+
+# Headless plugin boot needs these packages resolvable from the plugin files.
+# Prefer a gitignored symlink into this clone from the already-installed DSH
+# tree. Do not treat a home-directory manual symlink as the install path.
+link_headless_peers() {
+  local schema filesystem
+  schema="$(find_dsh_dep schemastery || true)"
+  filesystem="$(find_dsh_dep dsh-skill-filesystem || true)"
+  if [[ -z "$schema" || -z "$filesystem" ]]; then
+    warn "Could not find @deepseek-ai/schemastery and/or @deepseek-ai/dsh-skill-filesystem next to the installed dsh package."
+    warn "Headless plugin boot may fail. Install official DSH (npm i -g @deepseek-ai/dsh) and re-run this script,"
+    warn "or npm install those two packages into this clone (node_modules is gitignored). See README."
     return 0
   fi
-
-  local bak="${AGENT_RUN}.bak.$(date +%Y%m%d%H%M%S)"
-  mv "$AGENT_RUN" "$bak"
-  ln -s "$LAUNCHER" "$AGENT_RUN"
-  log "Backed up previous agent-run -> ${bak}"
-  log "Linked ${AGENT_RUN} -> ${LAUNCHER}"
+  mkdir -p "${ROOT}/node_modules" "${ADAPTER_DIR}/node_modules" "${PACK_DIR}/node_modules"
+  link_nm_pkg "${ROOT}/node_modules" schemastery "$schema"
+  link_nm_pkg "${ROOT}/node_modules" dsh-skill-filesystem "$filesystem"
+  link_nm_pkg "${ADAPTER_DIR}/node_modules" schemastery "$schema"
+  link_nm_pkg "${PACK_DIR}/node_modules" dsh-skill-filesystem "$filesystem"
 }
 
 dsh_plugin_add_both() {
@@ -113,6 +161,7 @@ install_dsh_plugins() {
   fi
   dsh_plugin_add_both "$PACK_DIR"
   dsh_plugin_add_both "$ADAPTER_DIR"
+  link_headless_peers
 }
 
 print_mcp_snippet() {
@@ -148,13 +197,16 @@ run_doctor() {
 
 main() {
   log "REPO_ROOT=${ROOT}"
-  install_agent_run
+  install_cli_symlink "$AGENT_RUN" "$DISPATCH" "$LAUNCHER" "agent-run" "agent-run-dispatch"
+  install_cli_symlink "$AGENT_LEDGER" "$LEDGER_DISPATCH" "$LEDGER_SRC" "agent-ledger" "agent-ledger-dispatch"
   install_dsh_plugins
   print_mcp_snippet
   run_doctor
   log ""
-  log "Done. Third-party runtimes (install yourself): Cursor or Claude or Codex CLI,"
-  log "optional official DSH, optional LiteLLM. Do not clone our other repos."
+  log "Done. Daily entry for this clone: agent-run-dispatch / agent-ledger-dispatch"
+  log "(or python3 scripts/agent_ledger.py). PATH agent-run may be Beads — do not use it for dispatch."
+  log "Third-party runtimes (install yourself): Cursor or Claude or Codex CLI,"
+  log "optional official DSH. LiteLLM is not required. Do not clone our other repos."
 }
 
 main "$@"

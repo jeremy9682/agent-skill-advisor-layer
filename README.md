@@ -1,12 +1,12 @@
 # Skill Advisor Layer
 
-**Model dispatch canon + local integration kit.** One public repository: clone it, run `./scripts/install.sh`, and use the routing policy, `agent-run`, DSH plugins, and ZCode/MCP gateway from this tree. You do **not** clone our other repos.
+**Model dispatch canon + local integration kit.** One public repository: clone it, run `./scripts/install.sh`, and use the routing policy, `agent-run-dispatch`, DSH plugins, and ZCode/MCP gateway from this tree. You do **not** clone our other repos.
 
 [中文说明](README.zh-CN.md)
 
 ## Quick Start
 
-**You already need** a Cursor **or** Claude **or** Codex subscription (the CLIs you actually call). Optional: official DeepSeek Harness and LiteLLM. Those are third-party runtimes, like Node — install them yourself.
+**Required:** a Cursor **or** Claude **or** Codex subscription (the CLI you actually call). Optional: official DeepSeek Harness. **LiteLLM is not required** and is not on this path.
 
 ```bash
 git clone https://github.com/jeremy9682/agent-skill-advisor-layer.git
@@ -16,25 +16,57 @@ cd agent-skill-advisor-layer
 
 `install.sh` will:
 
-1. Symlink `agent-run` to **this clone's** `scripts/agent_provider_run.py`. If `~/.local/bin/agent-run` already exists and is not this launcher (for example a Beads wrapper), it leaves that file alone and installs `~/.local/bin/agent-run-dispatch` instead.
-2. If `dsh` is on `PATH`, `dsh plugin add` **this clone's** `plugins/dsh-dispatch-pack` and `plugins/dsh-llm-cursor-acp` into both **web** and **headless**.
+1. Install **this clone's** launcher and ledger helper. If `~/.local/bin/agent-run` is already taken (Beads `agent_run_beads_bridge.py` → `~/.agent-skill-advisor-layer-governance-clean`, still Grok 4.5), it **leaves that file alone** and installs `~/.local/bin/agent-run-dispatch`. Same rule for the ledger: `agent-ledger-dispatch` when `agent-ledger` is occupied; `agent-ledger` only when that name is free.
+2. If `dsh` is on `PATH`, `dsh plugin add` **this clone's** `plugins/dsh-dispatch-pack` and `plugins/dsh-llm-cursor-acp` into both **web** and **headless**, then symlink `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-skill-filesystem` from the installed DSH `node_modules` into **gitignored** `node_modules` in this clone.
 3. Run `node gateway/local-gateway.mjs doctor`.
 
-Then:
+### Daily commands (this clone)
+
+**If Beads (or any other wrapper) owns `agent-run` on PATH, do not use that binary for dispatch.** It is a different canon. Use the `-dispatch` names:
 
 ```bash
-agent-run routes                          # or agent-run-dispatch routes
-agent-run doctor --task-shape mechanical
+cd <clone>
+./scripts/install.sh
+agent-run-dispatch routes
+agent-run-dispatch doctor --task-shape mechanical
+python3 scripts/agent_ledger.py open …  # or agent-ledger-dispatch
+python3 scripts/agent_ledger.py claim …
+agent-run-dispatch run auto --task-shape mechanical --checkpoint-event "$EVT" --cwd "$PWD" --timeout-seconds 480 '…read-only…'
+```
+
+`node gateway/local-gateway.mjs run --via agent-run` is **not** the daily entry: it does not take a checkpoint, and PATH `agent-run` is Beads. Set `AGENT_RUN_BIN` to `agent-run-dispatch` (or this clone's `scripts/agent_provider_run.py`) if the gateway must hit this canon.
+
+| Command | Typical target | Canon |
+| --- | --- | --- |
+| `agent-run` | Beads bridge → `~/.agent-skill-advisor-layer-governance-clean` | Grok 4.5; **do not overwrite** |
+| `agent-run-dispatch` | this clone `scripts/agent_provider_run.py` | Grok 4.6 + `stage_gate` |
+| `agent-ledger` | often the same governance-clean tree | leave it if occupied |
+| `agent-ledger-dispatch` | this clone `scripts/agent_ledger.py` | this clone's ledger helper |
+
+Do not edit the governance-clean git tree from this install.
+
+### Headless plugin peers
+
+If `dsh --profile headless` fails to boot (`Cannot find module '@deepseek-ai/schemastery'` or `@deepseek-ai/dsh-skill-filesystem`):
+
+1. Install official DSH: `npm i -g @deepseek-ai/dsh`
+2. Re-run `./scripts/install.sh` (it symlinks those packages from DSH's `node_modules`; links are gitignored)
+3. Or, in this clone: `npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-skill-filesystem`
+
+Do not commit `node_modules`. A home-directory manual symlink is not the supported install path.
+
+```bash
 node gateway/local-gateway.mjs doctor
 ```
 
-Optional quota proxy: `examples/litellm/` (copy the example config **outside** git; never commit keys). Official DSH install: `npm i -g @deepseek-ai/dsh` — see [docs/harness-opt-in.md](docs/harness-opt-in.md). You do **not** need `dsh-skill-pack`, `dsh-cursor-codex`, or a harness fork.
+Official DSH: `npm i -g @deepseek-ai/dsh` — see [docs/harness-opt-in.md](docs/harness-opt-in.md). You do **not** need `dsh-skill-pack`, `dsh-cursor-codex`, or a harness fork. Optional quota proxy (not required): [docs/litellm-proxy.md](docs/litellm-proxy.md) / `examples/litellm/` — copy the example **outside** git; never commit keys. A VPN/DNS interceptor may resolve `api.commandcode.ai` to `198.18.0.123`. `GET /v1/models` must send the LiteLLM master key.
 
 Layout of what this clone ships:
 
 ```text
 routing-policy.yaml              Machine canon (task_shape → seat/model)
-scripts/agent_provider_run.py    agent-run launcher
+scripts/agent_provider_run.py    agent-run-dispatch launcher
+scripts/agent_ledger.py          agent-ledger-dispatch helper
 scripts/install.sh               One-shot local install
 skills/dsh-dispatch/             Portable dispatch skill
 skills/skill-advisor/            High-cost skill suggestion layer

@@ -1001,7 +1001,7 @@ def test_stale_live_evidence_blocks_route(tmp_path, monkeypatch):
         json.dumps(
             {
                 "provider_id": "grok",
-                "model_requested": "grok-4.5",
+                "model_requested": "grok-4.6",
                 "run_status": "completed",
                 "exit_code": 0,
                 "failure_class": "none",
@@ -1010,7 +1010,7 @@ def test_stale_live_evidence_blocks_route(tmp_path, monkeypatch):
         )
         + "\n"
     )
-    evidence = agent_run.latest_provider_evidence(data, "demo", "grok", "grok-4.5")
+    evidence = agent_run.latest_provider_evidence(data, "demo", "grok", "grok-4.6")
     assert evidence["status"] == "stale-live-evidence"
     assert evidence["max_age_seconds"] == 60
 

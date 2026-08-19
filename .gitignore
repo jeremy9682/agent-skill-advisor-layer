@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 skills-manifest.json
 reports/*.json
+node_modules/
 
 _knowledge_base/
 
