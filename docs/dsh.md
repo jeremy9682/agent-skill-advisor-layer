@@ -7,6 +7,8 @@ The routing canon, gate policy, and schemas in this repository are provider-neut
 | Asset | DSH usage |
 | --- | --- |
 | [`docs/task-routing.md`](task-routing.md) | Read the routing table as-is; map "edits" and "reviews" onto your DSH seats (`dsh --profile headless` for bounded edits, `dsh --profile acp` for editor-native delegation, `subagent`/`workflow` for fan-out inside one DSH session). |
+| [`docs/model-dispatch-matrix.md`](model-dispatch-matrix.md) | Task-type → seat/model/effort, DSH preset map (`standard`/`code`/`minimal`/`cordis`), peak-hour freeze. Canon is still `routing-policy.yaml`. |
+| [`docs/litellm-proxy.md`](litellm-proxy.md) | Optional quota gateway. Example config only; do not silently retarget `~/.dsh/settings.yaml`. |
 | [`docs/gate-policy.md`](gate-policy.md) | Green evidence before push and "the diff is the gate" apply unchanged to DSH runs. |
 | [`docs/development-workflow-standard.md`](development-workflow-standard.md) | Point your project `AGENTS.md` files at the standard instead of copying workflow text into every repo. |
 | `skills/skill-advisor/SKILL.md` | The machine-specific edition (personalized suggestion matrix) lives here. The portable edition ships inside [dsh-skill-pack](https://github.com/jeremy9682/dsh-skill-pack) v0.2.0+, installable with `dsh plugin --profile web add @jeremy9682/dsh-skill-pack`. |

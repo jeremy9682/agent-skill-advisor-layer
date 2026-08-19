@@ -77,10 +77,12 @@ Tip: use --model <id>
 def test_mechanical_parallel_routes_disable_automatic_skill_body_injection():
     canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
     assert routing.resolve_binding(canon, "mechanical")["managed_skills"] == "disabled"
-    assert (
-        routing.resolve_binding(canon, "mechanical_grok")["managed_skills"]
-        == "disabled"
-    )
+    grok_binding = routing.resolve_binding(canon, "mechanical_grok")
+    assert grok_binding["managed_skills"] == "disabled"
+    assert grok_binding["model"] == "cursor-grok-4.6-high-fast"
+    assert grok_binding["effort"] == "high"
+    assert routing.resolve_binding(canon, "external_second_opinion")["model"] == "grok-4.6"
+    assert routing.resolve_binding(canon, "final_review")["model"] == "grok-4.6"
     assert "managed_skills" not in routing.resolve_binding(canon, "ordinary_bug_fix")
 
     for route in (

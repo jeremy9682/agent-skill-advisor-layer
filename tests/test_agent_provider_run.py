@@ -218,6 +218,8 @@ def test_manifest_has_safe_existing_login_providers():
     assert data["providers"]["grok"]["billing_policy"] == "existing-login-only"
     assert data["providers"]["grok"]["run_policy"] == "enabled"
     assert data["providers"]["cursor"]["model_requested"] == "auto"
+    assert data["providers"]["grok"]["model_requested"] == "grok-4.6"
+    assert "grok-4.5" in data["providers"]["grok"]["model_options"]
     assert data["provider_aliases"]["cursor-auto"] == "cursor"
     assert "XAI_API_KEY" in data["providers"]["grok"]["strip_environment"]
     assert "CURSOR_API_KEY" in data["providers"]["cursor"]["strip_environment"]
@@ -1944,7 +1946,7 @@ def test_governed_review_and_fable_routes_resolve_exact_bindings():
     )()
     assert agent_run.resolve_route(args, data) == (
         "grok",
-        "grok-4.5",
+        "grok-4.6",
         "high",
         "codex-final-review",
         "final_review",
@@ -3639,7 +3641,12 @@ def test_route_doctor_treats_intentionally_unlocked_mechanical_route_as_warning(
             "models": [
                 {"id": model}
                 for model in (
-                    ["auto", "composer-2.5-fast", "cursor-grok-4.5-high-fast"]
+                    [
+                        "auto",
+                        "composer-2.5-fast",
+                        "cursor-grok-4.6-high-fast",
+                        "cursor-grok-4.5-high-fast",
+                    ]
                     if provider.get("display_name") == "Cursor"
                     else provider.get("model_options", [])
                 )

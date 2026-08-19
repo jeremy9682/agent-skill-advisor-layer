@@ -106,8 +106,11 @@ providers:
       - ~/.local/bin/grok
       - grok
     version_args: [--version]
-    model_requested: grok-4.5
-    model_options: [grok-4.5]
+    # Native Grok CLI catalog (2026-08-19): default is grok-4.6.
+    # grok-4.5 remains an explicit downgrade option; Cursor-family 4.5 ids
+    # live in routing-policy.yaml enums, not this CLI list.
+    model_requested: grok-4.6
+    model_options: [grok-4.6, grok-4.5]
     effort_requested: high
     effort_options: [low, medium, high]
     billing_policy: existing-login-only

@@ -42,8 +42,10 @@ enums:
   execution_model:                       # producer model tiers, keyed by family
     claude: [sonnet, opus, fable, claude-fable-5]
     codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
-    # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）
-    cursor: [composer-2.5-fast, composer-2.5, cursor-grok-4.5-high, cursor-grok-4.5-high-fast]
+    # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）。
+    # Product default (2026-08-19, cursor-agent catalog): Grok 4.6.
+    # 4.5 ids remain for explicit downgrade / catalog compatibility.
+    cursor: [composer-2.5-fast, composer-2.5, cursor-grok-4.6-high, cursor-grok-4.6-high-fast, cursor-grok-4.5-high, cursor-grok-4.5-high-fast]
   execution_effort: [low, medium, high, max]
   review_effort: [high, xhigh]          # floor is `high`; never below
   execution_mode: [fast, careful]
@@ -103,7 +105,7 @@ task_shapes:
     execution_mode: fast
     review_effort_floor: high
   mechanical:                      # formatting / mechanical edits; no behavior change
-    # Shuttle Seal：飞梭默认 Composer 2.5 Fast；并行第二梭用 mechanical_grok 路由
+    # Shuttle Seal：飞梭默认 Composer 2.5 Fast；并行第二梭用 mechanical_grok（Grok 4.6 Fast）
     execution_seat: [cursor]
     execution_model:
       cursor: composer-2.5-fast
@@ -282,9 +284,11 @@ runtime_routes:
     concurrency: explicitly_parallel
     managed_skills: disabled
   # 飞梭第二梭：仍属机械落盘，终审走双印；可与 mechanical 并行。
+  # Model id from live `cursor-agent models` (2026-08-19): cursor-grok-4.6-high-fast.
+  # Cursor ACP/chat uses grok-4.6[effort=high,fast=true]; agent-run uses the CLI catalog id.
   mechanical_grok:
     provider: cursor
-    model: cursor-grok-4.5-high-fast
+    model: cursor-grok-4.6-high-fast
     effort: high
     seat: claude-landing
     concurrency: explicitly_parallel
@@ -313,7 +317,7 @@ runtime_routes:
     concurrency: family_serial
   external_second_opinion:
     provider: grok
-    model: grok-4.5
+    model: grok-4.6
     effort: high
     seat: claude-direction
     timeout_seconds: 600
@@ -329,7 +333,7 @@ runtime_routes:
     concurrency: family_serial
   final_review:
     provider: grok
-    model: grok-4.5
+    model: grok-4.6
     effort: high
     governance_effort: xhigh
     seat: codex-final-review

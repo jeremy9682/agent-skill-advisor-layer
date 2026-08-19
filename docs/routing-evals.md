@@ -47,7 +47,8 @@ structure, evals check regressions, humans check meaning.
 
 Model-routing evals are also not a provider router. Provider fallback, budget
 routing, rate limits, and latency-based routing belong in a model gateway such
-as LiteLLM or a platform-native gateway, not in this repository.
+as LiteLLM or a platform-native gateway, not in this repository. A local
+example (not production traffic) is [`docs/litellm-proxy.md`](litellm-proxy.md).
 
 ## Codex Routing-Hook Revisit (Tier-2 item ④)
 

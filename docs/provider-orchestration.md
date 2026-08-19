@@ -201,7 +201,7 @@ agent-run run auto --task-shape codex_final_review \
 
 The current routes map mechanical work to Cursor `composer-2.5-fast`/low
 (Shuttle Seal 飞梭; alternate `mechanical_grok` →
-`cursor-grok-4.5-high-fast`), ordinary bugs to Codex Terra/medium, judgment and
+`cursor-grok-4.6-high-fast`; 4.5 remains an explicit downgrade), ordinary bugs to Codex Terra/medium, judgment and
 restricted-zone direction to Claude Opus/high, and dual-seal final review to
 Fable max + GPT-5.6 Sol xhigh (`fable_final_review` / `codex_final_review`).
 Both Cursor routes queue on the same local provider-family lock only when
@@ -290,7 +290,8 @@ If that evidence is missing, the run is journaled as `provider-health-unverified
 and fails closed.
 
 Cursor is a formal broker provider. Its `models` output is parsed dynamically, so
-Composer 2.5, Cursor Grok 4.5 and future model IDs do not require a second static
+Composer 2.5, Cursor Grok 4.6 (current product default), Grok 4.5 (downgrade),
+and future model IDs do not require a second static
 model list. Catalogue presence is still only `catalog-listed`; a successful run
 plus an attributed native session whose observed model ID exactly matches the
 requested ID provides `live-run-verified` evidence. Review
