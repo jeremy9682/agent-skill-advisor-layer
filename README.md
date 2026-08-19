@@ -16,13 +16,13 @@ cd agent-skill-advisor-layer
 
 `install.sh` will:
 
-1. Install **this clone's** launcher and ledger helper. If `~/.local/bin/agent-run` is already taken (Beads `agent_run_beads_bridge.py` → `~/.agent-skill-advisor-layer-governance-clean`, still Grok 4.5), it **leaves that file alone** and installs `~/.local/bin/agent-run-dispatch`. Same rule for the ledger: `agent-ledger-dispatch` when `agent-ledger` is occupied; `agent-ledger` only when that name is free.
+1. Install **this clone's** launcher and ledger helper. If `~/.local/bin/agent-run` is already taken (hard-fail wrapper, or historically Beads `agent_run_beads_bridge.py`), it **leaves that file alone** and installs `~/.local/bin/agent-run-dispatch`. Same rule for the ledger: `agent-ledger-dispatch` when `agent-ledger` is occupied; `agent-ledger` only when that name is free.
 2. If `dsh` is on `PATH`, `dsh plugin add` **this clone's** `plugins/dsh-dispatch-pack` and `plugins/dsh-llm-cursor-acp` into both **web** and **headless**, then symlink `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-skill-filesystem` from the installed DSH `node_modules` into **gitignored** `node_modules` in this clone.
 3. Run `node gateway/local-gateway.mjs doctor`.
 
 ### Daily commands (this clone)
 
-**If Beads (or any other wrapper) owns `agent-run` on PATH, do not use that binary for dispatch.** It is a different canon. Use the `-dispatch` names:
+**PATH `agent-run` is a hard-fail trap (exit 2).** Do not use it for dispatch. Old Beads orchestration uses `agent-run-beads`. Daily dispatch uses the `-dispatch` names:
 
 ```bash
 cd <clone>
@@ -34,11 +34,12 @@ python3 scripts/agent_ledger.py claim …
 agent-run-dispatch run auto --task-shape mechanical --checkpoint-event "$EVT" --cwd "$PWD" --timeout-seconds 480 '…read-only…'
 ```
 
-`node gateway/local-gateway.mjs run --via agent-run` is **not** the daily entry: it does not take a checkpoint, and PATH `agent-run` is Beads. Set `AGENT_RUN_BIN` to `agent-run-dispatch` (or this clone's `scripts/agent_provider_run.py`) if the gateway must hit this canon.
+`node gateway/local-gateway.mjs run --via agent-run` is **not** the daily entry: it does not take a checkpoint, and PATH `agent-run` is a hard-fail trap. Set `AGENT_RUN_BIN` to `agent-run-dispatch` (or this clone's `scripts/agent_provider_run.py`) if the gateway must hit this canon.
 
 | Command | Typical target | Canon |
 | --- | --- | --- |
-| `agent-run` | Beads bridge → `~/.agent-skill-advisor-layer-governance-clean` | Grok 4.5; **do not overwrite** |
+| `agent-run` | hard-fail wrapper (stderr warning, exit 2) | prevents accidental Beads / Grok 4.5 |
+| `agent-run-beads` | Beads bridge → `~/.agent-skill-advisor-layer-governance-clean` | Grok 4.5; old Beads orchestration |
 | `agent-run-dispatch` | this clone `scripts/agent_provider_run.py` | Grok 4.6 + `stage_gate` |
 | `agent-ledger` | often the same governance-clean tree | leave it if occupied |
 | `agent-ledger-dispatch` | this clone `scripts/agent_ledger.py` | this clone's ledger helper |
