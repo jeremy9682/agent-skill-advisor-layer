@@ -38,6 +38,8 @@ try:
         parse_cursor_model_catalog,
         resolve_binding,
         resolve_model_family,
+        validate_spawn_dispatch,
+        validate_stage_gate,
     )
 except ModuleNotFoundError:  # Direct execution through the ~/.local/bin symlink.
     from ledger_core import FIELDS as LEDGER_FIELDS
@@ -49,6 +51,8 @@ except ModuleNotFoundError:  # Direct execution through the ~/.local/bin symlink
         parse_cursor_model_catalog,
         resolve_binding,
         resolve_model_family,
+        validate_spawn_dispatch,
+        validate_stage_gate,
     )
 
 
@@ -1472,6 +1476,14 @@ def validate_review_independence(
             "producer_count": len(producers),
             "run_ids": sorted(str(row["run_id"]) for row in producers),
             "model_families": sorted(producer_families),
+            "routes": [str(row.get("route") or "unknown") for row in producers],
+            "risk_triggers": sorted(
+                {
+                    str(trigger)
+                    for row in producers
+                    for trigger in row.get("risk_overlay", {}).get("triggers", [])
+                }
+            ),
             "session_ids": sorted(str(row["session_id"]) for row in producers),
         }
     if not args.producer_run_id:
@@ -1572,6 +1584,8 @@ def validate_review_independence(
         "seat": str(producer.get("seat") or "unknown"),
         "session_id": str(producer.get("session_id") or "unknown"),
         "model_family": producer_family,
+        "route": str(producer.get("route") or "unknown"),
+        "risk_triggers": producer_risks,
     }
 
 
@@ -1609,6 +1623,86 @@ def validate_risk_overlay(
     raise ProviderRunError(
         "risk trigger requires --task-shape restricted_zone or a compliant final-review route"
     )
+
+
+def enforce_spawn_dispatch(
+    args: argparse.Namespace, config: dict, route_name: str | None
+) -> dict:
+    inherit_parent = bool(getattr(args, "spawn_inherit_parent", False))
+    explicit_override = bool(getattr(args, "spawn_explicit_override", False))
+    if not inherit_parent and not explicit_override and route_name is None:
+        return {"status": "not-a-spawn"}
+    try:
+        return validate_spawn_dispatch(
+            routing_canon(config),
+            route_name=route_name,
+            inherit_parent=inherit_parent,
+            explicit_override=explicit_override,
+        )
+    except RoutingRuntimeError as exc:
+        raise ProviderRunError(str(exc)) from exc
+
+
+def enforce_stage_gate(
+    config: dict,
+    route_name: str | None,
+    provider_id: str,
+    reviewer_model: str,
+    producer_ref: dict | None,
+    extra_triggers: list[str] | None = None,
+) -> dict:
+    if not route_name or producer_ref is None:
+        return {"status": "not-stage-gate"}
+    reviewer_family = provider_family(provider_id, config, reviewer_model)
+    extra = [str(item) for item in (extra_triggers or []) if item]
+    try:
+        families = producer_ref.get("model_families")
+        if isinstance(families, list) and families:
+            routes = list(producer_ref.get("routes") or [])
+            triggers = list(producer_ref.get("risk_triggers") or []) + extra
+            last = {"status": "not-stage-gate"}
+            for index, family in enumerate(families):
+                producer_route = routes[index] if index < len(routes) else None
+                last = validate_stage_gate(
+                    routing_canon(config),
+                    review_route=route_name,
+                    reviewer_family=reviewer_family,
+                    producer_family=str(family),
+                    producer_route=producer_route,
+                    risk_triggers=triggers,
+                )
+            return last
+        triggers = list(producer_ref.get("risk_triggers") or []) + extra
+        return validate_stage_gate(
+            routing_canon(config),
+            review_route=route_name,
+            reviewer_family=reviewer_family,
+            producer_family=str(producer_ref.get("model_family") or "unknown"),
+            producer_route=str(producer_ref.get("route") or "") or None,
+            risk_triggers=triggers,
+        )
+    except RoutingRuntimeError as exc:
+        raise ProviderRunError(str(exc)) from exc
+
+
+def _close_ledger_event(slug: str, event_id: str, seat: str, outcome: str) -> None:
+    try:
+        from scripts.agent_ledger import LedgerError, close_event
+    except ModuleNotFoundError:
+        from agent_ledger import LedgerError, close_event
+    try:
+        close_event(slug, event_id, seat, outcome, instant=False)
+    except LedgerError as exc:
+        raise ProviderRunError(
+            f"review checkpoint {event_id} must close: {exc}"
+        ) from exc
+
+
+def close_review_checkpoint(
+    slug: str, event_id: str, seat: str, outcome: str
+) -> dict:
+    _close_ledger_event(slug, event_id, seat, outcome)
+    return {"event_id": event_id, "status": "closed", "seat": seat}
 
 
 def provider_health_evidence(
@@ -2824,7 +2918,16 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
     review_independence, producer_ref = validate_review_independence(
         route_name, provider_id, args, config, slug
     )
+    enforce_spawn_dispatch(args, config, route_name)
     route = route_binding(config, route_name) if route_name else {}
+    enforce_stage_gate(
+        config,
+        route_name,
+        provider_id,
+        str(route.get("model") or model or ""),
+        producer_ref,
+        list(args.risk_trigger or []),
+    )
     if route_name is not None:
         validate_route_concurrency(routing_canon(config), route_name, route)
     governance_effort = str(
@@ -3204,6 +3307,20 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         "instruction_bom": instruction_bom,
         "instruction_bom_digest": instruction_bom["digest"],
     }
+    if (
+        proc.returncode == 0
+        and route_name
+        and str(route.get("review_independence") or "not-applicable")
+        != "not-applicable"
+        and checkpoint
+        and checkpoint.get("event_id")
+    ):
+        record["checkpoint_close"] = close_review_checkpoint(
+            slug,
+            str(checkpoint["event_id"]),
+            seat,
+            f"agent-run {run_id} completed",
+        )
     path = journal_path(config, slug)
     append_journal(path, record)
     if stdout:
@@ -3818,6 +3935,16 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout-seconds", type=int)
     run.add_argument("--minimal-runtime", action="store_true")
     run.add_argument("--trust-workspace", action="store_true")
+    run.add_argument(
+        "--spawn-inherit-parent",
+        action="store_true",
+        help="sub-agent spawn inherits parent model/effort (forbidden for final_review)",
+    )
+    run.add_argument(
+        "--spawn-explicit-override",
+        action="store_true",
+        help="sub-agent spawn names model/effort; required for gated review routes",
+    )
     st = sub.add_parser("status")
     st.add_argument("--repo")
     st.add_argument("--limit", type=int, default=10)

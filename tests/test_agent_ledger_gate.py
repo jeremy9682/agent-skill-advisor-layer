@@ -181,3 +181,27 @@ def test_cli_close_requires_latest_claimant(tmp_path):
     assert stale.returncode == 1 and "stale claim" in stale.stderr
     ok = _run(["close", SLUG, eid, "--seat", "claude-landing", "--outcome", "done"], home)
     assert ok.returncode == 0
+
+
+def test_open_review_events_and_fold_label(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(AL, "LEDGER_DIR", str(home / ".agent-ledger"))
+    o = _run(
+        [
+            "open", SLUG, "--intent-ref", "docs/x.md",
+            "--from-seat", "claude-direction", "--to-seat", "codex-final-review",
+            "--worktree", "/w @ b @ c", "--verification", "v",
+            "--next-action", "review the diff",
+        ],
+        home,
+    )
+    assert o.returncode == 0
+    eid = o.stdout.strip()
+    events = AL.load(SLUG)
+    open_reviews = AL.open_review_events(events)
+    assert [row["event_id"] for row in open_reviews] == [eid]
+    AL.cmd_fold(type("Args", (), {"slug": SLUG})())
+    assert "OPEN-REVIEW" in capsys.readouterr().out
+    AL.close_event(SLUG, eid, "codex-final-review", "reviewed", instant=True)
+    assert AL.open_review_events(AL.load(SLUG)) == []

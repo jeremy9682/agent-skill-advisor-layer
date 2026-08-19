@@ -1,14 +1,89 @@
 # Skill Advisor Layer
 
-**Proactive routing and governance for high-cost agent skills.**
-
-Skill Advisor Layer helps Codex, Claude Code, and other skill-based agents
-notice valuable workflows without silently launching expensive, disruptive, or
-permissioned ones.
+**Model dispatch canon + local integration kit.** One public repository: clone it, run `./scripts/install.sh`, and use the routing policy, `agent-run-dispatch`, DSH plugins, and ZCode/MCP gateway from this tree. You do **not** clone our other repos.
 
 [中文说明](README.zh-CN.md)
 
-## Why
+## Quick Start
+
+**Required:** a Cursor **or** Claude **or** Codex subscription (the CLI you actually call). Optional: official DeepSeek Harness. **LiteLLM is not required** and is not on this path.
+
+```bash
+git clone https://github.com/jeremy9682/agent-skill-advisor-layer.git
+cd agent-skill-advisor-layer
+./scripts/install.sh
+```
+
+`install.sh` will:
+
+1. Install **this clone's** launcher and ledger helper. If `~/.local/bin/agent-run` is already taken (Beads `agent_run_beads_bridge.py` → `~/.agent-skill-advisor-layer-governance-clean`, still Grok 4.5), it **leaves that file alone** and installs `~/.local/bin/agent-run-dispatch`. Same rule for the ledger: `agent-ledger-dispatch` when `agent-ledger` is occupied; `agent-ledger` only when that name is free.
+2. If `dsh` is on `PATH`, `dsh plugin add` **this clone's** `plugins/dsh-dispatch-pack` and `plugins/dsh-llm-cursor-acp` into both **web** and **headless**, then symlink `@deepseek-ai/schemastery` and `@deepseek-ai/dsh-skill-filesystem` from the installed DSH `node_modules` into **gitignored** `node_modules` in this clone.
+3. Run `node gateway/local-gateway.mjs doctor`.
+
+### Daily commands (this clone)
+
+**If Beads (or any other wrapper) owns `agent-run` on PATH, do not use that binary for dispatch.** It is a different canon. Use the `-dispatch` names:
+
+```bash
+cd <clone>
+./scripts/install.sh
+agent-run-dispatch routes
+agent-run-dispatch doctor --task-shape mechanical
+python3 scripts/agent_ledger.py open …  # or agent-ledger-dispatch
+python3 scripts/agent_ledger.py claim …
+agent-run-dispatch run auto --task-shape mechanical --checkpoint-event "$EVT" --cwd "$PWD" --timeout-seconds 480 '…read-only…'
+```
+
+`node gateway/local-gateway.mjs run --via agent-run` is **not** the daily entry: it does not take a checkpoint, and PATH `agent-run` is Beads. Set `AGENT_RUN_BIN` to `agent-run-dispatch` (or this clone's `scripts/agent_provider_run.py`) if the gateway must hit this canon.
+
+| Command | Typical target | Canon |
+| --- | --- | --- |
+| `agent-run` | Beads bridge → `~/.agent-skill-advisor-layer-governance-clean` | Grok 4.5; **do not overwrite** |
+| `agent-run-dispatch` | this clone `scripts/agent_provider_run.py` | Grok 4.6 + `stage_gate` |
+| `agent-ledger` | often the same governance-clean tree | leave it if occupied |
+| `agent-ledger-dispatch` | this clone `scripts/agent_ledger.py` | this clone's ledger helper |
+
+Do not edit the governance-clean git tree from this install.
+
+### Headless plugin peers
+
+If `dsh --profile headless` fails to boot (`Cannot find module '@deepseek-ai/schemastery'` or `@deepseek-ai/dsh-skill-filesystem`):
+
+1. Install official DSH: `npm i -g @deepseek-ai/dsh`
+2. Re-run `./scripts/install.sh` (it symlinks those packages from DSH's `node_modules`; links are gitignored)
+3. Or, in this clone: `npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-skill-filesystem`
+
+Do not commit `node_modules`. A home-directory manual symlink is not the supported install path.
+
+```bash
+node gateway/local-gateway.mjs doctor
+```
+
+Official DSH: `npm i -g @deepseek-ai/dsh` — see [docs/harness-opt-in.md](docs/harness-opt-in.md). You do **not** need `dsh-skill-pack`, `dsh-cursor-codex`, or a harness fork. Optional quota proxy (not required): [docs/litellm-proxy.md](docs/litellm-proxy.md) / `examples/litellm/` — copy the example **outside** git; never commit keys. A VPN/DNS interceptor may resolve `api.commandcode.ai` to `198.18.0.123`. `GET /v1/models` must send the LiteLLM master key.
+
+Layout of what this clone ships:
+
+```text
+routing-policy.yaml              Machine canon (task_shape → seat/model)
+scripts/agent_provider_run.py    agent-run-dispatch launcher
+scripts/agent_ledger.py          agent-ledger-dispatch helper
+scripts/install.sh               One-shot local install
+skills/dsh-dispatch/             Portable dispatch skill
+skills/skill-advisor/            High-cost skill suggestion layer
+skills/zcode-delegate-to-dsh/    ZCode → local sockets
+gateway/                         Thin CLI over dsh / agent-run / cursor-acp
+server/dsh-mcp.mjs               MCP stdio (dsh_delegate / dsh_health)
+plugins/dsh-dispatch-pack/       Cordis bundle for `dsh plugin add`
+plugins/dsh-llm-cursor-acp/      Cursor ACP adapter for DSH (MIT, no node_modules)
+templates/zcode/                 MCP config snippet
+examples/litellm/                Optional LiteLLM example
+docs/model-dispatch-matrix.md    Prose matrix
+VENDOR.md                        Where vendored files came from
+```
+
+Provenance: [VENDOR.md](VENDOR.md). ZCode / Cloud boundary: [docs/zcode-cloud-gateway.md](docs/zcode-cloud-gateway.md). DSH-facing loop: [docs/dsh.md](docs/dsh.md).
+
+## Why (skill advisor)
 
 Large skill libraries often fail in two ways:
 
@@ -17,15 +92,15 @@ Large skill libraries often fail in two ways:
 - **Too eager**: broad agents load or run too many skills, wasting context and
   creating side effects.
 
-This repo provides a small middle layer:
+This repo still provides that middle layer:
 
 1. Detect strong signals for high-cost skills.
 2. Suggest exactly one relevant workflow.
 3. Wait for explicit approval before execution.
 4. Stay silent when the task is small, urgent, or unrelated.
 
-It also now carries a portable skill-first development standard for teams that
-want Codex, Claude Code, and other agents to share the same workflow rules:
+Portable workflow standard for teams that want Codex, Claude Code, and other
+agents to share the same rules:
 
 - [Skill-first workflow standard](docs/development-workflow-standard.md)
 - [Task routing](docs/task-routing.md)
@@ -34,30 +109,19 @@ want Codex, Claude Code, and other agents to share the same workflow rules:
 - [Solution note schema](schemas/solution.md)
 - [OSS reference policy](docs/oss-reference-policy.md) — research and prototype work judges technical value first; this shared policy is the sole full text.
 
-## What Is Included
-
-```text
-skills/skill-advisor/       Routing skill
-scripts/skill_audit.py      Local skill inventory and governance audit
-examples/                   Codex and Claude configuration snippets
-docs/                       Routing, governance, and QA docs
-schemas/                    Intent and solution note schemas
-tests/                      Lightweight pytest coverage
-```
-
 ## Repository ownership
 
-This public repository is the single governance canon: routing policy, provider
-bindings, schemas, gates, health inspection, and the thin orchestrator adapter
-live here. The executable DAG scheduler and its package/CI live in the separate
-private `agent-run-orchestrator` repository; `orchestrator.lock.json` pins the
-exact reviewed commit used by the adapter.
+This public repository is the single governance canon **and** the installable
+integration kit: routing policy, provider bindings, schemas, gates, health
+inspection, the thin orchestrator adapter, the local gateway, MCP server, and
+DSH plugins. The executable DAG scheduler and its package/CI live in a
+separate private `agent-run-orchestrator` repository; `orchestrator.lock.json`
+pins the exact reviewed commit used by the adapter.
 
 Run evidence stays local. Journals, checkpoint ledgers, provider sessions,
 credentials, temporary worktrees, prompts, responses, and review bundles must
-not be committed to either repository. This split keeps policy reviewable
-without publishing provider/runtime internals or creating a second routing
-canon.
+not be committed. This split keeps policy reviewable without publishing
+provider/runtime internals or creating a second routing canon.
 
 To update the private runtime, review and test its new commit first, then update
 only `orchestrator.lock.json` here and run the public adapter and governance
@@ -79,20 +143,22 @@ The bundled advisor covers these high-cost workflows by default:
 
 You can edit `skills/skill-advisor/SKILL.md` if your local skill names differ.
 
-## Install
+## Skill files for Codex / Claude
 
 For Codex:
 
 ```bash
-mkdir -p ~/.codex/skills/skill-advisor
+mkdir -p ~/.codex/skills/skill-advisor ~/.codex/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.codex/skills/skill-advisor/SKILL.md
+cp skills/dsh-dispatch/SKILL.md ~/.codex/skills/dsh-dispatch/SKILL.md
 ```
 
 For Claude Code:
 
 ```bash
-mkdir -p ~/.claude/skills/skill-advisor
+mkdir -p ~/.claude/skills/skill-advisor ~/.claude/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.claude/skills/skill-advisor/SKILL.md
+cp skills/dsh-dispatch/SKILL.md ~/.claude/skills/dsh-dispatch/SKILL.md
 ```
 
 Then add the routing snippet from
@@ -146,10 +212,11 @@ design:
 ```bash
 python3 -m py_compile scripts/skill_audit.py
 python3 -m pytest tests
+node --test gateway/local-gateway.test.mjs
 ```
 
 See `docs/qa-matrix.md` for black-box prompt cases.
 
 ## License
 
-MIT.
+MIT. Vendored files keep their original copyright notices; see [VENDOR.md](VENDOR.md).

@@ -33,11 +33,26 @@ except ModuleNotFoundError:  # Direct execution through the ~/.local/bin symlink
     from ledger_core import FIELDS, ledger_violations, markers, record_violations
 
 LEDGER_DIR = os.path.expanduser("~/.agent-ledger")
+REVIEW_SEAT_SUFFIXES = ("-final-review", "-review")
+
+
+class LedgerError(RuntimeError):
+    pass
+
+
+_LAST_ERROR = None
 
 
 def die(msg):
+    global _LAST_ERROR
+    _LAST_ERROR = msg
     print(f"agent-ledger: error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def is_review_seat(seat):
+    value = seat or ""
+    return value.endswith(REVIEW_SEAT_SUFFIXES)
 
 
 # Seat vocabulary: {family}-{role} or a bare principal. Catches the real drill
@@ -248,6 +263,27 @@ def _cmd_claim_locked(a):
     append(a.slug, ev)
 
 
+def close_event(slug, event_id, seat, outcome, *, instant=False, taint=False):
+    """Close a pending event. Raises LedgerError instead of exiting."""
+
+    global _LAST_ERROR
+    _LAST_ERROR = None
+    try:
+        _validate_seat("seat", seat)
+        cmd_close(
+            argparse.Namespace(
+                slug=slug,
+                event_id=event_id,
+                seat=seat,
+                outcome=outcome,
+                instant=instant,
+                taint=taint,
+            )
+        )
+    except SystemExit as exc:
+        raise LedgerError(_LAST_ERROR or f"cannot close {event_id}") from exc
+
+
 def cmd_close(a):
     _validate_seat("seat", a.seat)  # transition writes a NEW seat → gate it too
     with ledger_lock(a.slug):
@@ -287,6 +323,38 @@ def _cmd_close_locked(a):
     append(a.slug, ev)
 
 
+def pending_open_events(events):
+    """Pending records that have not yet received a matching closed: marker."""
+
+    valid_events = [
+        event for event in events
+        if isinstance(event, dict) and not record_violations(event)
+    ]
+    open_events = []
+    for event in valid_events:
+        if event.get("next_action") == "none":
+            continue
+        closed = any(
+            kind == "closed" and target == event.get("event_id")
+            for kind, target, _record in markers(
+                valid_events, intent_ref=event.get("intent_ref")
+            )
+        )
+        if not closed:
+            open_events.append(event)
+    return open_events
+
+
+def open_review_events(events):
+    """Review-seat events that were opened and never closed."""
+
+    return [
+        event
+        for event in pending_open_events(events)
+        if is_review_seat(event.get("to_seat")) or is_review_seat(event.get("from_seat"))
+    ]
+
+
 def cmd_fold(a):
     events = load(a.slug)
     if not events:
@@ -296,25 +364,21 @@ def cmd_fold(a):
         event = events[line_number - 1]
         event_id = event.get("event_id", "?") if isinstance(event, dict) else "?"
         print(f"VIOLATION line {line_number} ({event_id}): {violation}")
+    open_events = pending_open_events(events)
+    if not open_events:
+        print("no open events — ledger clean")
+        return
     valid_events = [
         event for event in events
         if isinstance(event, dict) and not record_violations(event)
     ]
-    open_events = []
-    for e in valid_events:
-        if e.get("next_action") == "none":
-            continue
-        closed = any(k == "closed" and t == e.get("event_id")
-                     for k, t, _ in markers(valid_events, intent_ref=e.get("intent_ref")))
-        if not closed:
-            open_events.append(e)
-    if not open_events:
-        print("no open events — ledger clean")
-        return
     for e in open_events:
         owner = owner_of(valid_events, e["event_id"], e.get("to_seat"),
                          intent_ref=e.get("intent_ref"))
-        print(f"OPEN {e['event_id']}  owner={owner}")
+        kind = "OPEN-REVIEW" if (
+            is_review_seat(e.get("to_seat")) or is_review_seat(e.get("from_seat"))
+        ) else "OPEN"
+        print(f"{kind} {e['event_id']}  owner={owner}")
         print(f"     next_action: {e.get('next_action')}")
         print(f"     worktree:    {e.get('worktree')}")
         print(f"     verify:      {e.get('verification')}")

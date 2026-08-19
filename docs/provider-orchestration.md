@@ -72,11 +72,21 @@ Ruff and diff checks.
 
 ## Install the local entrypoint
 
+Prefer the clone-root installer (symlink, optional DSH plugins, gateway doctor):
+
+```bash
+./scripts/install.sh
+```
+
+If `~/.local/bin/agent-run` already exists and is not this clone's launcher,
+`install.sh` leaves it untouched and installs `agent-run-dispatch` instead.
+Manual equivalent:
+
 ```bash
 ln -sfn \
-  /path/to/agent-skill-advisor-layer/scripts/agent_provider_run.py \
+  "$PWD/scripts/agent_provider_run.py" \
   ~/.local/bin/agent-run
-chmod +x /path/to/agent-skill-advisor-layer/scripts/agent_provider_run.py
+chmod +x "$PWD/scripts/agent_provider_run.py"
 ```
 
 ## Discover providers
@@ -200,9 +210,8 @@ agent-run run auto --task-shape codex_final_review \
 ```
 
 The current routes map mechanical work to Cursor `composer-2.5-fast`/low
-(Shuttle Seal 飞梭; `mechanical_grok` → `cursor-grok-4.5-high-fast` is the
-second **writer** only for genuinely independent mechanical work), ordinary
-bugs to Codex Terra/medium, judgment and
+(Shuttle Seal 飞梭; alternate `mechanical_grok` →
+`cursor-grok-4.6-high-fast`; 4.5 remains an explicit downgrade), ordinary bugs to Codex Terra/medium, judgment and
 restricted-zone direction to Claude Opus/high, and dual-seal final review to
 Fable max + GPT-5.6 Sol xhigh (`fable_final_review` / `codex_final_review`).
 Both Cursor routes queue on the same local provider-family lock only when
@@ -212,7 +221,7 @@ parallel Cursor work is allowed.
 For the normal Composer-plus-Grok pattern, use Composer as the isolated writer
 and `cursor_grok_cross_review` as the read-only independent challenge seat. It
 uses the same Cursor broker but records `provider=cursor`, the exact requested
-and observed `cursor-grok-4.5-high-fast` model, and one fresh session receipt.
+and observed `cursor-grok-4.6-high-fast` model, and one fresh session receipt.
 It is deliberately serialised (`cursor-grok-review`) and must not be described
 as a native Codex subagent or as a substitute for the designated Codex final
 review. The intended critical path is `Composer writer -> Cursor Grok cross
@@ -301,7 +310,8 @@ If that evidence is missing, the run is journaled as `provider-health-unverified
 and fails closed.
 
 Cursor is a formal broker provider. Its `models` output is parsed dynamically, so
-Composer 2.5, Cursor Grok 4.5 and future model IDs do not require a second static
+Composer 2.5, Cursor Grok 4.6 (current product default), Grok 4.5 (downgrade),
+and future model IDs do not require a second static
 model list. Catalogue presence is still only `catalog-listed`; a successful run
 plus an attributed native session whose observed model ID exactly matches the
 requested ID provides `live-run-verified` evidence. Review

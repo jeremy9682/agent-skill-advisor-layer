@@ -1,0 +1,14 @@
+{
+  "mcp": {
+    "servers": {
+      "dsh": {
+        "command": "node",
+        "args": ["$REPO_ROOT/server/dsh-mcp.mjs"],
+        "env": {
+          "DSH_HOME": "~/.dsh",
+          "DSH_MCP_PROFILE": "headless"
+        }
+      }
+    }
+  }
+}

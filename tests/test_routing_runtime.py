@@ -4,6 +4,7 @@ import copy
 import importlib.util
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -77,10 +78,12 @@ Tip: use --model <id>
 def test_mechanical_parallel_routes_disable_automatic_skill_body_injection():
     canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
     assert routing.resolve_binding(canon, "mechanical")["managed_skills"] == "disabled"
-    assert (
-        routing.resolve_binding(canon, "mechanical_grok")["managed_skills"]
-        == "disabled"
-    )
+    grok_binding = routing.resolve_binding(canon, "mechanical_grok")
+    assert grok_binding["managed_skills"] == "disabled"
+    assert grok_binding["model"] == "cursor-grok-4.6-high-fast"
+    assert grok_binding["effort"] == "high"
+    assert routing.resolve_binding(canon, "external_second_opinion")["model"] == "grok-4.6"
+    assert routing.resolve_binding(canon, "final_review")["model"] == "grok-4.6"
     assert "managed_skills" not in routing.resolve_binding(canon, "ordinary_bug_fix")
 
     for route in (
@@ -97,7 +100,7 @@ def test_cursor_grok_cross_review_is_serial_and_cross_family():
     canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
     binding = routing.resolve_binding(canon, "cursor_grok_cross_review")
     assert binding["provider"] == "cursor"
-    assert binding["model"] == "cursor-grok-4.5-high-fast"
+    assert binding["model"] == "cursor-grok-4.6-high-fast"
     assert binding["review_independence"] == "cross-family"
     assert binding["serial_group"] == "cursor-grok-review"
     assert binding["timeout_seconds"] == 900
@@ -200,3 +203,103 @@ def test_instruction_bom_is_stable_private_and_changes_with_instruction_bytes(tm
     execute_mode = routing.build_instruction_bom(**dict(kwargs, mode="execute"))
     assert execute_mode["execution"]["mode"] == "execute"
     assert execute_mode["digest"] != first["digest"]
+
+
+def test_real_canon_stage_gate_and_spawn_dispatch_are_consumed():
+    canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
+    gate = routing.stage_gate_policy(canon)
+    assert gate["model"] == "gpt-5.6-sol"
+    assert gate["review_effort_floor"] == "high"
+    assert gate["enforced_by"] == "routing_runtime.validate_stage_gate"
+    spawn = routing.spawn_dispatch_policy(canon)
+    assert spawn["default_selection"] == "inherit_parent"
+    assert "final_review" in spawn["explicit_override_required_for"]
+    assert spawn["enforced_by"] == "routing_runtime.validate_spawn_dispatch"
+    assert routing.resolve_binding(canon, "codex_final_review")["effort"] == "xhigh"
+
+
+def test_stage_gate_blocks_same_family_except_d3():
+    canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
+    ok = routing.validate_stage_gate(
+        canon,
+        review_route="codex_final_review",
+        reviewer_family="openai",
+        producer_family="anthropic",
+        producer_route="standard_feature",
+    )
+    assert ok["status"] == "stage-gate-ok"
+    d3 = routing.validate_stage_gate(
+        canon,
+        review_route="secondary_final_review",
+        reviewer_family="openai",
+        producer_family="openai",
+        producer_route="ordinary_bug_fix",
+    )
+    assert d3["status"] == "d3-same-family-allowed"
+    with pytest.raises(routing.RoutingRuntimeError, match="same model family"):
+        routing.validate_stage_gate(
+            canon,
+            review_route="codex_final_review",
+            reviewer_family="openai",
+            producer_family="openai",
+            producer_route="standard_feature",
+        )
+    with pytest.raises(routing.RoutingRuntimeError, match="reciprocal reviewer"):
+        routing.validate_stage_gate(
+            canon,
+            review_route="codex_final_review",
+            reviewer_family="openai",
+            producer_family="openai",
+            producer_route="ordinary_bug_fix",
+            risk_triggers=["money"],
+        )
+    fable = routing.validate_stage_gate(
+        canon,
+        review_route="fable_final_review",
+        reviewer_family="anthropic",
+        producer_family="openai",
+        producer_route="judgment",
+        risk_triggers=["permissions"],
+    )
+    assert fable["status"] == "stage-gate-ok"
+    assert fable["review_effort_floor"] == "xhigh"
+    assert routing.validate_stage_gate(
+        canon,
+        review_route="ordinary_bug_fix",
+        reviewer_family="openai",
+        producer_family="openai",
+    )["status"] == "not-stage-gate"
+
+
+def test_spawn_dispatch_requires_explicit_override_for_final_review():
+    canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
+    inherited = routing.validate_spawn_dispatch(
+        canon,
+        route_name="mechanical",
+        inherit_parent=True,
+        explicit_override=False,
+    )
+    assert inherited["status"] == "inherit-parent"
+    assert inherited["gated"] is False
+    with pytest.raises(routing.RoutingRuntimeError, match="explicit model/effort"):
+        routing.validate_spawn_dispatch(
+            canon,
+            route_name="codex_final_review",
+            inherit_parent=True,
+            explicit_override=False,
+        )
+    with pytest.raises(routing.RoutingRuntimeError, match="explicit model/effort"):
+        routing.validate_spawn_dispatch(
+            canon,
+            route_name="judgment",
+            inherit_parent=True,
+            explicit_override=False,
+        )
+    overridden = routing.validate_spawn_dispatch(
+        canon,
+        route_name="codex_final_review",
+        inherit_parent=True,
+        explicit_override=True,
+    )
+    assert overridden["status"] == "explicit-override"
+    assert overridden["gated"] is True

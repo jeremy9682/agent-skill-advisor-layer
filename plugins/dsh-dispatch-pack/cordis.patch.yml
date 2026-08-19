@@ -1,0 +1,5 @@
+# DSH bundle profile patch.
+# Install from this clone: dsh plugin --profile web add ./plugins/dsh-dispatch-pack
+- insert:
+    - id: dsh-dispatch-pack
+      name: '@jeremy9682/dsh-dispatch-pack'

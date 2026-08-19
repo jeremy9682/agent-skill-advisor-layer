@@ -42,8 +42,10 @@ enums:
   execution_model:                       # producer model tiers, keyed by family
     claude: [sonnet, opus, fable, claude-fable-5]
     codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
-    # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）
-    cursor: [composer-2.5-fast, composer-2.5, cursor-grok-4.5-high, cursor-grok-4.5-high-fast]
+    # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）。
+    # Product default (2026-08-19, cursor-agent catalog): Grok 4.6.
+    # 4.5 ids remain for explicit downgrade / catalog compatibility.
+    cursor: [composer-2.5-fast, composer-2.5, cursor-grok-4.6-high, cursor-grok-4.6-high-fast, cursor-grok-4.5-high, cursor-grok-4.5-high-fast]
   execution_effort: [low, medium, high, max]
   review_effort: [high, xhigh]          # floor is `high`; never below
   execution_mode: [fast, careful]
@@ -56,6 +58,15 @@ enums:
 concurrency_policy:
   provider_family_limits:
     cursor: 2
+
+# --- Advisory specialist catalog (agency-agents) ---------------------------
+# Not a seat and not a runtime router. When plan/review needs a domain
+# checklist, agents may call the pinned read-only adapter:
+#   ~/Projects/external-skills/agency-agents/scripts/agency_agents.py search|show
+# Outputs are untrusted advisory data; local seats, ledger, risk overlays, and
+# ship gates always win. Do not install all 269 upstream personas. Policy:
+# ~/Projects/external-skills/agency-agents/references/yunchou-adoption.md
+# Prose: docs/task-routing.md "Advisory Specialist Catalog (agency-agents)".
 
 # --- Design-domain phase 1 -------------------------------------------------
 # Offline governance only. The catalog records authority/provenance and the
@@ -94,7 +105,7 @@ task_shapes:
     execution_mode: fast
     review_effort_floor: high
   mechanical:                      # formatting / mechanical edits; no behavior change
-    # Shuttle Seal：飞梭默认 Composer 2.5 Fast；并行第二梭用 mechanical_grok 路由
+    # Shuttle Seal：飞梭默认 Composer 2.5 Fast；并行第二梭用 mechanical_grok（Grok 4.6 Fast）
     execution_seat: [cursor]
     execution_model:
       cursor: composer-2.5-fast
@@ -154,6 +165,29 @@ final_review:
   # (the execution_seat that landed the diff).
   seat_independence: required
 
+  # Founder ruling (2026-08-04): every STAGE-level final review in the standing
+  # multi-agent orchestration runs on local gpt-5.6-sol at `high`. This narrows
+  # the prose default of "final review / arbitration / forbidden-zone = xhigh"
+  # for ordinary stage gates only. The risk overlay above is NOT relaxed: if the
+  # reviewed diff touches money, permissions, migration, doctype_or_schema, pii,
+  # or irreversible_write, the overlay still ratchets the floor to xhigh and the
+  # reviewer must state which trigger fired. Seat independence is unaffected.
+  # Cross-family precedence (spawn_dispatch.precedence, 2026-08-06): if the
+  # producer is Codex-family and a risk overlay fires, the fixed-Sol default
+  # does NOT apply — the reviewer must come from the reciprocal family
+  # (claude-fable-5) in a fresh independent session; Sol may not review its own
+  # family for cross_family_mandatory work.
+  stage_gate:
+    model: gpt-5.6-sol
+    review_effort_floor: high
+    overlay_still_applies: true
+    # Consumed by routing_runtime.validate_stage_gate + agent-run. Same-family
+    # producer+stage-final-reviewer is blocked except D3 (secondary_final_review
+    # of ordinary_bug_fix with no overlay). Overlay / cross_family_mandatory
+    # still force the reciprocal family (Codex producer → Fable). Runtime route
+    # effort bindings are not silently downgraded; codex_final_review stays xhigh.
+    enforced_by: routing_runtime.validate_stage_gate
+
   default:
     independence: cross_family_blind    # Codex reviews Claude-family work
     review_effort_floor: high
@@ -173,6 +207,54 @@ final_review:
   cross_family_mandatory:
     task_shapes: [judgment, restricted_zone, arbitration]
     risk_overlay_triggers: all   # any flip trigger forces cross_family_blind via the overlay
+
+# --- Spawn dispatch (sub-agent model selection) ----------------------------
+# Founder ruling 2026-08-06: by DEFAULT, sub-agent spawns OMIT model/effort and
+# inherit the parent thread's running model; explicit model naming is required
+# only when the resolved route demands a model/family/effort the parent does
+# not satisfy. Verified 2026-08-06 (probes A/B/C/D): child inherits
+# (model+effort) when override is omitted; explicit override is honored only
+# with fork_turns "none" or a positive turn count (full-history fork "all"
+# rejects overrides); the spawn schema surface is a per-session snapshot
+# (priority top-5 of the opencodex subagent roster) and drifts; roster changes
+# via `ocx agent subagents set` take effect for sessions started after the
+# app-server picks up the new catalog; manual catalog priority edits are
+# overwritten by `ocx sync` (probe D: not user-editable); a NATIVE-GPT parent
+# spawning a routed-provider child (claude/deepseek/cursor) fails with HTTP 400
+# unreadable_encrypted_agent_task (probe C, opencodex #92). Provider-pair
+# reachability is direction-specific: Probe B verified
+# deepseek-v4-flash → gpt-5.6-sol/high; other pairs (incl. cursor/kimi-k3 as a
+# spawn target) must be probed before governed use.
+spawn_dispatch:
+  default_selection: inherit_parent
+  inherit_only_when_parent_satisfies_resolved_route: true
+  explicit_override_required_for:
+    - final_review              # stage gate: local gpt-5.6-sol/high, never inherited
+    - cross_family_mandatory    # judgment / restricted_zone / arbitration + any risk-overlay trigger
+    - user_named_model_or_provider
+    - parent_tuple_mismatch     # parent (model, family, effort) does not satisfy the resolved route
+  override_fork_turns:
+    allow_none: true
+    allow_positive_turn_count: true
+    forbid_all: true            # full-history fork rejects overrides
+  # Cross-family wins over the fixed-Sol stage default: when both final_review
+  # and cross_family_mandatory apply, resolve the reviewer family against the
+  # ACTUAL execution_seat that produced the diff — never against the parent.
+  precedence:
+    - cross_family_mandatory
+    - final_review_stage_default
+  final_review_resolution:
+    independence_against: execution_seat
+    independent_session_required: true
+    stage_default_model: gpt-5.6-sol
+    stage_default_effort: high
+    risk_overlay_effort: xhigh
+    reciprocal_reviewer_for_codex_producer: anthropic/claude-fable-5
+  new_session_required_after_roster_change: true
+  # Consumed by routing_runtime.validate_spawn_dispatch + agent-run
+  # --spawn-inherit-parent / --spawn-explicit-override. Inherit without
+  # override is rejected for final_review and cross_family_mandatory routes.
+  enforced_by: routing_runtime.validate_spawn_dispatch
 
 # --- Executable bindings ----------------------------------------------------
 # This is the only runtime launcher table. Provider manifests describe how a
@@ -200,9 +282,11 @@ runtime_routes:
     concurrency: explicitly_parallel
     managed_skills: disabled
   # 飞梭第二梭：仍属机械落盘，终审走双印；可与 mechanical 并行。
+  # Model id from live `cursor-agent models` (2026-08-19): cursor-grok-4.6-high-fast.
+  # Cursor ACP/chat uses grok-4.6[effort=high,fast=true]; agent-run uses the CLI catalog id.
   mechanical_grok:
     provider: cursor
-    model: cursor-grok-4.5-high-fast
+    model: cursor-grok-4.6-high-fast
     effort: high
     seat: claude-landing
     concurrency: explicitly_parallel
@@ -213,7 +297,7 @@ runtime_routes:
   # review receipt has one unambiguous Cursor session/provider/model owner.
   cursor_grok_cross_review:
     provider: cursor
-    model: cursor-grok-4.5-high-fast
+    model: cursor-grok-4.6-high-fast
     effort: high
     seat: cursor-grok-cross-review
     review_independence: cross-family
@@ -245,7 +329,7 @@ runtime_routes:
     concurrency: family_serial
   external_second_opinion:
     provider: grok
-    model: grok-4.5
+    model: grok-4.6
     effort: high
     seat: claude-direction
     timeout_seconds: 600
@@ -261,7 +345,7 @@ runtime_routes:
     concurrency: family_serial
   final_review:
     provider: grok
-    model: grok-4.5
+    model: grok-4.6
     effort: high
     governance_effort: xhigh
     seat: codex-final-review

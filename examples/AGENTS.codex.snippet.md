@@ -10,11 +10,11 @@ Do not load every skill preemptively. Load the smallest relevant set.
 
 Use the shared standard as the canonical source:
 
-- Workflow standard: `~/Projects/agent-skill-advisor-layer/docs/development-workflow-standard.md`
-- Task routing: `~/Projects/agent-skill-advisor-layer/docs/task-routing.md`
-- Gate policy: `~/Projects/agent-skill-advisor-layer/docs/gate-policy.md`
-- Intent schema: `~/Projects/agent-skill-advisor-layer/schemas/intent.md`
-- Solution schema: `~/Projects/agent-skill-advisor-layer/schemas/solution.md`
+- Workflow standard: `<this-clone>/docs/development-workflow-standard.md`
+- Task routing: `<this-clone>/docs/task-routing.md`
+- Gate policy: `<this-clone>/docs/gate-policy.md`
+- Intent schema: `<this-clone>/schemas/intent.md`
+- Solution schema: `<this-clone>/schemas/solution.md`
 
 Default split:
 
