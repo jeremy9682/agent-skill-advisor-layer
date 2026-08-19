@@ -1,0 +1,62 @@
+# LiteLLM example — NO secrets. Copy out of git, then export keys.
+# Quota / endpoint router only. DSH seats stay in routing-policy.yaml.
+#
+# Start (loopback; config + keys outside git):
+#   mkdir -p ~/.config/litellm
+#   cp examples/litellm/config.example.yaml ~/.config/litellm/config.yaml
+#   source ~/.config/litellm/env.local   # export CMD_API_KEY + LITELLM_MASTER_KEY
+#   examples/litellm/start-proxy.sh
+
+model_list:
+  # Command Code OpenAI-compatible origin (this host). Replace model ids
+  # with whatever `GET {api_base}/models` returns for your account.
+  - model_name: gpt-5.6-sol
+    litellm_params:
+      model: openai/gpt-5.6-sol
+      api_base: https://api.commandcode.ai/provider/v1
+      api_key: os.environ/CMD_API_KEY
+    model_info:
+      mode: chat
+
+  - model_name: gpt-5.6-terra
+    litellm_params:
+      model: openai/gpt-5.6-terra
+      api_base: https://api.commandcode.ai/provider/v1
+      api_key: os.environ/CMD_API_KEY
+    model_info:
+      mode: chat
+
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: openai/deepseek/deepseek-v4-flash
+      api_base: https://api.commandcode.ai/provider/v1
+      api_key: os.environ/CMD_API_KEY
+    model_info:
+      mode: chat
+
+  # Optional second origin: keep a cheap Flash fallback on the same key.
+  - model_name: deepseek-v4-flash-budget
+    litellm_params:
+      model: openai/deepseek/deepseek-v4-flash
+      api_base: https://api.commandcode.ai/provider/v1
+      api_key: os.environ/CMD_API_KEY
+    model_info:
+      mode: chat
+
+router_settings:
+  routing_strategy: simple-shuffle
+  enable_pre_call_checks: true
+  fallbacks:
+    - gpt-5.6-sol: [gpt-5.6-terra, deepseek-v4-flash]
+    - gpt-5.6-terra: [deepseek-v4-flash]
+    - deepseek-v4-flash: [deepseek-v4-flash-budget]
+
+litellm_settings:
+  drop_params: true
+  # Per-proxy spend cap example (USD). Tune locally; 0-ish values fail closed.
+  max_budget: 20
+  budget_duration: 1d
+  request_timeout: 600
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
