@@ -46,7 +46,7 @@ never facts already recoverable from git, tests, or the intent.
 |---|---|
 | `intent_ref` | Repo-relative path to the frozen intent file, optional `#heading` anchor. The contract; never restated here. |
 | `event_id` | `evt-<UTC ISO8601 basic, fractional seconds, e.g. 20260711T090000.123456Z>-<from_seat>`. Second-resolution collided in real use (2026-07-11); microseconds required. |
-| `from_seat` | Producing seat, e.g. `claude-direction`, `claude-landing`, `codex-landing`, `codex-final-review`, `human`. |
+| `from_seat` | Producing seat, e.g. `claude-direction`, `claude-landing`, `codex-landing`, `codex-final-review`, `cursor-grok-cross-review`, `human`. A `cursor-*` seat records a Cursor-provider session; it is never an alias for a Codex seat. |
 | `to_seat` | Intended receiving seat, same vocabulary. |
 | `worktree` | `path @ branch @ commit` the receiver starts from — an absolute filesystem path, a branch name, and a full 40-char commit SHA. Git is the fact source; this only says where to look. **Cross-seat (esp. cross-family) handoffs MUST point the receiver at a *fresh* worktree created from `origin/<branch>` — write `<fresh-worktree-absolute-path> @ <branch> @ <40-char-SHA>`, never a shared, possibly-dirty local checkout: a dirty checkout satisfies the format yet lands the receiver on the wrong branch/commit (2026-07-13 drill).** The CLI (`agent_ledger.py`) mechanically enforces only the three-part `path @ branch @ commit` shape at `open` — it cannot tell a fresh worktree from a dirty one, so that half is a process norm. |
 | `file_scope` | `own[]` paths the receiver may touch, plus explicit `do_not_touch[]` paths. |

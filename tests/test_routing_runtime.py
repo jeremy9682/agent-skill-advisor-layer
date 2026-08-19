@@ -96,6 +96,17 @@ def test_mechanical_parallel_routes_disable_automatic_skill_body_injection():
         assert routing.resolve_binding(canon, route)["managed_skills"] == "disabled"
 
 
+def test_cursor_grok_cross_review_is_serial_and_cross_family():
+    canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
+    binding = routing.resolve_binding(canon, "cursor_grok_cross_review")
+    assert binding["provider"] == "cursor"
+    assert binding["model"] == "cursor-grok-4.5-high-fast"
+    assert binding["review_independence"] == "cross-family"
+    assert binding["serial_group"] == "cursor-grok-review"
+    assert binding["timeout_seconds"] == 900
+    assert binding["managed_skills"] == "disabled"
+
+
 def test_independent_supplement_preserves_canon_eligible_producer_routes():
     canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
     binding = routing.resolve_binding(canon, "secondary_final_review")

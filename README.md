@@ -75,6 +75,7 @@ agents to share the same rules:
 - [Gate policy](docs/gate-policy.md)
 - [Intent statement schema](schemas/intent.md)
 - [Solution note schema](schemas/solution.md)
+- [OSS reference policy](docs/oss-reference-policy.md) — research and prototype work judges technical value first; this shared policy is the sole full text.
 
 ## Repository ownership
 

@@ -59,7 +59,7 @@ except ModuleNotFoundError:  # Direct execution through the ~/.local/bin symlink
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "agent-providers.yaml"
 SEAT_RE = re.compile(
-    r"^(?:claude|codex|fable|opus|sonnet|human|founder)"
+    r"^(?:claude|codex|cursor|fable|opus|sonnet|human|founder)"
     r"(?:-[a-z]+(?:-[a-z]+)*)?$"
 )
 DEFAULT_RUN_TIMEOUT_SECONDS = 300

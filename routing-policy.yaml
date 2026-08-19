@@ -264,7 +264,7 @@ spawn_dispatch:
 #   timeout_seconds — default wall clock when caller omits --timeout-seconds
 #   serial_group    — flock lock name; same group never runs concurrently on one host
 #   concurrency     — family_serial requires serial_group; explicitly_parallel
-#                      is reserved for the two Cursor mechanical routes
+#                      is reserved for the two Cursor mechanical producer routes
 #   managed_skills  — disabled prevents auto-selected skill bodies from
 #                      inflating frozen mechanical prompts; explicit plan
 #                      context remains available through input_ref/bundles
@@ -290,6 +290,20 @@ runtime_routes:
     effort: high
     seat: claude-landing
     concurrency: explicitly_parallel
+    managed_skills: disabled
+  # Cursor Grok is the independent challenge/cross-review seat, not a native
+  # Codex subagent and not a replacement for the designated final-review seat.
+  # It is read-only when compiled with reviewer_for, and serialised so a
+  # review receipt has one unambiguous Cursor session/provider/model owner.
+  cursor_grok_cross_review:
+    provider: cursor
+    model: cursor-grok-4.5-high-fast
+    effort: high
+    seat: cursor-grok-cross-review
+    review_independence: cross-family
+    timeout_seconds: 900
+    serial_group: cursor-grok-review
+    concurrency: family_serial
     managed_skills: disabled
   ordinary_bug_fix:
     policy_ref: task_shapes.ordinary_bug_fix

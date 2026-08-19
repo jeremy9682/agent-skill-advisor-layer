@@ -54,7 +54,7 @@ def test_out_of_vocab_seat_rejected():
 
 def test_family_role_seats_accepted():
     for s in ("claude-direction", "codex-final-review", "codex-review", "human",
-              "founder", "fable-review", "codex-landing"):
+              "founder", "fable-review", "codex-landing", "cursor-grok-cross-review"):
         AL._validate_open(_ev(from_seat=s))  # must not raise
 
 
