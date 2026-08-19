@@ -16,13 +16,13 @@ cd agent-skill-advisor-layer
 
 `install.sh` 会：
 
-1. 安装**本 clone** 的启动器与 ledger。若 `~/.local/bin/agent-run` 已被占用（Beads `agent_run_beads_bridge.py` → `~/.agent-skill-advisor-layer-governance-clean`，仍是 Grok 4.5），**原文件不动**，改为安装 `~/.local/bin/agent-run-dispatch`。ledger 同理：`agent-ledger` 被占用时装 `agent-ledger-dispatch`；只有空闲时才链 `agent-ledger`。
+1. 安装**本 clone** 的启动器与 ledger。若 `~/.local/bin/agent-run` 已被占用（硬失败 wrapper，或历史上的 Beads `agent_run_beads_bridge.py`），**原文件不动**，改为安装 `~/.local/bin/agent-run-dispatch`。ledger 同理：`agent-ledger` 被占用时装 `agent-ledger-dispatch`；只有空闲时才链 `agent-ledger`。
 2. 若 `PATH` 上有 `dsh`，对 **web** 和 **headless** 执行 `dsh plugin add`：**本 clone** 的 `plugins/dsh-dispatch-pack` 与 `plugins/dsh-llm-cursor-acp`，再从已装 DSH 的 `node_modules` 把 `@deepseek-ai/schemastery`、`@deepseek-ai/dsh-skill-filesystem` 链到本仓 **gitignore 的** `node_modules`。
 3. 跑 `node gateway/local-gateway.mjs doctor`。
 
 ### 日常命令（本 clone）
 
-**PATH 上的 `agent-run` 若是 Beads（或其它包装），不要拿它做分派。** 那是另一套 canon。用 `-dispatch` 名字：
+**PATH 上的 `agent-run` 是硬失败陷阱（exit 2），不要拿它做分派。** 旧 Beads 编排用 `agent-run-beads`。日常分派用 `-dispatch` 名字：
 
 ```bash
 cd <clone>
@@ -34,11 +34,12 @@ python3 scripts/agent_ledger.py claim …
 agent-run-dispatch run auto --task-shape mechanical --checkpoint-event "$EVT" --cwd "$PWD" --timeout-seconds 480 '…read-only…'
 ```
 
-`node gateway/local-gateway.mjs run --via agent-run` **不是**日常入口：它不带 checkpoint，而且会打到 Beads。需要网关打到本 canon 时，设 `AGENT_RUN_BIN` 指向 `agent-run-dispatch`（或本 clone 的 `scripts/agent_provider_run.py`）。
+`node gateway/local-gateway.mjs run --via agent-run` **不是**日常入口：它不带 checkpoint，而且 PATH `agent-run` 会硬失败。需要网关打到本 canon 时，设 `AGENT_RUN_BIN` 指向 `agent-run-dispatch`（或本 clone 的 `scripts/agent_provider_run.py`）。旧 Beads 编排用 `agent-run-beads`。
 
 | 命令 | 典型目标 | Canon |
 | --- | --- | --- |
-| `agent-run` | Beads 桥 → `~/.agent-skill-advisor-layer-governance-clean` | Grok 4.5；**不要覆盖** |
+| `agent-run` | 硬失败 wrapper（stderr 警告后 exit 2） | 防止误走 Beads / Grok 4.5 |
+| `agent-run-beads` | Beads 桥 → `~/.agent-skill-advisor-layer-governance-clean` | Grok 4.5；旧 Beads 编排 |
 | `agent-run-dispatch` | 本 clone `scripts/agent_provider_run.py` | Grok 4.6 + `stage_gate` |
 | `agent-ledger` | 常常也是 governance-clean | 被占用就别动 |
 | `agent-ledger-dispatch` | 本 clone `scripts/agent_ledger.py` | 本 clone 的 ledger |
