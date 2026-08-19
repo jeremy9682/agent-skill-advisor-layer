@@ -309,3 +309,187 @@ def build_instruction_bom(
         },
     }
     return dict(body, digest=canonical_digest(body))
+
+
+STAGE_REVIEW_ROUTES = frozenset(
+    {
+        "codex_final_review",
+        "final_review",
+        "claude_final_review",
+        "fable_final_review",
+        "secondary_final_review",
+    }
+)
+SPAWN_FINAL_REVIEW_ROUTES = STAGE_REVIEW_ROUTES | {"arbitration"}
+_UNDISCLOSED_FAMILIES = frozenset({"", "unknown", "undisclosed"})
+
+
+def _require_mapping(value: object, name: str) -> dict:
+    if not isinstance(value, dict):
+        raise RoutingRuntimeError(f"{name} must be a mapping")
+    return value
+
+
+def stage_gate_policy(canon: dict) -> dict:
+    """Consume `final_review.stage_gate`. Missing or incomplete blocks fail closed."""
+
+    gate = _require_mapping(
+        _require_mapping(canon.get("final_review"), "final_review").get("stage_gate"),
+        "final_review.stage_gate",
+    )
+    model = gate.get("model")
+    floor = gate.get("review_effort_floor")
+    overlay = gate.get("overlay_still_applies")
+    if not model or floor not in {"high", "xhigh"} or overlay is not True:
+        raise RoutingRuntimeError("final_review.stage_gate is incomplete")
+    return {
+        "model": str(model),
+        "review_effort_floor": str(floor),
+        "overlay_still_applies": True,
+        "enforced_by": str(gate.get("enforced_by") or ""),
+    }
+
+
+def spawn_dispatch_policy(canon: dict) -> dict:
+    """Consume `spawn_dispatch`. Missing override list fails closed."""
+
+    block = _require_mapping(canon.get("spawn_dispatch"), "spawn_dispatch")
+    required = block.get("explicit_override_required_for")
+    if not isinstance(required, list) or not required:
+        raise RoutingRuntimeError(
+            "spawn_dispatch.explicit_override_required_for is missing"
+        )
+    if block.get("default_selection") != "inherit_parent":
+        raise RoutingRuntimeError(
+            "spawn_dispatch.default_selection must be inherit_parent"
+        )
+    resolution = _require_mapping(
+        block.get("final_review_resolution"),
+        "spawn_dispatch.final_review_resolution",
+    )
+    return {
+        "default_selection": "inherit_parent",
+        "explicit_override_required_for": [str(item) for item in required],
+        "precedence": [str(item) for item in (block.get("precedence") or [])],
+        "final_review_resolution": resolution,
+        "enforced_by": str(block.get("enforced_by") or ""),
+    }
+
+
+def cross_family_mandatory_shapes(canon: dict) -> frozenset[str]:
+    block = _require_mapping(
+        _require_mapping(canon.get("final_review"), "final_review").get(
+            "cross_family_mandatory"
+        ),
+        "final_review.cross_family_mandatory",
+    )
+    shapes = block.get("task_shapes")
+    if not isinstance(shapes, list) or not shapes:
+        raise RoutingRuntimeError(
+            "final_review.cross_family_mandatory.task_shapes is missing"
+        )
+    return frozenset(map(str, shapes))
+
+
+def spawn_requires_explicit_override(canon: dict, route_name: str | None) -> bool:
+    if not route_name:
+        return False
+    required = set(spawn_dispatch_policy(canon)["explicit_override_required_for"])
+    if "final_review" in required and route_name in SPAWN_FINAL_REVIEW_ROUTES:
+        return True
+    if (
+        "cross_family_mandatory" in required
+        and route_name in cross_family_mandatory_shapes(canon)
+    ):
+        return True
+    return False
+
+
+def validate_spawn_dispatch(
+    canon: dict,
+    *,
+    route_name: str | None,
+    inherit_parent: bool,
+    explicit_override: bool,
+) -> dict:
+    """Fail closed when a gated spawn inherits the parent without override."""
+
+    policy = spawn_dispatch_policy(canon)
+    gated = spawn_requires_explicit_override(canon, route_name)
+    if inherit_parent and gated and not explicit_override:
+        raise RoutingRuntimeError(
+            f"spawn for route {route_name!r} requires an explicit model/effort "
+            "override; inherit_parent is forbidden for final_review / "
+            "cross_family_mandatory"
+        )
+    if explicit_override:
+        status = "explicit-override"
+    elif inherit_parent:
+        status = "inherit-parent"
+    else:
+        status = "not-a-spawn"
+    return {
+        "status": status,
+        "gated": gated,
+        "default_selection": policy["default_selection"],
+    }
+
+
+def validate_stage_gate(
+    canon: dict,
+    *,
+    review_route: str | None,
+    reviewer_family: str,
+    producer_family: str,
+    producer_route: str | None = None,
+    risk_triggers: list[str] | None = None,
+) -> dict:
+    """Block same-family producer + stage final-reviewer except D3.
+
+    D3 (`secondary_final_review` of `ordinary_bug_fix`) may stay same-family
+    only when no risk overlay fired. Overlay or a cross_family_mandatory
+    producer route forces the reciprocal family (Codex producer → Fable).
+    Does not rewrite `runtime_routes` effort bindings.
+    """
+
+    if review_route not in STAGE_REVIEW_ROUTES:
+        return {"status": "not-stage-gate", "route": review_route}
+    gate = stage_gate_policy(canon)
+    spawn = spawn_dispatch_policy(canon)
+    triggers = [str(item) for item in (risk_triggers or []) if item]
+    overlay = bool(triggers)
+    d3_allowed = (
+        review_route == "secondary_final_review"
+        and producer_route == "ordinary_bug_fix"
+        and not overlay
+    )
+    disclosed = (
+        reviewer_family not in _UNDISCLOSED_FAMILIES
+        and producer_family not in _UNDISCLOSED_FAMILIES
+    )
+    same_family = disclosed and reviewer_family == producer_family
+    mandatory = (producer_route or "") in cross_family_mandatory_shapes(canon)
+    cross_family_required = overlay or mandatory
+    if producer_family == "openai" and cross_family_required:
+        if reviewer_family == "openai":
+            reciprocal = spawn["final_review_resolution"].get(
+                "reciprocal_reviewer_for_codex_producer"
+            )
+            raise RoutingRuntimeError(
+                "spawn_dispatch.precedence: Codex-family producer requires "
+                f"reciprocal reviewer {reciprocal!r}, not Sol"
+            )
+    if same_family and not d3_allowed:
+        raise RoutingRuntimeError(
+            "stage_gate forbids the same model family as both producer and "
+            f"stage final reviewer ({producer_family!r}); "
+            f"route={review_route!r} producer_route={producer_route!r}"
+        )
+    return {
+        "status": "d3-same-family-allowed" if d3_allowed else "stage-gate-ok",
+        "model": gate["model"],
+        "review_effort_floor": (
+            "xhigh" if overlay else gate["review_effort_floor"]
+        ),
+        "overlay": overlay,
+    }

@@ -181,15 +181,12 @@ final_review:
     model: gpt-5.6-sol
     review_effort_floor: high
     overlay_still_applies: true
-    # STATUS (2026-08-05, verified by independent review): this block is
-    # DECLARATIVE ONLY. `scripts/routing_runtime.py` parses `runtime_routes`
-    # and does NOT consume `final_review.stage_gate`; `resolve_binding(...,
-    # "stage_gate")` returns "unknown route". The runtime `codex_final_review`
-    # route still resolves to xhigh. Consequence: this never silently DOWNGRADES
-    # a machine-dispatched review, but the `high` stage-gate default is enforced
-    # by human/orchestrator dispatch, not by tooling. Do not cite this block as
-    # evidence that a stage gate ran at `high` — cite the actual dispatch.
-    enforced_by: orchestrator_dispatch   # not runtime_routes
+    # Consumed by routing_runtime.validate_stage_gate + agent-run. Same-family
+    # producer+stage-final-reviewer is blocked except D3 (secondary_final_review
+    # of ordinary_bug_fix with no overlay). Overlay / cross_family_mandatory
+    # still force the reciprocal family (Codex producer → Fable). Runtime route
+    # effort bindings are not silently downgraded; codex_final_review stays xhigh.
+    enforced_by: routing_runtime.validate_stage_gate
 
   default:
     independence: cross_family_blind    # Codex reviews Claude-family work
@@ -254,9 +251,10 @@ spawn_dispatch:
     risk_overlay_effort: xhigh
     reciprocal_reviewer_for_codex_producer: anthropic/claude-fable-5
   new_session_required_after_roster_change: true
-  # Honest status: enforced by orchestrator/prompt dispatch, not by
-  # routing_runtime.py — same status as final_review.stage_gate.
-  enforced_by: prompt_dispatch
+  # Consumed by routing_runtime.validate_spawn_dispatch + agent-run
+  # --spawn-inherit-parent / --spawn-explicit-override. Inherit without
+  # override is rejected for final_review and cross_family_mandatory routes.
+  enforced_by: routing_runtime.validate_spawn_dispatch
 
 # --- Executable bindings ----------------------------------------------------
 # This is the only runtime launcher table. Provider manifests describe how a

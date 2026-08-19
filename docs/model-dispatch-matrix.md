@@ -38,11 +38,20 @@ House rules that still win over this table:
 - Claude/Codex cross-seat work goes through `agent-run` (local subscriptions), not Cursor-billed Claude/GPT.
 - DSH implementation seats **must not** self-report GO/NO-GO.
 
-## Known drift (do not “fix” by silent enforcement)
+## Stage-gate enforcement
 
-`final_review.stage_gate` in `routing-policy.yaml` **declares** local `gpt-5.6-sol` / `high` for ordinary stage gates. `scripts/routing_runtime.py` compiles `runtime_routes` only and does **not** consume `stage_gate`; `resolve_binding(..., "stage_gate")` is unknown. Runtime `codex_final_review` is still `xhigh`. The `high` stage default is orchestrator/prompt dispatch, not mechanical. This batch does **not** add enforcement.
+`final_review.stage_gate` is consumed by `routing_runtime.validate_stage_gate`
+(wired through `agent-run`). Same-family producer + stage final-reviewer is
+blocked except D3 (`secondary_final_review` of `ordinary_bug_fix` with no
+overlay). Overlay / `cross_family_mandatory` still force the reciprocal family
+(Codex producer → Fable). Spawn inherit without `--spawn-explicit-override` is
+rejected for final-review routes. Successful review runs close their checkpoint.
 
-`runtime_routes.final_review` is the **Grok CLI** second-opinion/review binding (`grok-4.6` / high). It is not the Sol stage gate. Do not cite one as the other.
+`runtime_routes.codex_final_review` effort stays `xhigh` — the stage-gate `high`
+floor is not a silent downgrade of that binding.
+
+`runtime_routes.final_review` is the **Grok CLI** second-opinion/review binding
+(`grok-4.6` / high). It is not the Sol stage gate. Do not cite one as the other.
 
 ## `task_shape` → DSH preset / lane
 

@@ -84,10 +84,12 @@ second shuttle, DSH preset map, peak-hour DSH freeze) lives in
 [`model-dispatch-matrix.md`](model-dispatch-matrix.md). That page is commentary
 over `routing-policy.yaml`; the YAML still wins on conflict.
 
-**Known drift:** `final_review.stage_gate` declares Sol/`high` for ordinary
-stage gates, but `routing_runtime.py` does not consume that block
-(`codex_final_review` remains `xhigh`). Do not treat the YAML comment as
-mechanical enforcement. Quota/endpoint failover is LiteLLM
+`final_review.stage_gate` and `spawn_dispatch` are consumed by
+`routing_runtime.validate_stage_gate` / `validate_spawn_dispatch` (via
+`agent-run`). Same-family producer + stage final-reviewer is blocked except D3;
+spawn inherit without explicit override is rejected for gated review routes;
+successful review runs close their ledger checkpoint. `codex_final_review`
+effort stays `xhigh` (no silent downgrade). Quota/endpoint failover is LiteLLM
 ([`litellm-proxy.md`](litellm-proxy.md)), not this table.
 
 ## Advisory Specialist Catalog (agency-agents)

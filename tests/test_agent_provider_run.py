@@ -794,7 +794,7 @@ def test_route_doctor_keeps_historical_quota_outcome_as_nonblocking_warning(
         json.dumps(
             {
                 "provider_id": "grok",
-                "model_requested": "grok-4.5",
+                "model_requested": "grok-4.6",
                 "run_status": "completed",
                 "exit_code": 1,
                 "failure_class": "quota-exhausted",
@@ -861,7 +861,7 @@ def test_route_doctor_keeps_historical_quota_outcome_as_nonblocking_warning(
         "observed_at": active_now,
         "failure_class": "quota-exhausted",
     }
-    assert grok["model_evidence"]["grok-4.5"]["status"] == "recent-in-run-provider-outcome"
+    assert grok["model_evidence"]["grok-4.6"]["status"] == "recent-in-run-provider-outcome"
 
     route = report["routes"][0]
     assert route["route"] == "fable_final_review"
@@ -4551,3 +4551,95 @@ def test_repo_slug_rejects_conflicting_linked_worktree_override(tmp_path):
 
     with pytest.raises(agent_run.ProviderRunError, match="conflicts"):
         agent_run.repo_slug(linked)
+
+
+def test_spawn_inherit_without_override_is_rejected_for_final_review():
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    args = SimpleNamespace(spawn_inherit_parent=True, spawn_explicit_override=False)
+    with pytest.raises(agent_run.ProviderRunError, match="explicit model/effort"):
+        agent_run.enforce_spawn_dispatch(args, data, "codex_final_review")
+    ok = agent_run.enforce_spawn_dispatch(
+        SimpleNamespace(spawn_inherit_parent=True, spawn_explicit_override=True),
+        data,
+        "codex_final_review",
+    )
+    assert ok["status"] == "explicit-override"
+
+
+def test_stage_gate_blocks_sol_reviewing_codex_producer(tmp_path):
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path)
+    producer = {
+        "run_id": "codex-land",
+        "provider_id": "codex",
+        **verified_producer_model("codex", "gpt-5.6-terra", "openai"),
+        "seat": "codex-landing",
+        "session_id": "session-land",
+        "repo": "demo",
+        "run_status": "completed",
+        "exit_code": 0,
+        "mode": "execute",
+        "route": "standard_feature",
+        "risk_overlay": {"triggers": []},
+    }
+    (tmp_path / "demo.jsonl").write_text(json.dumps(producer) + "\n")
+    args = SimpleNamespace(producer_provider="codex", producer_run_id="codex-land")
+    _policy, producer_ref = agent_run.validate_review_independence(
+        "claude_final_review", "claude", args, data, "demo"
+    )
+    assert producer_ref["route"] == "standard_feature"
+    with pytest.raises(agent_run.ProviderRunError, match="same model family"):
+        agent_run.enforce_stage_gate(
+            data, "codex_final_review", "codex", "gpt-5.6-sol", producer_ref
+        )
+    allowed = agent_run.enforce_stage_gate(
+        data, "claude_final_review", "claude", "opus", producer_ref
+    )
+    assert allowed["status"] == "stage-gate-ok"
+
+
+def test_review_checkpoint_close_writes_closed_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        agent_ledger, "LEDGER_DIR", str(tmp_path / ".agent-ledger")
+    )
+    monkeypatch.setattr(
+        agent_run,
+        "_close_ledger_event",
+        lambda slug, event_id, seat, outcome: agent_ledger.close_event(
+            slug, event_id, seat, outcome, instant=False
+        ),
+    )
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    event_id = "evt-review-open"
+    rows = [
+        ledger_row(
+            event_id,
+            from_seat="claude-direction",
+            to_seat="codex-final-review",
+        ),
+        ledger_row(
+            "evt-claim",
+            from_seat="codex-final-review",
+            to_seat="codex-final-review",
+            decided=[f"claimed:{event_id} — review"],
+        ),
+    ]
+    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    result = agent_run.close_review_checkpoint(
+        "demo", event_id, "codex-final-review", "agent-run test completed"
+    )
+    assert result["status"] == "closed"
+    events = [
+        json.loads(line) for line in ledger.read_text().splitlines() if line
+    ]
+    assert any(
+        any(
+            value.startswith(f"closed:{event_id}")
+            for value in row["decided_rejected_open"]["decided"]
+        )
+        for row in events
+    )
+    with pytest.raises(agent_run.ProviderRunError, match="not currently claimed"):
+        agent_run.validate_checkpoint("demo", event_id, "codex-final-review")
