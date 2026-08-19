@@ -1,29 +1,71 @@
 # Skill Advisor Layer
 
-**面向高成本 Agent Skill 的主动建议层与治理层。**
-
-Skill Advisor Layer 用来帮助 Codex、Claude Code 以及其他支持 skill 的
-Agent 在合适的时候主动提醒有用 workflow，同时避免偷偷启动高成本、有副作用、
-需要权限确认的 skill。
+**模型分派 canon + 本机对接套件。** 一个公开仓库：clone 之后跑 `./scripts/install.sh`，定级策略、`agent-run`、DSH 插件、ZCode/MCP 网关都在这棵树里。不必再 clone 我们其它仓。
 
 [English README](README.md)
 
-## 为什么需要它
+## Quick Start
+
+**你需要已经有** Cursor **或** Claude **或** Codex 订阅（以及对应 CLI）。可选：官方 DeepSeek Harness、LiteLLM。它们是第三方运行时，像 Node 一样自己装。
+
+```bash
+git clone https://github.com/jeremy9682/agent-skill-advisor-layer.git
+cd agent-skill-advisor-layer
+./scripts/install.sh
+```
+
+`install.sh` 会：
+
+1. 把 `agent-run` 链到**本 clone** 的 `scripts/agent_provider_run.py`。若 `~/.local/bin/agent-run` 已存在且不是这份启动器（例如 Beads 包装），则原文件不动，改为安装 `~/.local/bin/agent-run-dispatch`。
+2. 若 `PATH` 上有 `dsh`，对 **web** 和 **headless** 执行 `dsh plugin add`：**本 clone** 的 `plugins/dsh-dispatch-pack` 与 `plugins/dsh-llm-cursor-acp`。
+3. 跑 `node gateway/local-gateway.mjs doctor`。
+
+然后：
+
+```bash
+agent-run routes                          # 或 agent-run-dispatch routes
+agent-run doctor --task-shape mechanical
+node gateway/local-gateway.mjs doctor
+```
+
+可选额度代理：`examples/litellm/`（把示例配置拷到 git 外；不要提交密钥）。官方 DSH：`npm i -g @deepseek-ai/dsh`，见 [docs/harness-opt-in.md](docs/harness-opt-in.md)。**不必**再 clone `dsh-skill-pack`、`dsh-cursor-codex` 或 harness fork。
+
+本 clone 提供：
+
+```text
+routing-policy.yaml              机器 canon（task_shape → 席位/模型）
+scripts/agent_provider_run.py    agent-run 启动器
+scripts/install.sh               一次安装
+skills/dsh-dispatch/             可移植分派 skill
+skills/skill-advisor/            高成本 skill 建议层
+skills/zcode-delegate-to-dsh/    ZCode → 本机插座
+gateway/                         dsh / agent-run / cursor-acp 薄 CLI
+server/dsh-mcp.mjs               MCP stdio（dsh_delegate / dsh_health）
+plugins/dsh-dispatch-pack/       给 `dsh plugin add` 的 Cordis 包
+plugins/dsh-llm-cursor-acp/      DSH 的 Cursor ACP adapter（MIT，无 node_modules）
+templates/zcode/                 MCP 配置片段
+examples/litellm/                可选 LiteLLM 示例
+docs/model-dispatch-matrix.md    散文矩阵
+VENDOR.md                        薄层来源
+```
+
+来源说明：[VENDOR.md](VENDOR.md)。ZCode / Cloud 边界：[docs/zcode-cloud-gateway.md](docs/zcode-cloud-gateway.md)。DSH 入口：[docs/dsh.md](docs/dsh.md)。
+
+## 为什么需要 skill advisor
 
 装了很多 skill 后，系统通常会走向两个极端：
 
 - **太被动**：有用的 skill 已经安装，但用户不点名就从来不会被建议。
 - **太激进**：Agent 一次加载或运行太多 skill，浪费上下文，也可能造成副作用。
 
-这个 repo 提供一个中间层：
+这个 repo 仍然提供中间层：
 
 1. 识别高成本 skill 的强触发信号。
 2. 只主动建议一个最相关的 workflow。
 3. 等用户明确批准后才执行。
 4. 小任务、紧急任务、无关任务时保持安静。
 
-它现在也承载一套可跨 Codex、Claude Code 和其他 agent 共享的
-skill-first 开发标准：
+可跨 Codex、Claude Code 和其他 agent 共享的 skill-first 标准：
 
 - [Skill-first workflow standard](docs/development-workflow-standard.md)
 - [Task routing](docs/task-routing.md)
@@ -31,31 +73,13 @@ skill-first 开发标准：
 - [Intent statement schema](schemas/intent.md)
 - [Solution note schema](schemas/solution.md)
 
-## 包含内容
-
-```text
-skills/skill-advisor/       路由 skill
-scripts/skill_audit.py      本地 skill 盘点与治理审计脚本
-examples/                   Codex / Claude 配置片段
-docs/                       路由、治理和 QA 文档
-schemas/                    intent 与 solution note 格式规范
-tests/                      轻量 pytest 测试
-```
-
 ## 仓库所有权
 
-本公共仓库是唯一的治理 canon：路由策略、provider 绑定、schema、gate、健康检查
-和 orchestrator 薄适配器都归这里维护。可执行 DAG 调度器及其 package/CI 放在独立的
-私有 `agent-run-orchestrator` 仓库；本仓库通过 `orchestrator.lock.json` 精确固定
-已审核的私有 commit。
+本公共仓库是唯一的治理 canon **也是**可安装的对接套件：路由策略、provider 绑定、schema、gate、健康检查、orchestrator 薄适配器、本机网关、MCP、以及 DSH 插件。可执行 DAG 调度器及其 package/CI 放在独立的私有 `agent-run-orchestrator` 仓库；本仓库通过 `orchestrator.lock.json` 精确固定已审核的私有 commit。
 
-运行证据只留本机。journal、checkpoint ledger、provider session、凭据、临时
-worktree、prompt、response 和 review bundle 都不得提交到任一仓库。这样既能公开
-审查治理规则，又不会暴露 provider/运行时内部信息，也不会产生第二套路由真相源。
+运行证据只留本机。journal、checkpoint ledger、provider session、凭据、临时 worktree、prompt、response 和 review bundle 都不得提交。这样既能公开审查治理规则，又不会暴露 provider/运行时内部信息，也不会产生第二套路由真相源。
 
-升级私有运行时时，应先审核并测试新的私有 commit，再只更新本仓库的
-`orchestrator.lock.json`，并回归公共 adapter 与治理测试。不要把 routing policy
-复制进私有 package。
+升级私有运行时时，应先审核并测试新的私有 commit，再只更新本仓库的 `orchestrator.lock.json`，并回归公共 adapter 与治理测试。不要把 routing policy 复制进私有 package。
 
 ## 默认覆盖的高成本 Skill
 
@@ -69,42 +93,37 @@ worktree、prompt、response 和 review bundle 都不得提交到任一仓库。
 | `lfg` | 从 plan 到 PR 的 hands-off 自主管线 | 只建议 |
 | `ship` / `overnight-execution` | 面向生产或长时间自主执行 | 只建议 |
 
-如果你的本地 skill 名称不同，可以改
-`skills/skill-advisor/SKILL.md`。
+如果你的本地 skill 名称不同，可以改 `skills/skill-advisor/SKILL.md`。
 
-## 安装
+## 给 Codex / Claude 的 skill 文件
 
 Codex：
 
 ```bash
-mkdir -p ~/.codex/skills/skill-advisor
+mkdir -p ~/.codex/skills/skill-advisor ~/.codex/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.codex/skills/skill-advisor/SKILL.md
+cp skills/dsh-dispatch/SKILL.md ~/.codex/skills/dsh-dispatch/SKILL.md
 ```
 
 Claude Code：
 
 ```bash
-mkdir -p ~/.claude/skills/skill-advisor
+mkdir -p ~/.claude/skills/skill-advisor ~/.claude/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.claude/skills/skill-advisor/SKILL.md
+cp skills/dsh-dispatch/SKILL.md ~/.claude/skills/dsh-dispatch/SKILL.md
 ```
 
-然后把 `examples/AGENTS.codex.snippet.md` 里的路由规则加入全局或项目级
-`AGENTS.md`。
+然后把 `examples/AGENTS.codex.snippet.md` 加到全局或项目 `AGENTS.md`。Claude 项目可用 `examples/CLAUDE.snippet.md` 和 `examples/CLAUDE.settings.local.example.json`。
 
-Claude 项目可以参考 `examples/CLAUDE.snippet.md` 和
-`examples/CLAUDE.settings.local.example.json` 配置项目说明与项目级
-`skillOverrides`。
+## 使用方式
 
-## 使用模式
-
-当信号足够强时，Agent 应该这样说：
+强信号出现时，Agent 应说：
 
 ```text
 This looks like a candidate for <skill> because <reason>. I can run it if you approve.
 ```
 
-用户必须明确说“运行、启动、启用、配对、配置、launch 这个 workflow”后，
-Agent 才能执行目标 high-cost skill。单纯描述一个大目标，不等于批准执行。
+在用户明确说 run / start / enable / pair / set up / launch 该 workflow 之前，**不要**执行。
 
 ## 本地审计
 
@@ -112,30 +131,18 @@ Agent 才能执行目标 high-cost skill。单纯描述一个大目标，不等�
 python3 scripts/skill_audit.py --write-manifest --report --syntax-check --dry-run-sync
 ```
 
-审计脚本会检查 skill 元数据、调用策略、脚本语法、依赖状态和更新安全性。默认
-策略是保守的：
-
-- 复制型 skill 只有在上次 manifest 能证明本地未修改时才允许安全同步；
-- git 管理或本地修改过的 skill 只报告差异，不自动覆盖；
-- 高成本 skill 会被标记为 `suggest-confirm`，不会自动运行。
-
-## 隐私与安全
-
-- 审计脚本只在本地运行。
-- 脚本可能读取本地 skill 目录和本地 agent session 文件，用于估算使用情况。
-- 脚本不会上传本地文件、prompt、报告或 session 内容。
-- 生成的 manifest 和 report 可能包含本机路径；公开前请先审查。
-- `.gitignore` 默认排除了生成的 manifest 和 report JSON 文件。
+审计在本机运行，不上传文件。生成的 manifest / report 可能含本地路径，发布前请审阅。
 
 ## QA
 
 ```bash
 python3 -m py_compile scripts/skill_audit.py
 python3 -m pytest tests
+node --test gateway/local-gateway.test.mjs
 ```
 
-黑盒路由测试用例见 `docs/qa-matrix.md`。
+黑盒用例见 `docs/qa-matrix.md`。
 
 ## License
 
-MIT.
+MIT。vendored 文件保留原版权声明，见 [VENDOR.md](VENDOR.md)。

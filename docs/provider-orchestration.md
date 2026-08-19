@@ -72,11 +72,21 @@ Ruff and diff checks.
 
 ## Install the local entrypoint
 
+Prefer the clone-root installer (symlink, optional DSH plugins, gateway doctor):
+
+```bash
+./scripts/install.sh
+```
+
+If `~/.local/bin/agent-run` already exists and is not this clone's launcher,
+`install.sh` leaves it untouched and installs `agent-run-dispatch` instead.
+Manual equivalent:
+
 ```bash
 ln -sfn \
-  /path/to/agent-skill-advisor-layer/scripts/agent_provider_run.py \
+  "$PWD/scripts/agent_provider_run.py" \
   ~/.local/bin/agent-run
-chmod +x /path/to/agent-skill-advisor-layer/scripts/agent_provider_run.py
+chmod +x "$PWD/scripts/agent_provider_run.py"
 ```
 
 ## Discover providers

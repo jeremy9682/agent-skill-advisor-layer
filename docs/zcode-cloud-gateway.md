@@ -6,9 +6,8 @@
 不要新写 routing yaml。不要引入 CCR / RouteLLM / Bifrost。额度改道走
 [`docs/litellm-proxy.md`](litellm-proxy.md)，与本文正交。
 
-可运行适配在 sibling 仓
-[dsh-cursor-codex](https://github.com/jeremy9682/dsh-cursor-codex)
-的 `gateway/`、`templates/zcode/`、`skills/zcode-delegate-to-dsh/`。
+可运行适配就在**本 clone**：`gateway/`、`templates/zcode/`、
+`skills/zcode-delegate-to-dsh/`、`server/dsh-mcp.mjs`。
 
 ## 三层不要混
 
@@ -22,42 +21,38 @@
 
 ```text
 ZCode（本机 MCP 客户端 / shell）
-  ├─ MCP stdio ──────────────► dsh-cursor-codex/server/dsh-mcp.mjs
+  ├─ MCP stdio ──────────────► <this-clone>/server/dsh-mcp.mjs
   │                              └─ dsh --profile headless
   ├─ shell ──────────────────► agent-run run auto --task-shape <shape>
   │                              └─ routing-policy.yaml
   └─ shell ──────────────────► cursor-agent acp   （Cursor 当 worker）
 
 ACP 客户端（Zed / JetBrains / 自写 client）
-  ├─ dsh --profile acp  /  dsh-acp
+  ├─ dsh --profile acp
   ├─ cursor-agent acp    （官方 Cursor ACP）
   └─ claude-agent-acp    （Claude Agent SDK → ACP）
-
-可选本机 HTTP（仅 loopback）
-  └─ coder/agentapi 包一层已有 CLI（PTY→HTTP），不是新路由
 ```
 
 Cursor 与 Codex **不是** ACP 客户端：它们当 agent（被调用方），不能加载第三方
-ACP agent。ZCode 走 MCP 或 shell。方向事实与
-[dsh-cursor-codex integration guide](https://github.com/jeremy9682/dsh-cursor-codex/blob/main/docs/integration-guide.md)
-一致。
+ACP agent。ZCode 走 MCP 或 shell。
 
 ## 如何调用
 
-先 `doctor`，再按通道派活。路径按本机 checkout 替换。
+先 `./scripts/install.sh`（或至少 `node gateway/local-gateway.mjs doctor`），再按通道派活。
 
 MCP / gateway `--via dsh` 走 `dsh --profile headless`（`DSH_MCP_PROFILE` /
 `DSH_GATEWAY_PROFILE` 可覆盖，默认不要改成 web）。若默认 provider 是
-`cursor-acp`，必须把 adapter 和 skill pack 装进 headless，来源与 web 相同：
-`dsh plugin --profile headless add …`。只装 web 会 `NO_ADAPTER`。
+`cursor-acp`，必须把 **本 clone** 的 adapter 和 dispatch pack 装进 headless，
+来源与 web 相同。只装 web 会 `NO_ADAPTER`。
 
 ```bash
 # 插座自检（不打 Cloud、不读凭据）
-node /path/to/dsh-cursor-codex/gateway/local-gateway.mjs doctor
+node gateway/local-gateway.mjs doctor
 
 # 1) ZCode / 任意 MCP 客户端 → DSH
 #    把 templates/zcode/config.snippet.json 的 mcp.servers.dsh
 #    合并进 ~/.zcode/cli/config.json（User）或 <repo>/.zcode/config.json（Workspace）
+#    把 $REPO_ROOT 换成本 clone 的绝对路径（install.sh 会打印填好的片段）
 #    然后在 ZCode 里调 MCP 工具 dsh_delegate / dsh_health
 
 # 2) 无 MCP 时，同一条 headless 命令
@@ -70,23 +65,18 @@ agent-run run auto --task-shape ordinary_bug_fix \
 
 # 4) 要 Cursor 当 worker：官方 ACP stdio，不是 HTTP
 cursor-agent acp
-# 一句话封装（本机已登录的 cursor-agent）：
-node /path/to/dsh-cursor-codex/gateway/local-gateway.mjs run --via cursor-acp \
+node gateway/local-gateway.mjs run --via cursor-acp \
   --cwd /path/to/repo \
   "Say hello in one sentence."
-
-# 5) 可选：用已收藏的 coder/agentapi 把 CLI 包成本机 HTTP（默认 :3284）
-#    仅 --allowed-hosts localhost；不要对公网暴露
-agentapi server --type=cursor --allowed-hosts localhost -- cursor-agent
 ```
 
-ZCode skill：把
-`dsh-cursor-codex/skills/zcode-delegate-to-dsh` 拷进 ZCode skills 目录
+ZCode skill：把 `skills/zcode-delegate-to-dsh` 拷进 ZCode skills 目录
 （或用 `$` 点名），agent 会按 MCP → gateway CLI → `dsh`/`agent-run` 的顺序选通道。
 
-`agent-run` 的安装与 journal 边界见
+`agent-run` 的安装见 `./scripts/install.sh` 与
 [`docs/provider-orchestration.md`](provider-orchestration.md)。
-DSH 侧资产见 [`docs/dsh.md`](dsh.md)。
+DSH 侧资产见 [`docs/dsh.md`](dsh.md)。官方 harness 不要拷进本仓：
+[`docs/harness-opt-in.md`](harness-opt-in.md)。
 
 ## Cloud 边界（硬拒绝）
 
@@ -95,41 +85,35 @@ DSH 侧资产见 [`docs/dsh.md`](dsh.md)。
 | 表面 | 事实 | 本网关 |
 | --- | --- | --- |
 | `cursor-agent acp` | 本机 stdio JSON-RPC，官方入口 | ✓ 直接复用 |
-| Cursor 桌面 MCP | 本机 `~/.cursor/mcp.json` | ✓ ZCode 可 import / 自配同款 dsh MCP |
-| Cursor Cloud Agents REST（`https://api.cursor.com/v1/agents`） | 在**远端沙箱**拉起 Cloud agent，面向 GitHub repo | ✗ 打不到本机 `agent-run` / `dsh web :3080` / MCP stdio |
+| Cursor 桌面 MCP | 本机 MCP 配置 | ✓ ZCode 可 import / 自配同款 dsh MCP |
+| Cursor Cloud Agents REST | 在**远端沙箱**拉起 Cloud agent | ✗ 打不到本机 `agent-run` / `dsh web` / MCP stdio |
 | Cloud ACP | 无。ACP 是进程 stdin/stdout，不是公网 URL | ✗ |
 | Dashboard team MCP | 官方 ACP 模式**不**加载 | ✗ |
 | 把 Cloud 当 `--via` | 无本地 socket | `local-gateway.mjs` **exit 2**，错误码 `CLOUD_NO_LOCAL_HTTP` |
 
 因此：ZCode 只在**本机**接到 DSH / `agent-run` / `cursor-agent acp`。
 不要把 `api.cursor.com` 配成 LiteLLM upstream，也不要写「Cloud HTTP 网关」。
-远端 Cloud agent 是另一个产品；要用它，走 Cursor 自己的远程 API，且接受它看不到本机 loopback。
 
 ## 直接复用（协议），不搬 runtime
 
 - [Agent Client Protocol](https://github.com/agentclientprotocol/agent-client-protocol) — editor ↔ agent 的 JSON-RPC。
 - [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp) — Claude Agent SDK 暴露成 ACP。
 - Cursor 官方 [`agent acp` / `cursor-agent acp`](https://cursor.com/docs/cli/acp) — 本机 Cursor worker。
-- 本地已收藏 [`coder/agentapi`](https://github.com/coder/agentapi)（`/Users/zihan/Projects/agent-orchestration-reference-repos/agentapi`）— 有 CLI 时的 PTY→HTTP；含实验性 ACP IO（`x/acpio`）。
-- 本机 [dsh-cursor-codex](https://github.com/jeremy9682/dsh-cursor-codex) MCP（`dsh_delegate`）与 ACP profile（`dsh --profile acp`）。
-
-[`langgenius/mosoo-agent-driver`](https://github.com/langgenius/mosoo-agent-driver)
-把 Claude Agent SDK / Codex app-server / ACP 收成一套 Driver 事件。
-**只参考协议矩阵，不搬 Durable Object / 沙箱 runtime。**
+- 本 clone 的 MCP（`dsh_delegate`）与 DSH ACP profile（`dsh --profile acp`）。
 
 ## 明确不做
 
 - 新 `routing-*.yaml` 或改 `routing-policy.yaml` 的 `task_shapes`
 - CCR / RouteLLM / Bifrost / cli-agent-gateway 当产品
-- 改 LiteLLM example / 生产 `~/.dsh/settings.yaml`
-- 改 deepseek-harness `subagent-command-code`
+- 改 LiteLLM example / 生产 DSH `settings.yaml` 默认
+- 改 deepseek-harness `subagent-command-code`（见 [harness-opt-in.md](harness-opt-in.md)）
 - 把 MCP/ACP 绑到非 loopback 端口
 - 在任务文本里放 API key
 
 ## 验证
 
 ```bash
-node /path/to/dsh-cursor-codex/gateway/local-gateway.mjs doctor
+node gateway/local-gateway.mjs doctor
 agent-run doctor
 dsh --version
 cursor-agent acp   # 应占用 stdio；Ctrl-C 退出。不要对 Cloud 做同样的事
