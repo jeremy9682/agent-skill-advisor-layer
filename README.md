@@ -48,7 +48,7 @@ tests/                      Lightweight pytest coverage
 
 ## DeepSeek Harness
 
-This layer is provider-neutral. For the DSH-facing entry point — which assets to use where, and a DSH-native end-to-end loop — see [docs/dsh.md](docs/dsh.md).
+This layer is provider-neutral. For the DSH-facing entry point — which assets to use where, and a DSH-native end-to-end loop — see [docs/dsh.md](docs/dsh.md). ZCode talks to the same canon over MCP / `agent-run` / Cursor ACP; Cursor Cloud is not a local HTTP socket — see [docs/zcode-cloud-gateway.md](docs/zcode-cloud-gateway.md).
 
 This public repository is the single governance canon: routing policy, provider
 bindings, schemas, gates, health inspection, and the thin orchestrator adapter
