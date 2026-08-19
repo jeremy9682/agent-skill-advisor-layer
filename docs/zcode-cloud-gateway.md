@@ -46,6 +46,11 @@ ACP agent。ZCode 走 MCP 或 shell。方向事实与
 
 先 `doctor`，再按通道派活。路径按本机 checkout 替换。
 
+MCP / gateway `--via dsh` 走 `dsh --profile headless`（`DSH_MCP_PROFILE` /
+`DSH_GATEWAY_PROFILE` 可覆盖，默认不要改成 web）。若默认 provider 是
+`cursor-acp`，必须把 adapter 和 skill pack 装进 headless，来源与 web 相同：
+`dsh plugin --profile headless add …`。只装 web 会 `NO_ADAPTER`。
+
 ```bash
 # 插座自检（不打 Cloud、不读凭据）
 node /path/to/dsh-cursor-codex/gateway/local-gateway.mjs doctor
