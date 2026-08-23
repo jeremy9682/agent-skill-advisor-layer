@@ -3219,6 +3219,235 @@ def test_checkpoint_rejects_malformed_rows(tmp_path, monkeypatch):
         agent_run.validate_checkpoint("demo", "incomplete", "codex-landing")
 
 
+def test_checkpoint_accepts_exact_legacy_informational_dispatch_row(
+    tmp_path,
+    monkeypatch,
+):
+    """Pre-schema dispatch receipts are evidence, not checkpoint transitions.
+
+    The live carDealer ledger contains this exact nine-field shape from before
+    the checkpoint schema was locked.  A strictly recognised informational
+    receipt must not block every later governed run, while arbitrary malformed
+    rows remain fail-closed (covered by the adjacent rejection test).
+    """
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    event_id = "evt-demo-human"
+    legacy_dispatch = {
+        "event_id": "evt-legacy-dispatch",
+        "ts": "2026-08-18T19:05:36.367122Z",
+        "project": "demo",
+        "seat": "codex-orchestrator",
+        "kind": "dispatch",
+        "summary": "historical parallel dispatch summary",
+        "refs": {"lanes": ["one", "two"]},
+        "next_action": "monitor historical lanes",
+        "verification": "session.list",
+    }
+    rows = [
+        legacy_dispatch,
+        ledger_row(event_id),
+        ledger_row(
+            "evt-claim",
+            from_seat="codex-landing",
+            to_seat="codex-landing",
+            decided=[f"claimed:{event_id} — work"],
+        ),
+    ]
+    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    checkpoint = agent_run.validate_checkpoint("demo", event_id, "codex-landing")
+
+    assert checkpoint["owner"] == "codex-landing"
+    assert checkpoint["event_id"] == event_id
+
+
+@pytest.mark.parametrize("legacy_taint", [None, []])
+def test_checkpoint_accepts_legacy_narrative_summary_without_boolean_taint(
+    tmp_path,
+    monkeypatch,
+    legacy_taint,
+):
+    """A pre-schema narrative row is inert when it cannot encode a marker."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    event_id = "evt-demo-human"
+    legacy_summary = ledger_row("evt-legacy-summary")
+    if legacy_taint is None:
+        legacy_summary.pop("taint")
+    else:
+        legacy_summary["taint"] = legacy_taint
+    legacy_summary["decided_rejected_open"] = "historical review summary"
+    legacy_summary["worktree"] = "main 308389f5"
+    rows = [
+        legacy_summary,
+        ledger_row(event_id),
+        ledger_row(
+            "evt-claim",
+            from_seat="codex-landing",
+            to_seat="codex-landing",
+            decided=[f"claimed:{event_id} — work"],
+        ),
+    ]
+    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    checkpoint = agent_run.validate_checkpoint("demo", event_id, "codex-landing")
+
+    assert checkpoint["owner"] == "codex-landing"
+
+
+def test_checkpoint_rejects_legacy_narrative_summary_that_looks_like_transition(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    row = ledger_row("evt-legacy-summary")
+    row.pop("taint")
+    row["decided_rejected_open"] = "claimed:evt-target"
+    ledger.write_text(json.dumps(row) + "\n")
+
+    with pytest.raises(agent_run.ProviderRunError, match="exact 10-field schema"):
+        agent_run.validate_checkpoint("demo", "evt-target", "codex-landing")
+
+
+def test_checkpoint_ignores_unrelated_historical_transition_debt(
+    tmp_path,
+    monkeypatch,
+):
+    """Old debt stays visible to ledger fold but cannot brick every new run."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    current_id = "evt-current"
+    rows = [
+        ledger_row("evt-old", intent_ref="docs/intents/old-a.md"),
+        ledger_row(
+            "evt-old-close",
+            from_seat="codex-landing",
+            intent_ref="docs/intents/old-b.md",
+            decided=["closed:evt-old — historical cross-intent debt"],
+        ),
+        ledger_row(current_id, intent_ref="docs/intents/current.md"),
+        ledger_row(
+            "evt-current-claim",
+            from_seat="codex-landing",
+            to_seat="codex-landing",
+            intent_ref="docs/intents/current.md",
+            decided=[f"claimed:{current_id} — current work"],
+        ),
+    ]
+    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    checkpoint = agent_run.validate_checkpoint("demo", current_id, "codex-landing")
+
+    assert checkpoint["owner"] == "codex-landing"
+
+
+def test_checkpoint_fails_closed_on_malformed_cross_intent_marker_naming_target(
+    tmp_path,
+    monkeypatch,
+):
+    """A cross-intent row that names the target with a malformed marker must
+    stay in the relevance closure and fail closed, not be filtered out.
+
+    ``claimed:evt-target malformed`` is not a well-formed marker, but it still
+    names the requested checkpoint.  Ignoring it would let a foreign intent
+    appear to claim the target without any governed transition record.
+    """
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    event_id = "evt-target"
+    rows = [
+        ledger_row(event_id, intent_ref="docs/intents/target.md"),
+        ledger_row(
+            "evt-cross",
+            from_seat="codex-landing",
+            intent_ref="docs/intents/other.md",
+            decided=[f"claimed:{event_id} malformed"],
+        ),
+        ledger_row(
+            "evt-claim",
+            from_seat="codex-landing",
+            to_seat="codex-landing",
+            intent_ref="docs/intents/target.md",
+            decided=[f"claimed:{event_id} — work"],
+        ),
+    ]
+    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    with pytest.raises(
+        agent_run.ProviderRunError, match="malformed transition marker"
+    ):
+        agent_run.validate_checkpoint("demo", event_id, "codex-landing")
+
+
+def test_checkpoint_rejects_legacy_narrative_summary_with_explicit_null_taint(
+    tmp_path,
+    monkeypatch,
+):
+    """Explicit taint:null must not be accepted as a legacy narrative row.
+
+    Only a missing ``taint`` field or an explicit empty list is eligible;
+    a YAML/JSON null is a real value and must fail closed instead.
+    """
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    event_id = "evt-demo-human"
+    legacy_summary = ledger_row("evt-legacy-summary")
+    legacy_summary["taint"] = None
+    legacy_summary["decided_rejected_open"] = "historical review summary"
+    legacy_summary["worktree"] = "main 308389f5"
+    rows = [
+        legacy_summary,
+        ledger_row(event_id),
+        ledger_row(
+            "evt-claim",
+            from_seat="codex-landing",
+            to_seat="codex-landing",
+            decided=[f"claimed:{event_id} — work"],
+        ),
+    ]
+    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    with pytest.raises(agent_run.ProviderRunError, match="taint must be true/false"):
+        agent_run.validate_checkpoint("demo", event_id, "codex-landing")
+
+
+def test_checkpoint_reports_physical_row_numbers_after_relevance_filtering(
+    tmp_path,
+    monkeypatch,
+):
+    """Violations found after checkpoint-relevance filtering must cite the
+    original physical ledger row, not the renumbered subset position.
+    """
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    ledger = tmp_path / ".agent-ledger" / "demo.jsonl"
+    ledger.parent.mkdir()
+    rows = [
+        ledger_row("evt-old", intent_ref="docs/intents/old.md"),
+        ledger_row("evt-target", intent_ref="docs/intents/target.md"),
+        ledger_row(
+            "evt-bad",
+            from_seat="codex-landing",
+            intent_ref="docs/intents/target.md",
+            decided=["claimed:evt demo"],
+        ),
+    ]
+    ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    with pytest.raises(
+        agent_run.ProviderRunError,
+        match="row 3.*malformed transition marker",
+    ):
+        agent_run.validate_checkpoint("demo", "evt-target", "codex-landing")
+
+
 @pytest.mark.parametrize(
     ("rows", "message"),
     [
@@ -4424,6 +4653,85 @@ def test_no_skills_does_not_require_local_skill_manifest(tmp_path, monkeypatch, 
     assert len(journals) == 1, journals
     row = json.loads(journals[0].read_text().strip().splitlines()[-1])
     assert row["skill_evidence"]["routing_status"] == "explicitly-disabled-for-run"
+
+
+def test_governed_route_with_managed_skills_disabled_skips_skill_router(
+    tmp_path, monkeypatch,
+):
+    """The route policy, not a caller-only flag, disables managed skills."""
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    data["journal"]["root"] = str(tmp_path / "journal")
+    monkeypatch.setattr(agent_run, "validate_checkpoint", lambda *_args: {})
+    monkeypatch.setattr(agent_run, "resolve_binary", lambda _provider: Path("/bin/echo"))
+    monkeypatch.setattr(agent_run, "binary_version", lambda *_args: "test-cursor")
+    monkeypatch.setattr(agent_run, "session_snapshot", lambda _provider: {})
+    monkeypatch.setattr(
+        agent_run,
+        "validate_provider_model",
+        lambda *_args, **_kwargs: {
+            "status": "catalog-listed",
+            "models": [{"id": "composer-2.5-fast"}],
+        },
+    )
+    monkeypatch.setattr(
+        agent_run,
+        "select_skills",
+        lambda *_args, **_kwargs: pytest.fail(
+            "managed_skills=disabled must bypass the skill router"
+        ),
+    )
+
+    def fake_stream(command, **_kwargs):
+        return (
+            subprocess.CompletedProcess(command, 0, stdout="OK", stderr=""),
+            "completed",
+            agent_run.empty_stage_telemetry(),
+            [
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "session_id": "cursor-route-no-skills",
+                    "model_id": "composer-2.5-fast",
+                },
+                {
+                    "type": "result",
+                    "session_id": "cursor-route-no-skills",
+                    "model_id": "composer-2.5-fast",
+                    "result": "OK",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(agent_run, "run_cursor_stream_json_process", fake_stream)
+    args = SimpleNamespace(
+        provider="auto",
+        task_shape="mechanical",
+        model=None,
+        effort=None,
+        seat=None,
+        producer_provider=None,
+        producer_run_id=None,
+        checkpoint_event="evt-mechanical-no-skills",
+        risk_trigger=[],
+        cwd=str(tmp_path),
+        mode="read-only",
+        allow_write=False,
+        skill=["auto"],
+        show_stderr=False,
+        no_provider_tools=False,
+        no_skills=False,
+        timeout_seconds=10,
+        minimal_runtime=False,
+        trust_workspace=True,
+        prompt="governed mechanical route",
+    )
+
+    assert agent_run.run_provider(args, data) == 0
+    row = json.loads(
+        next((tmp_path / "journal").glob("*.jsonl")).read_text().splitlines()[-1]
+    )
+    assert row["skill_evidence"]["routing_status"] == "disabled-by-route"
+    assert row["skill_evidence"]["selected"] == []
 
 
 def test_cursor_run_prefers_native_stream_identity_over_ambiguous_file_diff(

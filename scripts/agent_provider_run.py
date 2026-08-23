@@ -31,6 +31,7 @@ import yaml
 try:
     from scripts.ledger_core import FIELDS as LEDGER_FIELDS
     from scripts.ledger_core import checkpoint_state
+    from scripts.ledger_core import markers as ledger_markers
     from scripts.routing_runtime import (
         RoutingRuntimeError,
         build_instruction_bom,
@@ -44,6 +45,7 @@ try:
 except ModuleNotFoundError:  # Direct execution through the ~/.local/bin symlink.
     from ledger_core import FIELDS as LEDGER_FIELDS
     from ledger_core import checkpoint_state
+    from ledger_core import markers as ledger_markers
     from routing_runtime import (
         RoutingRuntimeError,
         build_instruction_bom,
@@ -85,6 +87,28 @@ VERIFIED_BROKER_SESSION_STATUSES = frozenset(
         "attributed-single-artifact",
         "attributed-correlated-artifacts",
         "attributed-stream-json",
+    }
+)
+LEGACY_INFORMATIONAL_DISPATCH_FIELDS = frozenset(
+    {
+        "event_id",
+        "ts",
+        "project",
+        "seat",
+        "kind",
+        "summary",
+        "refs",
+        "next_action",
+        "verification",
+    }
+)
+LEGACY_INFORMATIONAL_DISPATCH_TS_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
+)
+LEGACY_NARRATIVE_SUMMARY_FIELD_SETS = frozenset(
+    {
+        frozenset(LEDGER_FIELDS),
+        frozenset(set(LEDGER_FIELDS) - {"taint"}),
     }
 )
 
@@ -2177,6 +2201,203 @@ def cursor_stream_session_record(
     return record
 
 
+def normalize_legacy_informational_dispatch(row: object, slug: str) -> dict | None:
+    """Project an exact pre-schema dispatch receipt into inert checkpoint form.
+
+    Before the ten-field checkpoint schema was locked, the orchestration seat
+    appended a nine-field ``kind=dispatch`` summary to some ledgers.  Those
+    records are historical evidence only: they neither open nor transition a
+    checkpoint.  Reject every other non-canonical shape, and require the
+    embedded project to match the ledger being validated, so this compatibility
+    path cannot become a generic malformed-row escape hatch.
+
+    The projection is in memory only.  It preserves the original event id and
+    physical row position for downstream violation reporting; the append-only
+    ledger on disk is never rewritten.
+    """
+    if not isinstance(row, dict) or set(row) != LEGACY_INFORMATIONAL_DISPATCH_FIELDS:
+        return None
+    if row.get("kind") != "dispatch" or row.get("project") != slug:
+        return None
+    event_id = row.get("event_id")
+    seat = row.get("seat")
+    ts = row.get("ts")
+    string_fields = (
+        event_id,
+        seat,
+        ts,
+        row.get("summary"),
+        row.get("next_action"),
+        row.get("verification"),
+    )
+    if not all(isinstance(value, str) and value.strip() for value in string_fields):
+        return None
+    if not str(event_id).startswith("evt-") or not SEAT_RE.fullmatch(str(seat)):
+        return None
+    if not LEGACY_INFORMATIONAL_DISPATCH_TS_RE.fullmatch(str(ts)):
+        return None
+    if not isinstance(row.get("refs"), dict):
+        return None
+    return {
+        "intent_ref": f"legacy-informational-dispatch:{event_id}",
+        "event_id": event_id,
+        "from_seat": seat,
+        "to_seat": seat,
+        "worktree": "legacy informational dispatch @ unknown @ " + "0" * 40,
+        "file_scope": {"own": [], "do_not_touch": []},
+        "decided_rejected_open": {
+            "decided": [],
+            "rejected": [],
+            "open": [str(row["summary"])],
+        },
+        "verification": row["verification"],
+        "next_action": row["next_action"],
+        "taint": True,
+    }
+
+
+def normalize_legacy_narrative_summary(row: object) -> dict | None:
+    """Project a marker-free pre-schema narrative row into inert form.
+
+    A short-lived writer emitted the canonical field names except ``taint``
+    and stored a human summary string where the structured
+    ``decided_rejected_open`` object belongs.  It cannot be allowed to encode a
+    transition, so marker-like summaries are rejected.  Empty file scope is
+    required because these rows described completed waves, not owned work.
+    Only a missing ``taint`` field or an explicit empty list is eligible; a
+    real null value fails closed as a malformed row instead.
+    """
+    if not isinstance(row, dict) or frozenset(row) not in LEGACY_NARRATIVE_SUMMARY_FIELD_SETS:
+        return None
+    if "taint" in row and row["taint"] != []:
+        return None
+    summary = row.get("decided_rejected_open")
+    if not isinstance(summary, str) or not summary.strip():
+        return None
+    if summary.lstrip().startswith(("claimed:", "closed:")):
+        return None
+    scope = row.get("file_scope")
+    if scope != {"own": [], "do_not_touch": []}:
+        return None
+    required_strings = (
+        row.get("intent_ref"),
+        row.get("event_id"),
+        row.get("from_seat"),
+        row.get("to_seat"),
+        row.get("worktree"),
+        row.get("verification"),
+        row.get("next_action"),
+    )
+    if not all(isinstance(value, str) and value.strip() for value in required_strings):
+        return None
+    event_id = str(row["event_id"])
+    if not event_id.startswith("evt-"):
+        return None
+    next_action = str(row["next_action"])
+    if next_action == "none":
+        next_action = "historical informational summary"
+    return {
+        "intent_ref": f"legacy-narrative-summary:{event_id}",
+        "event_id": event_id,
+        "from_seat": "human",
+        "to_seat": "human",
+        "worktree": "legacy narrative summary @ unknown @ " + "0" * 40,
+        "file_scope": {"own": [], "do_not_touch": []},
+        "decided_rejected_open": {
+            "decided": [],
+            "rejected": [],
+            "open": [summary],
+        },
+        "verification": row["verification"],
+        "next_action": next_action,
+        "taint": True,
+    }
+
+
+def _marker_like_target(value: object) -> str | None:
+    """Return the checkpoint a marker-like decided value names, if any.
+
+    ``ledger_core.parse_marker`` only recognises well-formed markers; a
+    malformed one that still names the requested checkpoint (for example
+    ``claimed:evt-target malformed``) must not silently drop the row out of
+    the relevance closure.  The extracted target is used for relevance only;
+    validity is still enforced by ``record_violations``.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    for prefix in ("claimed:", "closed:"):
+        if not stripped.startswith(prefix):
+            continue
+        rest = stripped[len(prefix):].lstrip()
+        if not rest:
+            return None
+        return re.split(r"[\s—–]", rest, maxsplit=1)[0]
+    return None
+
+
+def checkpoint_relevant_events(events: list[dict], event_id: str) -> list[dict]:
+    """Return the target checkpoint's intent closure, not the whole ledger.
+
+    Full-ledger violations remain visible through ``agent-ledger fold``.  A
+    provider run, however, must prove the requested target and every transition
+    that can affect it.  Unrelated historical debt must not permanently brick
+    all future dispatches.  Cross-intent rows that name this target — through
+    a well-formed marker or a malformed marker-like string — are kept in the
+    closure so an attempted foreign claim/close still fails closed.
+    """
+    candidates = [
+        event
+        for event in events
+        if event.get("event_id") == event_id and not ledger_markers([event])
+    ]
+    if not candidates:
+        return []
+    target_intent = candidates[-1].get("intent_ref")
+    relevant: list[dict] = []
+    for event in events:
+        if event.get("intent_ref") == target_intent:
+            relevant.append(event)
+            continue
+        decided = event.get("decided_rejected_open", {}).get("decided", [])
+        if not isinstance(decided, list):
+            continue
+        if any(
+            marker_target == event_id
+            for marker_target in (_marker_like_target(value) for value in decided)
+            if marker_target is not None
+        ):
+            relevant.append(event)
+    return relevant
+
+
+_CHECKPOINT_ROW_ERROR_RE = re.compile(r"^row (\d+): (.*)$", re.DOTALL)
+
+
+def _checkpoint_error_with_physical_row(
+    exc: ValueError,
+    relevant: list[dict],
+    physical_row_by_event: dict[int, int],
+) -> str:
+    """Re-anchor a closure-relative row error onto the physical ledger row.
+
+    ``checkpoint_state`` numbers rows by their position in the filtered
+    relevance closure; a provider run must report where the bad record
+    actually lives in the append-only ledger.
+    """
+    message = str(exc)
+    match = _CHECKPOINT_ROW_ERROR_RE.match(message)
+    if not match:
+        return f"malformed checkpoint ledger: {message}"
+    closure_index = int(match.group(1))
+    if not 1 <= closure_index <= len(relevant):
+        return f"malformed checkpoint ledger: {message}"
+    physical = physical_row_by_event.get(id(relevant[closure_index - 1]))
+    if physical is None:
+        return f"malformed checkpoint ledger: {message}"
+    return f"malformed checkpoint ledger: row {physical}: {match.group(2)}"
+
+
 def validate_checkpoint(slug: str, event_id: str | None, expected_seat: str) -> dict:
     if not event_id:
         raise ProviderRunError(
@@ -2186,6 +2407,7 @@ def validate_checkpoint(slug: str, event_id: str | None, expected_seat: str) -> 
     if not path.is_file():
         raise ProviderRunError(f"checkpoint ledger not found for repo {slug!r}")
     events: list[dict] = []
+    physical_row_by_event: dict[int, int] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
@@ -2197,14 +2419,28 @@ def validate_checkpoint(slug: str, event_id: str | None, expected_seat: str) -> 
             raise ProviderRunError(
                 f"malformed checkpoint ledger row {line_number}: invalid JSON"
             ) from exc
+        raw_row = row
+        normalized = normalize_legacy_informational_dispatch(raw_row, slug)
+        if normalized is None:
+            normalized = normalize_legacy_narrative_summary(raw_row)
+        if normalized is not None:
+            row = normalized
         if not isinstance(row, dict) or set(row) != set(LEDGER_FIELDS):
             raise ProviderRunError(
                 f"malformed checkpoint ledger row {line_number}: expected exact 10-field schema"
             )
         events.append(row)
+        physical_row_by_event[id(row)] = line_number
+    relevant = checkpoint_relevant_events(events, event_id)
     try:
-        state = checkpoint_state(events, event_id)
-    except (ValueError, LookupError) as exc:
+        state = checkpoint_state(relevant, event_id)
+    except ValueError as exc:
+        raise ProviderRunError(
+            _checkpoint_error_with_physical_row(
+                exc, relevant, physical_row_by_event
+            )
+        ) from exc
+    except LookupError as exc:
         raise ProviderRunError(f"malformed checkpoint ledger: {exc}") from exc
     if not state["active"]:
         raise ProviderRunError(
@@ -2966,15 +3202,22 @@ def run_provider(args: argparse.Namespace, config: dict) -> int:
         raise ProviderRunError(
             f"effort {effort!r} is not allowed for provider {provider_id}"
         )
-    if args.no_skills:
-        # --no-skills must work without a local skill-governance install (CI).
+    managed_skills_disabled = route.get("managed_skills") == "disabled"
+    if args.no_skills or managed_skills_disabled:
+        # Explicit and route-level disabling must both work without a local
+        # skill-governance install.  Mechanical/review routes freeze their own
+        # prompt contract and must not start the auto-router as a side effect.
         selection = {
             "manifest_sha256": sha256_text(""),
             "available_count": 0,
             "chosen": [],
             "deferred": [],
             "entries": {},
-            "routing_status": "explicitly-disabled-for-run",
+            "routing_status": (
+                "explicitly-disabled-for-run"
+                if args.no_skills
+                else "disabled-by-route"
+            ),
         }
     else:
         selection = select_skills(args.prompt, cwd, args.skill, config)
