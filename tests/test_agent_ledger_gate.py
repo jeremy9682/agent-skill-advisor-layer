@@ -50,11 +50,13 @@ def test_out_of_vocab_seat_rejected():
     _expect_die(_ev(from_seat="judgment-claude"))  # wrong order — a real drill bug
     _expect_die(_ev(to_seat="reviewer"))
     _expect_die(_ev(from_seat="codex-final-"))  # trailing hyphen / empty role
+    _expect_die(_ev(from_seat="kimi1-landing"))  # digits never appear in a family
 
 
 def test_family_role_seats_accepted():
     for s in ("claude-direction", "codex-final-review", "codex-review", "human",
-              "founder", "fable-review", "codex-landing", "cursor-grok-cross-review"):
+              "founder", "fable-review", "codex-landing", "cursor-grok-cross-review",
+              "kimi-landing", "glm-flash-landing", "devin-plan"):
         AL._validate_open(_ev(from_seat=s))  # must not raise
 
 
