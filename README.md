@@ -170,6 +170,28 @@ For Claude projects, use
 `examples/CLAUDE.settings.local.example.json` as starting points for project
 instructions and project-local `skillOverrides`.
 
+## Optional video production skills
+
+[video-production-workflow](https://github.com/jeremy9682/video-production-workflow)
+maintains the video workflows, skills, DaVinci Resolve helpers, and examples.
+This is a **private repository**: colleagues and agents need access through their
+own GitHub account; an unauthorised visitor may see a 404. This entry is a catalog
+link; the content is maintained in the video repository.
+
+| Skill | Use when |
+| --- | --- |
+| [web-article-video](https://github.com/jeremy9682/video-production-workflow/blob/main/skills/web-article-video/SKILL.md) | Turning an article, report, or interactive webpage into an explainer using the original page, narration, and captions. |
+| [video-editing-director](https://github.com/jeremy9682/video-production-workflow/blob/main/skills/video-editing-director/SKILL.md) | Selecting and editing interview or on-site footage, preserving source timecodes and distinguishing original speech from narration. |
+
+Follow the [quickstart](https://github.com/jeremy9682/video-production-workflow/blob/main/docs/QUICKSTART.md)
+and the [installation instructions](https://github.com/jeremy9682/video-production-workflow#安装-skills)
+for Codex or Claude Code. The installer refuses to overwrite existing skills.
+Agents can also read the `SKILL.md` files directly without installing them.
+See the [production workflow](https://github.com/jeremy9682/video-production-workflow/blob/main/docs/WORKFLOW.md)
+and [validation scope](https://github.com/jeremy9682/video-production-workflow/blob/main/docs/VALIDATION.md)
+before use. This optional pack is not installed by this repository's `install.sh`;
+listing it here does not change routing or grant execution or publishing permission.
+
 ## Usage Pattern
 
 When a strong signal appears, the agent should say:

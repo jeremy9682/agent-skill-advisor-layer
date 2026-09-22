@@ -149,6 +149,26 @@ cp skills/dsh-dispatch/SKILL.md ~/.claude/skills/dsh-dispatch/SKILL.md
 
 然后把 `examples/AGENTS.codex.snippet.md` 加到全局或项目 `AGENTS.md`。Claude 项目可用 `examples/CLAUDE.snippet.md` 和 `examples/CLAUDE.settings.local.example.json`。
 
+## 可选的视频制作 Skills
+
+[video-production-workflow](https://github.com/jeremy9682/video-production-workflow)
+集中维护视频制作流程、skills、达芬奇辅助脚本和示例。
+这是**私有仓库**，同事和 agent 需要使用有访问权限的 GitHub 账号；
+没有权限时可能看到 404。本节提供发现入口，完整内容只在视频仓库维护。
+
+| Skill | 适用场景 |
+| --- | --- |
+| [web-article-video](https://github.com/jeremy9682/video-production-workflow/blob/main/skills/web-article-video/SKILL.md) | 把文章、报告或交互网页做成讲解视频，使用原网页画面、配音和字幕。 |
+| [video-editing-director](https://github.com/jeremy9682/video-production-workflow/blob/main/skills/video-editing-director/SKILL.md) | 从采访、客户现场或已有原片选段重剪，保留来源时间码，区分原声与新增旁白。 |
+
+同事从[中文上手指南](https://github.com/jeremy9682/video-production-workflow/blob/main/docs/QUICKSTART.md)
+和[安装说明](https://github.com/jeremy9682/video-production-workflow#安装-skills)开始，
+按自己的 Codex 或 Claude Code 环境安装；安装脚本会拒绝覆盖已有同名技能。
+Agent 也可以直接读取对应的 `SKILL.md`，无需安装。
+使用前查看[完整制作流程](https://github.com/jeremy9682/video-production-workflow/blob/main/docs/WORKFLOW.md)
+和[已验证范围](https://github.com/jeremy9682/video-production-workflow/blob/main/docs/VALIDATION.md)。
+这个可选技能包不随本仓库的 `install.sh` 自动安装；添加入口不改变路由规则，也不新增执行或发布授权。
+
 ## 使用方式
 
 强信号出现时，Agent 应说：
