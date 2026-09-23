@@ -1975,9 +1975,10 @@ def test_governed_review_and_fable_routes_resolve_exact_bindings():
                 "seat": None,
             },
         )()
+        expected_model = "claude-fable-5-1" if shape == "arbitration" else "claude-fable-5"
         assert agent_run.resolve_route(args, data) == (
             "claude",
-            "claude-fable-5",
+            expected_model,
             "max",
             "fable-final-review",
             shape,
