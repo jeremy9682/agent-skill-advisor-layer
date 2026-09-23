@@ -1,0 +1,115 @@
+version: 1
+# O11 coding-agent connector registry (prototype, internal ops tool only).
+#
+# This file is NOT a routing source and does not make a CLI dispatchable.
+# routing-policy.yaml stays the only routing canon; agent-providers.yaml stays
+# the dispatch capability manifest. A connector that has a provider_ref reuses
+# that provider's binary_candidates / strip_environment / billing_policy instead
+# of re-declaring them (one source of truth, no drift).
+#
+# Rules enforced by scripts/agent_connect.py:
+# - a capability declared true MUST carry a probe (no over-claiming);
+# - every probe argv starts with "{binary}" (we only ever run the vendor CLI);
+# - login guides only print vendor CLI commands; nothing here runs a login,
+#   reads a credential file, or stores a secret;
+# - raw probe output is classified in memory and never printed (codex prints a
+#   partial API key in `login status`).
+# Credentials, account ids and transcripts never belong in this file.
+
+connectors:
+  codex:
+    display_name: Codex CLI
+    provider_ref: codex
+    install:
+      official_command: npm install -g @openai/codex
+    login:
+      status_probe:
+        argv: ["{binary}", login, status]
+        timeout_seconds: 20
+        evidence: official-status-command
+        # First matching rule wins. Samples observed 2026-09-23 on codex-cli
+        # 0.155.1 against scratch CODEX_HOME directories (never the real one).
+        rules:
+          - {exit_code: 0, pattern: '^Logged in using ChatGPT', state: logged_in, method: subscription}
+          - {exit_code: 0, pattern: '^Logged in using an API key', state: logged_in, method: api_key}
+          - {exit_code: 1, pattern: '^Not logged in', state: not_logged_in}
+      guide:
+        signup_url: https://chatgpt.com/
+        login_commands:
+          - codex login
+          - codex login --device-auth
+        steps:
+          - 在自己的终端运行 `codex login`，浏览器弹出后用 ChatGPT 订阅账号授权。
+          - 浏览器弹不出来或 1455 端口被占用时，改用 `codex login --device-auth`（设备码方式），按终端提示在浏览器输入设备码。
+          - 没有 ChatGPT 账号时先到 signup_url 注册并开通含 Codex 的订阅。
+          - 本接入层只认订阅登录；不要用 `codex login --with-api-key`（会被判为 policy_mismatch）。
+          - 完成后重跑 `agent_connect.py status --connector codex` 确认。
+    capabilities:
+      acp_native:
+        declared: false
+        note: Codex CLI 无原生 ACP 服务端；社区适配器 codex-acp 本机未安装，接入时走启动官方命令行的退路。
+      headless_prompt:
+        declared: true
+        probe:
+          argv: ["{binary}", exec, --help]
+          timeout_seconds: 20
+          pattern: 'Run Codex non-interactively'
+      device_code_login:
+        declared: true
+        probe:
+          argv: ["{binary}", login, --help]
+          timeout_seconds: 20
+          pattern: '--device-auth'
+
+  kimi:
+    display_name: Kimi Code CLI
+    # Not in agent-providers.yaml: kimi is not a dispatch route in this canon,
+    # so the connector declares its own binary and environment policy.
+    binary_candidates: [~/.local/bin/kimi, kimi]
+    billing_policy: existing-subscription-login-only
+    strip_environment: [KIMI_API_KEY, KIMI_MODEL_API_KEY]
+    install:
+      official_command: npm install -g @moonshot-ai/kimi-code
+    login:
+      status_probe:
+        # kimi 2.0.0 has no "am I signed in" subcommand. `provider list`
+        # shows whether an OAuth-managed provider is configured; it does not
+        # prove the token is still valid, hence evidence=config-inference.
+        argv: ["{binary}", provider, list]
+        timeout_seconds: 30
+        evidence: config-inference
+        rules:
+          - {exit_code: 0, pattern: 'source=oauth', state: logged_in, method: subscription}
+          - {exit_code: 0, pattern: '^No providers configured', state: not_logged_in}
+          - {exit_code: 0, pattern: 'source=', state: logged_in, method: api_key_or_custom}
+      guide:
+        signup_url: https://kimi.com
+        signup_url_global: https://kimi.ai
+        login_commands:
+          - kimi login --region mainland-cn
+          - kimi login --region global
+        steps:
+          - 在自己的终端运行 `kimi login --region mainland-cn`（国内账号，kimi.com）或 `kimi login --region global`（海外账号，kimi.ai）。
+          - 按终端给出的设备码，在浏览器打开授权页并确认。
+          - 没有账号时先到 signup_url（国内）或 signup_url_global（海外）注册并开通 Kimi Code 会员。
+          - 本接入层只认 OAuth 订阅登录；自己加的 API key 类 provider 会被判为 policy_mismatch。
+          - 完成后重跑 `agent_connect.py status --connector kimi` 确认。
+    capabilities:
+      acp_native:
+        declared: true
+        probe:
+          argv: ["{binary}", acp, --help]
+          timeout_seconds: 20
+          pattern: 'Agent Client Protocol'
+      headless_prompt:
+        declared: true
+        probe:
+          argv: ["{binary}", --help]
+          timeout_seconds: 20
+          pattern: '--prompt'
+      device_code_login:
+        declared: true
+        probe:
+          argv: ["{binary}", login, --help]
+          timeout_seconds: 20
+          pattern: 'device-code'
