@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -366,18 +368,102 @@ def test_kimi_mixed_order_reversed_also_fails_closed(world):
     assert status_of(world, "kimi")["verdict"] == "policy_mismatch"
 
 
-def test_kimi_only_oauth_providers_with_default_model_line_pass(world):
+# Byte-exact output of the real kimi-code 2.0.0 binary (`kimi provider list`),
+# captured 2026-09-24 against a scratch KIMI_CODE_HOME holding a synthetic
+# config (no real login, no token). `kimi login` writes provider
+# `managed:kimi-code` (type kimi, oauth) for both --region values.
+REAL_KIMI_OAUTH_SAMPLE = (
+    "managed:kimi-code  type=kimi  models=1  source=oauth\n"
+    "\n"
+    "Default model: kimi-code/kimi-for-coding"
+)
+
+
+def test_kimi_real_cli_oauth_sample_is_subscription(world):
+    fake_kimi(world["tmp"], REAL_KIMI_OAUTH_SAMPLE)
+    checks = _kimi_login(world)
+    assert checks["login"]["result"] == "pass"
+    assert checks["login"]["method"] == "subscription"
+    assert checks["billing_policy"]["result"] == "pass"
+    assert status_of(world, "kimi")["login_verdict"] == "login_configured"
+
+
+# Lines that must never count as a subscription login. Each is either not a
+# complete kimi 2.0.0 provider record ("<id>  type=<t>  models=<n>  source=<s>",
+# two-space separators, nothing before or after) or a complete record that is
+# not the registered subscription provider (managed:kimi-code, type kimi,
+# source oauth, at least one model).
+MALFORMED_OR_UNREGISTERED_KIMI_LINES = {
+    "bare-source-suffix": "not-a-provider source=oauth",
+    "prefix-warning": "WARNING managed:kimi-code  type=kimi  models=4  source=oauth",
+    "prefix-concatenated": "xmanaged:kimi-code  type=kimi  models=4  source=oauth",
+    "suffix-text": "managed:kimi-code  type=kimi  models=4  source=oauth  (expired)",
+    "trailing-space": "managed:kimi-code  type=kimi  models=4  source=oauth ",
+    "leading-space": " managed:kimi-code  type=kimi  models=4  source=oauth",
+    "two-sources-inline-then-oauth": "managed:kimi-code  type=kimi  models=4  source=inline  source=oauth",
+    "two-sources-apijson-then-oauth": (
+        "managed:kimi-code  type=kimi  models=4  source=apiJson(https://example.invalid/a.json)  source=oauth"
+    ),
+    "source-case-OAuth": "managed:kimi-code  type=kimi  models=4  source=OAuth",
+    "source-case-OAUTH": "managed:kimi-code  type=kimi  models=4  source=OAUTH",
+    "id-case": "MANAGED:KIMI-CODE  type=kimi  models=4  source=oauth",
+    "key-case": "managed:kimi-code  TYPE=kimi  models=4  source=oauth",
+    "type-case": "managed:kimi-code  type=KIMI  models=4  source=oauth",
+    "unregistered-id": "custom:kimi  type=kimi  models=4  source=oauth",
+    "registered-id-with-suffix": "managed:kimi-code-evil  type=kimi  models=4  source=oauth",
+    "wrong-type": "managed:kimi-code  type=openai  models=4  source=oauth",
+    "tab-separators": "managed:kimi-code\ttype=kimi\tmodels=4\tsource=oauth",
+    "single-space-separators": "managed:kimi-code type=kimi models=4 source=oauth",
+    "missing-models": "managed:kimi-code  type=kimi  source=oauth",
+    "fields-reordered": "managed:kimi-code  models=4  type=kimi  source=oauth",
+    "zero-models": "managed:kimi-code  type=kimi  models=0  source=oauth",
+    "leading-zero-models": "managed:kimi-code  type=kimi  models=04  source=oauth",
+}
+
+
+@pytest.mark.parametrize(
+    "line", list(MALFORMED_OR_UNREGISTERED_KIMI_LINES.values()), ids=list(MALFORMED_OR_UNREGISTERED_KIMI_LINES)
+)
+def test_kimi_malformed_or_unregistered_provider_line_is_not_a_login(world, line):
+    fake_kimi(world["tmp"], line)
+    result = status_of(world, "kimi")
+    checks = {c["check"]: c for c in result["checks"]}
+    assert checks["login"].get("method") != "subscription", line
+    # Unknown shape: fail closed as "cannot tell", never as a login.
+    assert checks["login"]["result"] == "not_checked", line
+    assert result["login_verdict"] == "unknown", line
+    assert run_cli(world, "status", "--login-only", "--connector", "kimi").returncode == 1
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # The real CLI prints this for a hand-written managed:kimi-code with an
+        # API key and no oauth ref (captured from kimi-code 2.0.0).
+        "managed:kimi-code  type=kimi  models=0  source=inline",
+        "managed:kimi-code  type=kimi  models=4  source=inline",
+        "reg-x  type=openai  models=0  source=apiJson(https://example.invalid/api.json)",
+    ],
+)
+def test_kimi_api_key_billing_sources_are_not_subscription(world, line):
+    fake_kimi(world["tmp"], line)
+    checks = _kimi_login(world)
+    assert checks["login"]["method"] == "api_key_or_custom"
+    assert checks["billing_policy"]["result"] == "fail"
+    assert status_of(world, "kimi")["login_verdict"] == "policy_mismatch"
+
+
+def test_kimi_second_oauth_line_with_unregistered_id_is_unknown(world):
+    # Only managed:kimi-code is what `kimi login` writes; another OAuth-looking
+    # provider is not evidence of the subscription login.
     fake_kimi(
         world["tmp"],
         "managed:kimi-code  type=kimi  models=4  source=oauth\n"
         "managed:kimi-code-global  type=kimi  models=4  source=oauth\n"
         "\n"
-        "Default model: managed:kimi-code/kimi-for-coding",
+        "Default model: kimi-code/kimi-for-coding",
     )
-    checks = _kimi_login(world)
-    assert checks["login"]["result"] == "pass"
-    assert checks["login"]["method"] == "subscription"
-    assert checks["billing_policy"]["result"] == "pass"
+    assert status_of(world, "kimi")["login_verdict"] == "unknown"
 
 
 def test_kimi_oauth_lookalike_source_is_not_subscription(world):
@@ -432,6 +518,39 @@ def test_provider_api_key_env_is_stripped_from_probe(world):
     proc = run_cli(world, "status", "--connector", "codex", "--json", env=env)
     payload = json.loads(proc.stdout)
     assert payload["connectors"][0]["verdict"] == "needs_login"
+
+
+GUIDE_CONFIRM_RE = re.compile(r"`python3 scripts/agent_connect\.py ([^`]+)`")
+
+
+def _guide_confirm_commands(world, name: str) -> list[list[str]]:
+    proc = run_cli(world, "guide", name)
+    assert proc.returncode == 0, proc.stderr
+    return [shlex.split(m) for m in GUIDE_CONFIRM_RE.findall(proc.stdout)]
+
+
+def test_login_guide_confirm_command_exits_zero_once_logged_in(world):
+    # The guide tells the engineer which command confirms a fresh login. Full
+    # `status` is non-zero by design (live_turn is never checked), so the
+    # guide must point at the login layer, and that exact command must exit 0
+    # once the login is configured.
+    for name in ("codex", "kimi"):
+        commands = _guide_confirm_commands(world, name)
+        assert commands, f"{name}: guide names no agent_connect.py confirm command"
+        for args in commands:
+            proc = run_cli(world, *args)
+            assert proc.returncode == 0, (name, args, proc.stdout)
+            assert args[:1] == ["status"], args
+            assert "--login-only" in args, args
+            assert args[args.index("--connector") + 1] == name, args
+
+
+def test_login_guide_confirm_command_still_fails_before_login(world):
+    fake_codex(world["tmp"], "Not logged in", 1)
+    fake_kimi(world["tmp"], "No providers configured.")
+    for name in ("codex", "kimi"):
+        for args in _guide_confirm_commands(world, name):
+            assert run_cli(world, *args).returncode == 1, (name, args)
 
 
 def test_guide_never_executes_the_cli(world, tmp_path):
@@ -543,6 +662,40 @@ def test_item_rule_cannot_declare_mixed_method(world):
         d["connectors"]["kimi"]["login"]["status_probe"]["items"]["rules"][0]["method"] = "mixed"
 
     with pytest.raises(ac.ConnectorManifestError, match="method"):
+        _mutate_and_load(world, mutate)
+
+
+def _kimi_item_rules(d: dict) -> list[dict]:
+    return d["connectors"]["kimi"]["login"]["status_probe"]["items"]["rules"]
+
+
+def _subscription_item_rule(d: dict) -> dict:
+    return next(r for r in _kimi_item_rules(d) if r["method"] == "subscription")
+
+
+def test_subscription_item_rule_must_pin_every_record_field(world):
+    # A rule granting "subscription" that leaves the provider id (or any other
+    # record field) open would let any OAuth-looking record through.
+    def mutate(d):
+        del _subscription_item_rule(d)["fields"]["id"]
+
+    with pytest.raises(ac.ConnectorManifestError, match="subscription"):
+        _mutate_and_load(world, mutate)
+
+
+def test_item_rule_rejects_free_text_pattern(world):
+    def mutate(d):
+        _subscription_item_rule(d)["pattern"] = r"\ssource=oauth$"
+
+    with pytest.raises(ac.ConnectorManifestError, match="fields"):
+        _mutate_and_load(world, mutate)
+
+
+def test_item_rule_field_must_be_a_named_record_field(world):
+    def mutate(d):
+        _kimi_item_rules(d)[-1]["fields"]["colour"] = "blue"
+
+    with pytest.raises(ac.ConnectorManifestError, match="colour"):
         _mutate_and_load(world, mutate)
 
 

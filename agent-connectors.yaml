@@ -43,7 +43,7 @@ connectors:
           - 浏览器弹不出来或 1455 端口被占用时，改用 `codex login --device-auth`（设备码方式），按终端提示在浏览器输入设备码。
           - 没有 ChatGPT 账号时先到 signup_url 注册并开通含 Codex 的订阅。
           - 本接入层只认订阅登录；不要用 `codex login --with-api-key`（会被判为 policy_mismatch）。
-          - 完成后重跑 `agent_connect.py status --connector codex` 确认。
+          - 完成后在本仓根目录运行 `python3 scripts/agent_connect.py status --login-only --connector codex` 确认（只查登录层，登录已配置且符合计费策略即退出 0；完整 `status` 因真实对话没检查按设计恒非 0，不用来确认登录）。
     capabilities:
       acp_native:
         declared: false
@@ -76,25 +76,34 @@ connectors:
         # shows which providers are configured; it does not prove the token is
         # still valid, hence evidence=config-inference.
         #
-        # It prints one line per provider ("<id>  type=..  models=N  source=X",
-        # X in oauth / inline / apiJson(<url>)) and optionally a trailing
-        # "Default model: <alias>" line. Several providers can coexist and the
-        # text output does not say which one the default model uses (only the
-        # --json output does, and that carries credentials, so we never read
-        # it). Therefore every provider line is classified and aggregated:
-        # only "all providers are OAuth" counts as subscription; a mix yields
-        # method=mixed, which satisfies no billing policy; any line we do not
-        # recognise makes the whole result unknown.
+        # It prints one record per provider and optionally a blank line plus
+        # "Default model: <alias>". Record format, from kimi-code 2.0.0
+        # handleProviderList / providerSourceLabel and re-captured from the
+        # real binary against a scratch config:
+        #   "<id>  type=<type>  models=<n>  source=<oauth|inline|apiJson(<url>)>"
+        # (fields separated by exactly two spaces, nothing before or after).
+        # Several providers can coexist and the text output does not say which
+        # one the default model uses (only the --json output does, and that
+        # carries credentials, so we never read it). Therefore every record is
+        # classified and aggregated: only "every provider is the subscription
+        # provider" counts as subscription; a mix yields method=mixed, which
+        # satisfies no billing policy; any line that is not a complete record,
+        # or a record no rule accepts, makes the whole result unknown.
         argv: ["{binary}", provider, list]
         timeout_seconds: 30
         evidence: config-inference
         items:
           exit_code: 0
-          item_pattern: '\ssource=\S+$'
-          ignore_pattern: '^(\s*|Default model: \S.*)$'
+          # Whole-line match (fullmatch); case-sensitive.
+          item_pattern: '(?P<id>[^\s=]+)  type=(?P<type>[A-Za-z0-9_.-]+)  models=(?P<models>0|[1-9][0-9]*)  source=(?P<source>oauth|inline|apiJson\([^\s()]+\))'
+          ignore_pattern: '(|Default model: \S.*)'
+          # Each field value is matched in full. `kimi login` (either --region)
+          # always writes provider managed:kimi-code, type kimi, with an OAuth
+          # ref and at least one model; a subscription rule must pin every
+          # record field (enforced by agent_connect.py validate).
           rules:
-            - {pattern: '\ssource=oauth$', method: subscription}
-            - {pattern: '\ssource=(inline|apiJson\(\S+\))$', method: api_key_or_custom}
+            - {fields: {id: 'managed:kimi-code', type: kimi, models: '[1-9][0-9]*', source: oauth}, method: subscription}
+            - {fields: {source: 'inline|apiJson\(\S+\)'}, method: api_key_or_custom}
         rules:
           - {exit_code: 0, pattern: '\ANo providers configured\.?\s*\Z', state: not_logged_in}
       guide:
@@ -108,7 +117,7 @@ connectors:
           - 按终端给出的设备码，在浏览器打开授权页并确认。
           - 没有账号时先到 signup_url（国内）或 signup_url_global（海外）注册并开通 Kimi Code 会员。
           - 本接入层只认 OAuth 订阅登录；自己加的 API key 类 provider 会被判为 policy_mismatch。
-          - 完成后重跑 `agent_connect.py status --connector kimi` 确认。
+          - 完成后在本仓根目录运行 `python3 scripts/agent_connect.py status --login-only --connector kimi` 确认（只查登录层，登录已配置且符合计费策略即退出 0；完整 `status` 因真实对话没检查按设计恒非 0，不用来确认登录）。
     capabilities:
       acp_native:
         declared: true

@@ -158,6 +158,11 @@ def _validate_login(name: str, login: Any) -> None:
         code = items.get("exit_code")
         _require(isinstance(code, int) and not isinstance(code, bool), f"{iw}.exit_code must be an int")
         _check_pattern(f"{iw}.item_pattern", items.get("item_pattern"))
+        record_fields = set(re.compile(items["item_pattern"]).groupindex)
+        _require(
+            bool(record_fields),
+            f"{iw}.item_pattern must name the record fields with (?P<name>...) groups",
+        )
         if "ignore_pattern" in items:
             _check_pattern(f"{iw}.ignore_pattern", items.get("ignore_pattern"))
         item_rules = items.get("rules")
@@ -168,11 +173,33 @@ def _validate_login(name: str, login: Any) -> None:
         for i, rule in enumerate(item_rules):
             rw = f"{iw}.rules[{i}]"
             _require(isinstance(rule, dict), f"{rw} must be a mapping")
-            _check_pattern(rw, rule.get("pattern"))
+            _require(
+                set(rule) == {"fields", "method"},
+                f"{rw} must have exactly 'fields' and 'method' (whole-record field matching only)",
+            )
+            fields = rule["fields"]
+            _require(
+                isinstance(fields, dict) and fields,
+                f"{rw}.fields must be a non-empty mapping of record field -> regex",
+            )
+            for field, pattern in fields.items():
+                _require(
+                    field in record_fields,
+                    f"{rw}.fields.{field} is not a named field of item_pattern {sorted(record_fields)}",
+                )
+                _check_pattern(f"{rw}.fields.{field}", pattern)
             _require(
                 rule.get("method") in LOGIN_METHODS,
                 f"{rw}.method must be one of {sorted(LOGIN_METHODS)}",
             )
+            if rule["method"] == "subscription":
+                # A rule that grants subscription must pin the whole record
+                # (provider id included), or any OAuth-looking record passes.
+                missing = sorted(record_fields - set(fields))
+                _require(
+                    not missing,
+                    f"{rw}: a subscription rule must pin every record field; missing {missing}",
+                )
     rules = probe.get("rules")
     _require(isinstance(rules, list) and rules, f"{where}.rules must be a non-empty list")
     for i, rule in enumerate(rules):
@@ -346,8 +373,12 @@ def _classify_items(items: dict, exit_code: int, output: str) -> tuple[bool, dic
     line at all (the caller then falls back to whole-output rules). Otherwise
     every line must be either an ignorable line or an item line that some item
     rule classifies -- anything else makes the result unknown (``None``).
-    Only a single agreed method passes through; disagreeing sources yield
-    ``mixed``, which no billing policy accepts.
+
+    An item line is a line that ``item_pattern`` matches *in full* (no text
+    before or after the record). A rule classifies it only when every field
+    it names matches that record field *in full*. Only a single agreed method
+    passes through; disagreeing sources yield ``mixed``, which no billing
+    policy accepts.
     """
 
     if items["exit_code"] != exit_code:
@@ -358,10 +389,15 @@ def _classify_items(items: dict, exit_code: int, output: str) -> tuple[bool, dic
     found = False
     unrecognised = False
     for line in output.splitlines():
-        if item_re.search(line):
+        record = item_re.fullmatch(line)
+        if record:
             found = True
+            fields = record.groupdict()
             for rule in items["rules"]:
-                if re.search(rule["pattern"], line):
+                if all(
+                    fields.get(name) is not None and re.fullmatch(pattern, fields[name])
+                    for name, pattern in rule["fields"].items()
+                ):
                     methods.add(rule["method"])
                     break
             else:

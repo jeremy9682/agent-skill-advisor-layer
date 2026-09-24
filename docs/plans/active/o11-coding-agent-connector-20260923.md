@@ -34,7 +34,7 @@
     - `verdict`（整体就绪）：登录层 → 每个声明为 true 的能力 → 真实对话，只有 `ready` 算成功。任何「不过 / 没检查」都非 0 退出（不许「没检查当通过」）。
     - 原型不跑真实对话，所以完整 `status` **恒非 0**（`live_turn_not_checked`）——它现在不是就绪闸门，这是刻意的（终审 P1-1）。
   - `status --login-only`：只回答「登录是否已配置且符合计费策略」，不跑能力探测（能力行标「没检查」），全部 `login_verdict=login_configured` 才退出 0。JSON 顶层带 `scope: full | login-only`，防止把登录层结论当整体就绪。
-  - 登录层没配置好的（未登录、未安装、无法判断、登录方式不符），自动附登录引导。
+  - 登录层没配置好的（未登录、未安装、无法判断、登录方式不符），自动附登录引导。引导最后一步让工程师运行 `python3 scripts/agent_connect.py status --login-only --connector <名>` 确认——登录已配置且符合计费策略即退出 0；不让跑完整 `status`（它按设计恒非 0，复审 P2）。有测试直接执行引导里写的这条命令，登录后必须退出 0、登录前必须退出 1。
   - `guide <connector>`：只打印引导，不执行命令行。
 
 ### 判定规则（本机 2026-09-23 实测样本）
@@ -42,9 +42,11 @@
 | 家 | 探测命令 | 已登录 | 未登录 | 证据强度 |
 |---|---|---|---|---|
 | codex 0.155.1 | `codex login status` | 退出 0 且「Logged in using ChatGPT」→ 订阅；「Logged in using an API key」→ API key | 退出 1 且「Not logged in」 | 官方状态命令 |
-| kimi 2.0.0 | `kimi provider list` | 每行一个 provider，逐行分类后聚合：**全部** `source=oauth` → 订阅；全部 `inline` / `apiJson(...)` → API key / 自定义；**混合 → `mixed`，任何计费策略都不认**；出现不认识的行 → 无法判断 | 退出 0 且整段输出只有「No providers configured.」 | 配置推断（kimi 没有「是否已登录」子命令，只能证明配置了 OAuth provider，不能证明令牌仍有效） |
+| kimi 2.0.0 | `kimi provider list` | 每行一条 provider 记录，**整行**必须是 `<id>  type=<类型>  models=<数量>  source=<oauth\|inline\|apiJson(url)>`（字段间恰好两个空格，前后不许有别的字，区分大小写），逐条分类后聚合：只有 `managed:kimi-code` + `type=kimi` + `models≥1` + `source=oauth` 这一种记录算订阅，**全部**记录都是它才判订阅；`inline` / `apiJson(...)` → API key / 自定义；**混合 → `mixed`，任何计费策略都不认**；不完整的行、或完整但不是登记订阅 provider 的 OAuth 记录（别的 id、别的类型、0 个模型）→ 无法判断 | 退出 0 且整段输出只有「No providers configured.」 | 配置推断（kimi 没有「是否已登录」子命令，只能证明配置了 OAuth provider，不能证明令牌仍有效） |
 
-kimi 聚合的理由（终审 P1-2）：kimi 允许同时配多个 provider，文本输出不说默认模型走哪个 provider（只有 `--json` 说，但它含凭据，不读）。所以「存在一个 OAuth」不能证明用的是 OAuth，只有「全是 OAuth」才无歧义。源码核对：kimi-code 2.0.0 `handleProviderList` 每行 `<id>  type=..  models=N  source=<oauth|inline|apiJson(url)>`，末尾可选 `Default model: ...`。
+kimi 聚合的理由（终审 P1-2）：kimi 允许同时配多个 provider，文本输出不说默认模型走哪个 provider（只有 `--json` 说，但它含凭据，不读）。所以「存在一个 OAuth」不能证明用的是 OAuth，只有「全是 OAuth」才无歧义。源码核对：kimi-code 2.0.0 `handleProviderList` 每行 `<id>  type=..  models=N  source=<oauth|inline|apiJson(url)>`，末尾可选空行 + `Default model: ...`。
+
+逐行识别要按**完整记录**做（复审 P1）：上一版只要行尾是 `source=oauth` 就当 provider 行，`not-a-provider source=oauth` 这种行会被判成订阅。现在清单用带命名字段的整行模式（`id` / `type` / `models` / `source`）识别记录，规则按字段逐个整值匹配；`validate` 还强制「判订阅的规则必须把每个字段都钉死」，防止以后有人把订阅规则放宽回只看 `source`。登记的订阅 provider 名来自源码：`kimi login` 不论 `--region mainland-cn` 还是 `global`，写的都是 `managed:kimi-code`（`KIMI_CODE_PROVIDER_NAME`，type `kimi`，带 OAuth 引用，至少 1 个模型）。格式另用本机安装的真实 kimi 2.0.0 可执行文件对着临时目录里的**合成配置**（无真实登录、无令牌）重新抓过：纯 OAuth、OAuth + inline 混合、inline + apiJson、未登记 id 的 OAuth、空配置五种，经 `agent_connect.py status --login-only` 分别判为 订阅 / `mixed` / API key / 无法判断 / 未登录。
 
 样本来源：已登录样本来自本机真实状态；未登录样本来自指向空目录的 `CODEX_HOME` / `HOME`；codex API key 样本用假占位串写进临时 `CODEX_HOME` 取得，取完即删，未碰真实登录。
 
@@ -60,7 +62,9 @@ kimi 聚合的理由（终审 P1-2）：kimi 允许同时配多个 provider，�
 
 ### 验证
 
-- 新测试 `tests/test_agent_connect.py` 40 条（终审后 +14），全部用写在临时目录里的假命令行真实起子进程。
+- 新测试 `tests/test_agent_connect.py` 71 条（终审后 +14，复审后 +31，其中改写 1 条：原「多个 OAuth provider 都判订阅」用的 `managed:kimi-code-global` 是虚构 id，真实 kimi 不会写出，改为判「无法判断」），全部用写在临时目录里的假命令行真实起子进程。
+- 复审修复后补 13 个变异（记录识别退回子串匹配、字段匹配退回子串匹配、订阅规则只看 `source`（清单被 `validate` 拒绝）、同上且去掉校验门、完全退回旧的行尾 `source=oauth` 判定、去掉「订阅规则须钉死全部字段」门、分隔符放宽为任意空白、大小写不敏感、允许 0 个模型、引导改回完整 `status`、允许自由文本规则、不校验字段名、识别出记录但没规则认领时忽略），全部变红；未变异的副本同负载下全绿。
+- 历史那次「39 过 / 1 失败」已复现并定因：把提交 `914cb9c` 的四个文件拷到临时目录，8 路并发各跑 6 遍整文件，48/48 都是 `test_capability_probe_timeout_blocks_overall_status` 失败（`assert 'unknown' == 'capability_not_checked'`）；同一份不加负载单跑 3/3 过。原因是那版测试把全局探测上限压到 1 秒，负载下 kimi 的**登录**探测也超时，登录层变成「无法判断」。`cc23541` 已改为只缩短 ACP 探测自己的超时；当前版本在同样 8 路负载下 24/24 遍整文件全过。
 - 终审修复后补 13 个变异（能力不过被忽略、能力整体不计入、能力没检查不阻断、真实对话没检查当过、完整模式按登录层退出、`--login-only` 仍跑探测、混合塌成首个、不认识的行被忽略、`mixed` 进策略、不走聚合、OAuth 模式不锚定、条目规则不校验、引导条件错），全部变红。
 - 变异 11 个（忽略退出码、未知当已登录、不剥环境变量、回显原始输出、去掉「声明需探测」、计费恒过、能力忽略匹配、真实对话恒过、引导命令不限本家、引导不拦拼接符、探测不限 `{binary}`），全部变红。
 - 本机真跑：`status --login-only` 两家均「登录已配置」、退出 0；完整 `status` 两家 `live_turn_not_checked`、退出 1，kimi ACP 能力探测过、codex ACP 不适用；把 `CODEX_HOME` / `HOME` 指向空目录再跑，两家都判「未登录」并附引导（真实命令行上的反向对照）。
