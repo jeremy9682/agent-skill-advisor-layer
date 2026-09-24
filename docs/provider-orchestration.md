@@ -238,9 +238,13 @@ Grok second opinions and Cursor named-model execution/review.
 
 Claude Opus/high remains a normalized-governance-xhigh `claude_final_review`
 route for Codex-produced work, including risk overlays. The
-`fable_final_review` and `arbitration` routes request the exact native model ID
-`claude-fable-5`; they were enabled only after direct alias and exact-ID Fable 5
-Max read-only calls plus an attributed wrapped canary succeeded on 2026-07-18.
+`fable_final_review` route requests the exact native model ID `claude-fable-5`;
+it was enabled only after direct alias and exact-ID Fable 5 Max read-only calls
+plus an attributed wrapped canary succeeded on 2026-07-18. The `arbitration`
+route moved to `claude-fable-5-1` on 2026-09-23 (founder designated Fable 5.1 as
+advisor); the model was confirmed from a native Claude Code subagent transcript
+(`message.model == "claude-fable-5-1"`), but a wrapped agent-run canary for that
+exact ID has not been recorded yet.
 Their exact receipts remain host-local. A broker may list a model
 whose CLI still returns a data-policy acknowledgement
 error until the account accepts that model's retention policy; catalogue presence alone does

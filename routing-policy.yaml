@@ -40,7 +40,7 @@ review_escalation:
 enums:
   execution_seat: [claude, codex, cursor]  # family that PRODUCES the diff
   execution_model:                       # producer model tiers, keyed by family
-    claude: [sonnet, opus, fable, claude-fable-5]
+    claude: [sonnet, opus, fable, claude-fable-5, claude-fable-5-1]
     codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
     # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）。
     # Product default (2026-08-19, cursor-agent catalog): Grok 4.6.
@@ -136,7 +136,7 @@ task_shapes:
   arbitration:                     # cross-family tie-break / adversarial judgment seat
     execution_seat: [claude]
     execution_model:
-      claude: claude-fable-5
+      claude: claude-fable-5-1   # founder 2026-09-23: Fable 5.1 = advisor/arbitration
     execution_effort: max
     execution_mode: careful
     review_effort_floor: high

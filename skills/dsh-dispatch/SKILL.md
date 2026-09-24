@@ -22,7 +22,7 @@ Product default is **Grok 4.6** (ACP `grok-4.6`, CLI `cursor-grok-4.6-high-fast`
 | standard_feature | Opus direction; Grok 4.6 or DSH Kimi K3 land | Sol | Composer as behavior author |
 | judgment | Opus high careful; disputes Fable Max | cross-family | DSH as judgment seat |
 | restricted_zone | Opus, no downshift | Sol xhigh; Codex producer → Fable | DSH self-GO; Composer final; PTC/`code` |
-| arbitration | `claude-fable-5` max | this seat | producer family as arbitrator |
+| arbitration | `claude-fable-5-1` max | this seat | producer family as arbitrator |
 | parallel subtasks | Composer Fast ∥ Grok Fast; Cursor family ≤2 | after land | bulk new DSH Beijing 09–12 and 14–18 |
 | retrieval | Luna / DeepSeek Flash / Gemini Flash | none | flagship writers |
 | docs | Grok 4.6 or Sonnet or GLM | Sol if gated | Composer changing meaning |
