@@ -166,7 +166,7 @@ def test_shipped_manifest_validates_against_shipped_providers():
 def test_both_logged_in_with_subscription_is_login_configured(world):
     for name in ("codex", "kimi"):
         result = status_of(world, name)
-        assert result["verdict"] == "login_configured", result
+        assert result["login_verdict"] == "login_configured", result
         checks = {c["check"]: c for c in result["checks"]}
         assert checks["binary"]["result"] == "pass"
         assert checks["login"]["result"] == "pass"
@@ -183,11 +183,78 @@ def test_login_evidence_strength_is_reported_honestly(world):
     assert kimi["login"]["evidence"] == "config-inference"
 
 
-def test_cli_exit_zero_only_when_every_connector_is_configured(world):
-    proc = run_cli(world, "status", "--json")
+def test_login_only_exit_zero_only_when_every_connector_is_configured(world):
+    proc = run_cli(world, "status", "--login-only", "--json")
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
+    assert payload["scope"] == "login-only"
     assert [c["connector"] for c in payload["connectors"]] == ["codex", "kimi"]
+    assert all(c["login_verdict"] == "login_configured" for c in payload["connectors"])
+
+
+# --------------------------------------------------------------------------
+# overall readiness: every applicable check must pass (no skip-means-pass)
+# --------------------------------------------------------------------------
+
+def test_full_status_is_nonzero_while_live_turn_is_not_checked(world):
+    # Login and every declared capability pass, but no real turn was run:
+    # the overall status must not report success.
+    proc = run_cli(world, "status", "--json")
+    assert proc.returncode == 1, proc.stdout
+    payload = json.loads(proc.stdout)
+    assert payload["scope"] == "full"
+    for c in payload["connectors"]:
+        assert c["login_verdict"] == "login_configured"
+        assert c["verdict"] == "live_turn_not_checked"
+
+
+def test_capability_probe_failure_blocks_overall_status(world):
+    fake = world["tmp"] / "codex"
+    fake.write_text(fake.read_text().replace("Run Codex non-interactively", "something else"))
+    result = status_of(world, "codex")
+    caps = {c["name"]: c for c in result["capabilities"]}
+    assert caps["headless_prompt"]["result"] == "fail"
+    assert result["login_verdict"] == "login_configured"
+    assert result["verdict"] == "capability_failed"
+    assert run_cli(world, "status", "--connector", "codex").returncode == 1
+
+
+def test_capability_probe_timeout_blocks_overall_status(world, monkeypatch):
+    fake = world["tmp"] / "kimi"
+    fake.write_text(
+        fake.read_text().replace(
+            'if [ "$1" = "acp" ] && [ "$2" = "--help" ]; then',
+            'if [ "$1" = "acp" ] && [ "$2" = "--help" ]; then\n  sleep 5',
+        )
+    )
+    monkeypatch.setattr(ac, "PROBE_TIMEOUT_CAP_SECONDS", 1)
+    result = status_of(world, "kimi")
+    caps = {c["name"]: c for c in result["capabilities"]}
+    assert caps["acp_native"]["result"] == "not_checked"
+    assert result["verdict"] == "capability_not_checked"
+
+
+def test_login_only_does_not_run_capability_probes(world, tmp_path):
+    marker = tmp_path / "cap-probe-ran"
+    fake = world["tmp"] / "codex"
+    fake.write_text(
+        fake.read_text().replace(
+            'if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then',
+            f'if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then\n  touch "{marker}"',
+        )
+    )
+    proc = run_cli(world, "status", "--login-only", "--connector", "codex", "--json")
+    assert proc.returncode == 0, proc.stdout
+    assert not marker.exists()
+    row = json.loads(proc.stdout)["connectors"][0]
+    assert all(c["result"] == "not_checked" for c in row["capabilities"] if c["declared"])
+    # The overall verdict stays honest even in login-only scope.
+    assert row["verdict"] == "capability_not_checked"
+
+
+def test_login_only_still_fails_on_policy_mismatch(world):
+    fake_codex(world["tmp"], "Logged in using an API key - sk-***", 0)
+    assert run_cli(world, "status", "--login-only", "--connector", "codex").returncode == 1
 
 
 # --------------------------------------------------------------------------
@@ -255,8 +322,81 @@ def test_api_key_login_violates_subscription_only_policy(world):
 
 
 def test_kimi_non_oauth_provider_violates_subscription_only_policy(world):
-    fake_kimi(world["tmp"], "custom:moonshot  type=openai  models=2  source=api_key")
+    fake_kimi(world["tmp"], "custom:moonshot  type=openai  models=2  source=inline")
     assert status_of(world, "kimi")["verdict"] == "policy_mismatch"
+
+
+def test_kimi_api_json_provider_violates_subscription_only_policy(world):
+    fake_kimi(world["tmp"], "custom:x  type=openai  models=1  source=apiJson(https://example.invalid/api.json)")
+    assert status_of(world, "kimi")["verdict"] == "policy_mismatch"
+
+
+def _kimi_login(world) -> dict:
+    return {c["check"]: c for c in status_of(world, "kimi")["checks"]}
+
+
+def test_kimi_mixed_oauth_and_api_key_providers_fail_closed(world):
+    # provider list prints one line per configured provider; an OAuth one
+    # existing does not prove the OAuth one is what gets used.
+    fake_kimi(
+        world["tmp"],
+        "custom:moonshot  type=openai  models=2  source=inline\n"
+        "managed:kimi-code  type=kimi  models=4  source=oauth\n"
+        "\n"
+        "Default model: custom:moonshot/kimi-k2",
+    )
+    checks = _kimi_login(world)
+    assert checks["login"]["method"] == "mixed"
+    assert checks["billing_policy"]["result"] == "fail"
+    assert status_of(world, "kimi")["verdict"] == "policy_mismatch"
+
+
+def test_kimi_mixed_order_reversed_also_fails_closed(world):
+    fake_kimi(
+        world["tmp"],
+        "managed:kimi-code  type=kimi  models=4  source=oauth\n"
+        "custom:moonshot  type=openai  models=2  source=inline",
+    )
+    assert status_of(world, "kimi")["verdict"] == "policy_mismatch"
+
+
+def test_kimi_only_oauth_providers_with_default_model_line_pass(world):
+    fake_kimi(
+        world["tmp"],
+        "managed:kimi-code  type=kimi  models=4  source=oauth\n"
+        "managed:kimi-code-global  type=kimi  models=4  source=oauth\n"
+        "\n"
+        "Default model: managed:kimi-code/kimi-for-coding",
+    )
+    checks = _kimi_login(world)
+    assert checks["login"]["result"] == "pass"
+    assert checks["login"]["method"] == "subscription"
+    assert checks["billing_policy"]["result"] == "pass"
+
+
+def test_kimi_oauth_lookalike_source_is_not_subscription(world):
+    fake_kimi(world["tmp"], "managed:x  type=kimi  models=1  source=oauth-proxy")
+    assert _kimi_login(world)["login"].get("method") != "subscription"
+    assert status_of(world, "kimi")["verdict"] != "live_turn_not_checked"
+
+
+def test_kimi_unrecognised_extra_line_is_unknown(world):
+    fake_kimi(
+        world["tmp"],
+        "managed:kimi-code  type=kimi  models=4  source=oauth\n"
+        "some future line we do not understand",
+    )
+    checks = _kimi_login(world)
+    assert checks["login"]["result"] == "not_checked"
+    assert status_of(world, "kimi")["verdict"] == "unknown"
+
+
+def test_kimi_providers_plus_no_providers_text_is_unknown(world):
+    fake_kimi(
+        world["tmp"],
+        "managed:kimi-code  type=kimi  models=4  source=oauth\nNo providers configured.",
+    )
+    assert status_of(world, "kimi")["verdict"] == "unknown"
 
 
 # --------------------------------------------------------------------------
@@ -390,6 +530,18 @@ def test_login_rule_state_vocabulary_is_closed(world):
 
     with pytest.raises(ac.ConnectorManifestError, match="state"):
         _mutate_and_load(world, mutate)
+
+
+def test_item_rule_cannot_declare_mixed_method(world):
+    def mutate(d):
+        d["connectors"]["kimi"]["login"]["status_probe"]["items"]["rules"][0]["method"] = "mixed"
+
+    with pytest.raises(ac.ConnectorManifestError, match="method"):
+        _mutate_and_load(world, mutate)
+
+
+def test_mixed_method_satisfies_no_billing_policy():
+    assert all(ac.MIXED_METHOD not in allowed for allowed in ac.BILLING_POLICIES.values())
 
 
 def test_validate_command_exit_codes(world):

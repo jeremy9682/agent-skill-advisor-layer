@@ -73,15 +73,30 @@ connectors:
     login:
       status_probe:
         # kimi 2.0.0 has no "am I signed in" subcommand. `provider list`
-        # shows whether an OAuth-managed provider is configured; it does not
-        # prove the token is still valid, hence evidence=config-inference.
+        # shows which providers are configured; it does not prove the token is
+        # still valid, hence evidence=config-inference.
+        #
+        # It prints one line per provider ("<id>  type=..  models=N  source=X",
+        # X in oauth / inline / apiJson(<url>)) and optionally a trailing
+        # "Default model: <alias>" line. Several providers can coexist and the
+        # text output does not say which one the default model uses (only the
+        # --json output does, and that carries credentials, so we never read
+        # it). Therefore every provider line is classified and aggregated:
+        # only "all providers are OAuth" counts as subscription; a mix yields
+        # method=mixed, which satisfies no billing policy; any line we do not
+        # recognise makes the whole result unknown.
         argv: ["{binary}", provider, list]
         timeout_seconds: 30
         evidence: config-inference
+        items:
+          exit_code: 0
+          item_pattern: '\ssource=\S+$'
+          ignore_pattern: '^(\s*|Default model: \S.*)$'
+          rules:
+            - {pattern: '\ssource=oauth$', method: subscription}
+            - {pattern: '\ssource=(inline|apiJson\(\S+\))$', method: api_key_or_custom}
         rules:
-          - {exit_code: 0, pattern: 'source=oauth', state: logged_in, method: subscription}
-          - {exit_code: 0, pattern: '^No providers configured', state: not_logged_in}
-          - {exit_code: 0, pattern: 'source=', state: logged_in, method: api_key_or_custom}
+          - {exit_code: 0, pattern: '\ANo providers configured\.?\s*\Z', state: not_logged_in}
       guide:
         signup_url: https://kimi.com
         signup_url_global: https://kimi.ai

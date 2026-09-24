@@ -29,7 +29,12 @@
   - 每家有：官方安装命令、登录状态探测（命令 + 判定规则 + 证据强度）、登录引导（只打印本家命令行的登录命令、注册页、步骤）、能力声明。
 - `scripts/agent_connect.py`：
   - `validate`：清单不合规一律退出码 2（写错即拒）。
-  - `status [--connector X] [--json]`：每项检查三态（过 / 不过 / 没检查）；只有全部「登录已配置」才退出 0；未登录、未安装、无法判断、登录方式不符的，自动附登录引导。
+  - `status [--connector X] [--json]`：每项检查三态（过 / 不过 / 没检查）；分两层报告：
+    - `login_verdict`（登录层）：可执行文件 + 登录 + 计费策略；
+    - `verdict`（整体就绪）：登录层 → 每个声明为 true 的能力 → 真实对话，只有 `ready` 算成功。任何「不过 / 没检查」都非 0 退出（不许「没检查当通过」）。
+    - 原型不跑真实对话，所以完整 `status` **恒非 0**（`live_turn_not_checked`）——它现在不是就绪闸门，这是刻意的（终审 P1-1）。
+  - `status --login-only`：只回答「登录是否已配置且符合计费策略」，不跑能力探测（能力行标「没检查」），全部 `login_verdict=login_configured` 才退出 0。JSON 顶层带 `scope: full | login-only`，防止把登录层结论当整体就绪。
+  - 登录层没配置好的（未登录、未安装、无法判断、登录方式不符），自动附登录引导。
   - `guide <connector>`：只打印引导，不执行命令行。
 
 ### 判定规则（本机 2026-09-23 实测样本）
@@ -37,7 +42,9 @@
 | 家 | 探测命令 | 已登录 | 未登录 | 证据强度 |
 |---|---|---|---|---|
 | codex 0.155.1 | `codex login status` | 退出 0 且「Logged in using ChatGPT」→ 订阅；「Logged in using an API key」→ API key | 退出 1 且「Not logged in」 | 官方状态命令 |
-| kimi 2.0.0 | `kimi provider list` | 退出 0 且含 `source=oauth` → 订阅；其他 `source=` → API key / 自定义 | 退出 0 且「No providers configured.」 | 配置推断（kimi 没有「是否已登录」子命令，只能证明配置了 OAuth provider，不能证明令牌仍有效） |
+| kimi 2.0.0 | `kimi provider list` | 每行一个 provider，逐行分类后聚合：**全部** `source=oauth` → 订阅；全部 `inline` / `apiJson(...)` → API key / 自定义；**混合 → `mixed`，任何计费策略都不认**；出现不认识的行 → 无法判断 | 退出 0 且整段输出只有「No providers configured.」 | 配置推断（kimi 没有「是否已登录」子命令，只能证明配置了 OAuth provider，不能证明令牌仍有效） |
+
+kimi 聚合的理由（终审 P1-2）：kimi 允许同时配多个 provider，文本输出不说默认模型走哪个 provider（只有 `--json` 说，但它含凭据，不读）。所以「存在一个 OAuth」不能证明用的是 OAuth，只有「全是 OAuth」才无歧义。源码核对：kimi-code 2.0.0 `handleProviderList` 每行 `<id>  type=..  models=N  source=<oauth|inline|apiJson(url)>`，末尾可选 `Default model: ...`。
 
 样本来源：已登录样本来自本机真实状态；未登录样本来自指向空目录的 `CODEX_HOME` / `HOME`；codex API key 样本用假占位串写进临时 `CODEX_HOME` 取得，取完即删，未碰真实登录。
 
@@ -46,16 +53,17 @@
 1. 只执行本家命令行：探测命令第一个参数必须是 `{binary}`；登录引导里的命令第一个词必须是本家命令行名，且不许带 `| ; & $ > <` 等拼接符。
 2. 原始输出只在内存里分类，**永不打印、不进 JSON**。原因：`codex login status` 在 API key 模式下会打出部分 key。
 3. 探测时剥掉该家的 API key 环境变量（codex 复用派发清单的 `strip_environment`），避免「环境里有 key 就算已登录」。
-4. 标准输入关闭、超时封顶 60 秒；超时或输出不认识 → 「没检查」→ 结论「无法判断」，退出码非 0。
+4. 标准输入关闭、超时封顶 60 秒；超时或输出不认识 → 「没检查」→ 结论「无法判断」，退出码非 0。能力探测超时 / 不过同样让整体 `status` 非 0。
 5. 能力声明为 true 必须带探测，报告的是探测结果（能力不许虚报）；声明 false 不许带探测。
 6. 不执行登录、不读凭据文件、不存任何秘密；登录引导只提示。
-7. 「登录已配置」≠「能用」：`live_turn`（真实对话）在原型里恒为「没检查」。
+7. 「登录已配置」≠「能用」：`live_turn`（真实对话）在原型里恒为「没检查」，因此完整 `status` 恒非 0；`mixed` 登录方式不进任何计费策略（清单里也不许声明）。
 
 ### 验证
 
-- 新测试 `tests/test_agent_connect.py` 26 条，全部用写在临时目录里的假命令行真实起子进程。
+- 新测试 `tests/test_agent_connect.py` 40 条（终审后 +14），全部用写在临时目录里的假命令行真实起子进程。
+- 终审修复后补 13 个变异（能力不过被忽略、能力整体不计入、能力没检查不阻断、真实对话没检查当过、完整模式按登录层退出、`--login-only` 仍跑探测、混合塌成首个、不认识的行被忽略、`mixed` 进策略、不走聚合、OAuth 模式不锚定、条目规则不校验、引导条件错），全部变红。
 - 变异 11 个（忽略退出码、未知当已登录、不剥环境变量、回显原始输出、去掉「声明需探测」、计费恒过、能力忽略匹配、真实对话恒过、引导命令不限本家、引导不拦拼接符、探测不限 `{binary}`），全部变红。
-- 本机真跑：`status` 两家均「登录已配置」，kimi ACP 能力探测过、codex ACP 不适用；把 `CODEX_HOME` / `HOME` 指向空目录再跑，两家都判「未登录」并附引导（真实命令行上的反向对照）。
+- 本机真跑：`status --login-only` 两家均「登录已配置」、退出 0；完整 `status` 两家 `live_turn_not_checked`、退出 1，kimi ACP 能力探测过、codex ACP 不适用；把 `CODEX_HOME` / `HOME` 指向空目录再跑，两家都判「未登录」并附引导（真实命令行上的反向对照）。
 - 全量测试：本分支 334 过 / 4 失败；4 个失败是 `tests/test_router_hook.py` 的子进程超时，origin/main 基线同样 4 个失败（基线 308 过 / 4 失败），与本改动无关。
 
 ## 四、后续分期（每期单独 PR、单独终审）
@@ -70,7 +78,8 @@
 ## 五、刻意取舍
 
 - **不做登录代执行**：只打印官方命令，由工程师自己在终端跑。原型不进入凭据链路，符合 Q44「订阅只许驱动官方命令行、用用户自己的登录」。
-- **kimi 只做配置推断**：它没有状态子命令；与其伪造「已验证」，不如明写证据强度，P1 的 `--smoke` 再补真实对话证据。
+- **kimi 只做配置推断**：它没有状态子命令；与其伪造「已验证」，不如明写证据强度，P1 的 `--smoke` 再补真实对话证据。混合 provider 失败关闭（终审 CHALLENGE 后修）。
+- **完整 `status` 恒非 0**：原型不花额度跑真实对话，就不许报告整体成功；只想问登录的用 `--login-only`（终审 CHALLENGE 后修）。
 - **codex ACP 标「不适用」**：官方命令行没有 ACP 服务端，社区适配器未安装，不虚报。
 - **不改 `agent-providers.yaml`**：它被 agent-run-orchestrator 的 `governance.lock.json` 按哈希钉住；新开一个文件不影响派发链路。
 - **新文件，不塞进 wrapper**：`agent_provider_run.py` 近 4000 行且被钉住，原型阶段独立脚本更易审、易撤。

@@ -6,11 +6,22 @@ Internal ops tool (founder Q44 / Q46). Three commands:
 * ``validate`` -- load ``agent-connectors.yaml`` and fail closed on any rule
   violation (exit 2).
 * ``status`` -- for each connector: is the vendor CLI installed, is a login
-  configured, does the login method match the billing policy, and do the
-  declared capabilities hold. Every check is three-state
-  (``pass`` / ``fail`` / ``not_checked``); ``not_checked`` never counts as
-  success. Exit 0 only when every requested connector is ``login_configured``.
-  Connectors that are not configured get their login guide printed.
+  configured, does the login method match the billing policy, do the
+  declared capabilities hold, and does a real turn work. Every check is
+  three-state (``pass`` / ``fail`` / ``not_checked``); ``not_checked`` never
+  counts as success. Two layers are reported separately:
+
+  - ``login_verdict`` -- binary + login + billing policy only;
+  - ``verdict`` -- overall readiness: the login layer, then every capability
+    declared true, then ``live_turn``. Only ``ready`` is success.
+
+  Exit 0 only when every requested connector is ``ready``. This prototype
+  never runs a real turn, so plain ``status`` always exits non-zero
+  (``live_turn_not_checked``) -- by design, it is not a readiness gate yet.
+  ``status --login-only`` is the explicit, narrower question "is a login
+  configured that matches the billing policy": it skips capability probes
+  and exits 0 when every ``login_verdict`` is ``login_configured``.
+  Connectors whose login is not configured get their login guide printed.
 * ``guide <connector>`` -- print the login / sign-up guide. Never runs the CLI.
 
 Safety properties (each has a test):
@@ -51,6 +62,9 @@ BINARY_TOKEN = "{binary}"
 
 LOGIN_STATES = frozenset({"logged_in", "not_logged_in"})
 LOGIN_METHODS = frozenset({"subscription", "api_key", "api_key_or_custom"})
+# Result-only method: several configured sources disagree. Never declarable in
+# a rule and deliberately absent from every billing policy (fails closed).
+MIXED_METHOD = "mixed"
 EVIDENCE_KINDS = frozenset({"official-status-command", "config-inference"})
 BILLING_POLICIES = {
     # policy -> login methods that satisfy it
@@ -68,6 +82,10 @@ VERDICT_ZH = {
     "needs_login": "未登录",
     "policy_mismatch": "登录方式不符合计费策略",
     "unknown": "无法判断",
+    "capability_failed": "声明的能力探测不过",
+    "capability_not_checked": "声明的能力没检查",
+    "live_turn_not_checked": "真实对话没检查（不能算可用）",
+    "ready": "可用",
 }
 
 
@@ -133,6 +151,28 @@ def _validate_login(name: str, login: Any) -> None:
         probe.get("evidence") in EVIDENCE_KINDS,
         f"{where}.evidence must be one of {sorted(EVIDENCE_KINDS)}",
     )
+    items = probe.get("items")
+    if items is not None:
+        iw = f"{where}.items"
+        _require(isinstance(items, dict), f"{iw} must be a mapping")
+        code = items.get("exit_code")
+        _require(isinstance(code, int) and not isinstance(code, bool), f"{iw}.exit_code must be an int")
+        _check_pattern(f"{iw}.item_pattern", items.get("item_pattern"))
+        if "ignore_pattern" in items:
+            _check_pattern(f"{iw}.ignore_pattern", items.get("ignore_pattern"))
+        item_rules = items.get("rules")
+        _require(
+            isinstance(item_rules, list) and item_rules,
+            f"{iw}.rules must be a non-empty list",
+        )
+        for i, rule in enumerate(item_rules):
+            rw = f"{iw}.rules[{i}]"
+            _require(isinstance(rule, dict), f"{rw} must be a mapping")
+            _check_pattern(rw, rule.get("pattern"))
+            _require(
+                rule.get("method") in LOGIN_METHODS,
+                f"{rw}.method must be one of {sorted(LOGIN_METHODS)}",
+            )
     rules = probe.get("rules")
     _require(isinstance(rules, list) and rules, f"{where}.rules must be a non-empty list")
     for i, rule in enumerate(rules):
@@ -299,7 +339,55 @@ def _run_probe(binary: str, argv: list[str], timeout: float, env: dict[str, str]
     return {"ran": True, "exit_code": proc.returncode, "output": (proc.stdout or "") + (proc.stderr or "")}
 
 
-def classify_login(rules: list[dict], exit_code: int, output: str) -> dict | None:
+def _classify_items(items: dict, exit_code: int, output: str) -> tuple[bool, dict | None]:
+    """Aggregate a one-line-per-source listing (e.g. ``kimi provider list``).
+
+    Returns ``(found, state)``. ``found`` is False when the output has no item
+    line at all (the caller then falls back to whole-output rules). Otherwise
+    every line must be either an ignorable line or an item line that some item
+    rule classifies -- anything else makes the result unknown (``None``).
+    Only a single agreed method passes through; disagreeing sources yield
+    ``mixed``, which no billing policy accepts.
+    """
+
+    if items["exit_code"] != exit_code:
+        return False, None
+    item_re = re.compile(items["item_pattern"])
+    ignore_re = re.compile(items["ignore_pattern"]) if items.get("ignore_pattern") else None
+    methods: set[str] = set()
+    found = False
+    unrecognised = False
+    for line in output.splitlines():
+        if item_re.search(line):
+            found = True
+            for rule in items["rules"]:
+                if re.search(rule["pattern"], line):
+                    methods.add(rule["method"])
+                    break
+            else:
+                unrecognised = True
+        elif ignore_re is not None and ignore_re.fullmatch(line):
+            continue
+        else:
+            unrecognised = True
+    if not found:
+        return False, None
+    if unrecognised:
+        return True, None
+    method = next(iter(methods)) if len(methods) == 1 else MIXED_METHOD
+    return True, {"state": "logged_in", "method": method}
+
+
+def classify_login(probe_or_rules: dict | list[dict], exit_code: int, output: str) -> dict | None:
+    if isinstance(probe_or_rules, dict):
+        rules = probe_or_rules["rules"]
+        items = probe_or_rules.get("items")
+    else:
+        rules, items = probe_or_rules, None
+    if items is not None:
+        found, state = _classify_items(items, exit_code, output)
+        if found:
+            return state
     for rule in rules:
         if rule["exit_code"] == exit_code and re.search(rule["pattern"], output, re.MULTILINE):
             return {"state": rule["state"], "method": rule.get("method")}
@@ -310,7 +398,9 @@ def _check(name: str, result: str, detail: str, **extra: Any) -> dict:
     return {"check": name, "result": result, "detail": detail, **extra}
 
 
-def _capabilities(spec: dict, binary: str | None, env: dict[str, str]) -> list[dict]:
+def _capabilities(
+    spec: dict, binary: str | None, env: dict[str, str], run_probes: bool = True
+) -> list[dict]:
     out = []
     for cap, cspec in spec["capabilities"].items():
         row = {"name": cap, "declared": cspec["declared"]}
@@ -318,6 +408,8 @@ def _capabilities(spec: dict, binary: str | None, env: dict[str, str]) -> list[d
             row.update(result=NOT_APPLICABLE, detail=cspec.get("note", "declared false"))
         elif binary is None:
             row.update(result=NOT_CHECKED, detail="binary not installed")
+        elif not run_probes:
+            row.update(result=NOT_CHECKED, detail="skipped: --login-only")
         else:
             probe = cspec["probe"]
             ran = _run_probe(binary, probe["argv"], probe["timeout_seconds"], env)
@@ -334,7 +426,7 @@ def _capabilities(spec: dict, binary: str | None, env: dict[str, str]) -> list[d
     return out
 
 
-def connector_status(manifest: dict, name: str) -> dict:
+def connector_status(manifest: dict, name: str, login_only: bool = False) -> dict:
     spec = manifest["connectors"][name]
     env = _probe_env(spec["strip_environment"])
     checks: list[dict] = []
@@ -354,7 +446,7 @@ def connector_status(manifest: dict, name: str) -> dict:
         if not ran["ran"]:
             checks.append(_check("login", NOT_CHECKED, ran["why"], evidence=probe["evidence"]))
         else:
-            login_state = classify_login(probe["rules"], ran["exit_code"], ran["output"])
+            login_state = classify_login(probe, ran["exit_code"], ran["output"])
             if login_state is None:
                 checks.append(
                     _check(
@@ -391,23 +483,38 @@ def connector_status(manifest: dict, name: str) -> dict:
     )
 
     if binary is None:
-        verdict = "needs_install"
+        login_verdict = "needs_install"
     elif login_row["result"] == FAIL:
-        verdict = "needs_login"
+        login_verdict = "needs_login"
     elif login_row["result"] == NOT_CHECKED:
-        verdict = "unknown"
+        login_verdict = "unknown"
     elif checks[-2]["result"] != PASS:
-        verdict = "policy_mismatch"
+        login_verdict = "policy_mismatch"
     else:
-        verdict = "login_configured"
+        login_verdict = "login_configured"
+
+    capabilities = _capabilities(spec, binary, env, run_probes=not login_only)
+    declared = [c for c in capabilities if c["declared"]]
+    live_turn = checks[-1]
+    if login_verdict != "login_configured":
+        verdict = login_verdict
+    elif any(c["result"] == FAIL for c in declared):
+        verdict = "capability_failed"
+    elif any(c["result"] != PASS for c in declared):
+        verdict = "capability_not_checked"
+    elif live_turn["result"] != PASS:
+        verdict = "live_turn_not_checked"
+    else:
+        verdict = "ready"
 
     return {
         "connector": name,
         "display_name": spec["display_name"],
         "provider_ref": spec["provider_ref"],
+        "login_verdict": login_verdict,
         "verdict": verdict,
         "checks": checks,
-        "capabilities": _capabilities(spec, binary, env),
+        "capabilities": capabilities,
     }
 
 
@@ -432,7 +539,10 @@ def render_guide(name: str, spec: dict) -> str:
 
 def render_status(result: dict) -> str:
     name = result["connector"]
-    lines = [f"{name}（{result['display_name']}）：{VERDICT_ZH[result['verdict']]} [{result['verdict']}]"]
+    lines = [
+        f"{name}（{result['display_name']}）：{VERDICT_ZH[result['verdict']]} [{result['verdict']}]",
+        f"  登录层：{VERDICT_ZH[result['login_verdict']]} [{result['login_verdict']}]",
+    ]
     labels = {"binary": "可执行文件", "login": "登录", "billing_policy": "计费策略", "live_turn": "真实对话"}
     for check in result["checks"]:
         extra = ""
@@ -460,6 +570,12 @@ def main(argv: list[str] | None = None) -> int:
     st = sub.add_parser("status")
     st.add_argument("--connector", action="append", default=None)
     st.add_argument("--json", action="store_true")
+    st.add_argument(
+        "--login-only",
+        action="store_true",
+        help="only check binary + login + billing policy; skip capability probes; "
+        "exit 0 when every login_verdict is login_configured",
+    )
     gd = sub.add_parser("guide")
     gd.add_argument("connector")
     args = parser.parse_args(argv)
@@ -486,18 +602,23 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         print(f"unknown connector: {', '.join(unknown)}", file=sys.stderr)
         return 2
-    results = [connector_status(manifest, n) for n in names]
+    results = [connector_status(manifest, n, login_only=args.login_only) for n in names]
+    scope = "login-only" if args.login_only else "full"
     if args.json:
-        print(json.dumps({"connectors": results}, ensure_ascii=False, indent=2))
+        print(json.dumps({"scope": scope, "connectors": results}, ensure_ascii=False, indent=2))
     else:
-        blocks = []
+        blocks = [f"范围：{'仅登录层（--login-only，未跑能力探测）' if args.login_only else '完整（登录 + 能力 + 真实对话）'}"]
         for r in results:
             block = render_status(r)
-            if r["verdict"] != "login_configured":
+            if r["login_verdict"] != "login_configured":
                 block += "\n" + render_guide(r["connector"], manifest["connectors"][r["connector"]])
             blocks.append(block)
         print("\n\n".join(blocks))
-    return 0 if all(r["verdict"] == "login_configured" for r in results) else 1
+    if args.login_only:
+        ok = all(r["login_verdict"] == "login_configured" for r in results)
+    else:
+        ok = all(r["verdict"] == "ready" for r in results)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
