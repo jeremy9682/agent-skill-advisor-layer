@@ -72,6 +72,7 @@ scripts/install.sh               一次安装
 skills/dsh-dispatch/             可移植分派 skill
 skills/skill-advisor/            高成本 skill 建议层
 skills/zcode-delegate-to-dsh/    ZCode → 本机插座
+skills/codex-house-loop/         本机 Codex 编排习惯（Grok + dsh + herdr sol@high）
 gateway/                         dsh / agent-run / cursor-acp 薄 CLI
 server/dsh-mcp.mjs               MCP stdio（dsh_delegate / dsh_health）
 plugins/dsh-dispatch-pack/       给 `dsh plugin add` 的 Cordis 包
@@ -137,6 +138,7 @@ Codex：
 mkdir -p ~/.codex/skills/skill-advisor ~/.codex/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.codex/skills/skill-advisor/SKILL.md
 cp skills/dsh-dispatch/SKILL.md ~/.codex/skills/dsh-dispatch/SKILL.md
+cp -R skills/codex-house-loop ~/.codex/skills/codex-house-loop
 ```
 
 Claude Code：
@@ -145,6 +147,7 @@ Claude Code：
 mkdir -p ~/.claude/skills/skill-advisor ~/.claude/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.claude/skills/skill-advisor/SKILL.md
 cp skills/dsh-dispatch/SKILL.md ~/.claude/skills/dsh-dispatch/SKILL.md
+cp -R skills/codex-house-loop ~/.claude/skills/codex-house-loop
 ```
 
 然后把 `examples/AGENTS.codex.snippet.md` 加到全局或项目 `AGENTS.md`。Claude 项目可用 `examples/CLAUDE.snippet.md` 和 `examples/CLAUDE.settings.local.example.json`。
