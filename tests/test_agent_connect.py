@@ -219,7 +219,7 @@ def test_capability_probe_failure_blocks_overall_status(world):
     assert run_cli(world, "status", "--connector", "codex").returncode == 1
 
 
-def test_capability_probe_timeout_blocks_overall_status(world, monkeypatch):
+def test_capability_probe_timeout_blocks_overall_status(world):
     fake = world["tmp"] / "kimi"
     fake.write_text(
         fake.read_text().replace(
@@ -227,10 +227,16 @@ def test_capability_probe_timeout_blocks_overall_status(world, monkeypatch):
             'if [ "$1" = "acp" ] && [ "$2" = "--help" ]; then\n  sleep 5',
         )
     )
-    monkeypatch.setattr(ac, "PROBE_TIMEOUT_CAP_SECONDS", 1)
+    # Only the ACP probe gets a short timeout; the login and other probes keep
+    # their normal budget so a loaded machine cannot turn this into "unknown".
+    data = yaml.safe_load(world["connectors"].read_text())
+    data["connectors"]["kimi"]["capabilities"]["acp_native"]["probe"]["timeout_seconds"] = 1
+    write_connectors(world["tmp"], data)
     result = status_of(world, "kimi")
     caps = {c["name"]: c for c in result["capabilities"]}
     assert caps["acp_native"]["result"] == "not_checked"
+    assert "timeout" in caps["acp_native"]["detail"]
+    assert result["login_verdict"] == "login_configured"
     assert result["verdict"] == "capability_not_checked"
 
 
