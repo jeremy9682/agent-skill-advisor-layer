@@ -58,10 +58,11 @@ def is_review_seat(seat):
 # Seat vocabulary: {family}-{role} or a bare principal. Catches the real drill
 # failures (e.g. "judgment-claude" — wrong order; "codex-final-review" and
 # "cursor-grok-cross-review" are fine).  ``cursor-*`` is a real external
-# provider seat, never an alias for Codex.  ``kimi-*``, ``glm-*`` and
-# ``devin-*`` are real external executor seats too, never aliases for Claude.
+# provider seat, never an alias for Codex.  ``kimi-*``, ``glm-*``, ``devin-*``
+# and ``deepseek-*`` are real external executor seats too, never aliases for
+# Claude or any other family.
 SEAT_RE = re.compile(r"^(?:claude|codex|cursor|fable|opus|sonnet|human|founder"
-                     r"|kimi|glm|devin)"
+                     r"|kimi|glm|devin|deepseek)"
                      r"(?:-[a-z]+(?:-[a-z]+)*)?$")
 # A frozen-intent path is ONE repo-relative path (+optional non-empty #anchor):
 # not absolute, not `..`-escaping, no whitespace / '+' / bare-anchor / empty or
