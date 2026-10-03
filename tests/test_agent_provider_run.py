@@ -1976,10 +1976,12 @@ def test_governed_review_and_fable_routes_resolve_exact_bindings():
             },
         )()
         expected_model = "claude-fable-5-1" if shape == "arbitration" else "claude-fable-5"
+        # Q116 (2026-10-03): arbitration follows Anthropic's official Fable default (high).
+        expected_effort = "high" if shape == "arbitration" else "max"
         assert agent_run.resolve_route(args, data) == (
             "claude",
             expected_model,
-            "max",
+            expected_effort,
             "fable-final-review",
             shape,
         )
