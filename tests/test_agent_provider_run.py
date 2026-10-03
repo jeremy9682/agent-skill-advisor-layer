@@ -1987,6 +1987,47 @@ def test_governed_review_and_fable_routes_resolve_exact_bindings():
         )
 
 
+def test_arbitration_high_execution_keeps_max_governance_for_risk_producers(tmp_path):
+    """Q116: arbitration executes at high, but its governance effort stays max.
+
+    A producer carrying a risk overlay must still pass the xhigh/max gate in
+    validate_review_independence when reviewed through the arbitration route.
+    """
+    data = agent_run.load_manifest(ROOT / "agent-providers.yaml")
+    binding = agent_run.route_binding(data, "arbitration")
+    assert binding["effort"] == "high"
+    assert binding["governance_effort"] == "max"
+
+    data["journal"]["root"] = str(tmp_path)
+    (tmp_path / "demo.jsonl").write_text(
+        json.dumps(
+            {
+                "run_id": "producer-risk-codex",
+                "provider_id": "codex",
+                **verified_producer_model("codex", "gpt-5.6-terra", "openai"),
+                "seat": "codex-landing",
+                "session_id": "session-arb",
+                "repo": "demo",
+                "run_status": "completed",
+                "exit_code": 0,
+                "mode": "execute",
+                "risk_overlay": {"triggers": ["money", "permissions"]},
+            }
+        )
+        + "\n"
+    )
+    args = type(
+        "Args",
+        (),
+        {"producer_provider": "codex", "producer_run_id": "producer-risk-codex"},
+    )()
+    policy, producer = agent_run.validate_review_independence(
+        "arbitration", "claude", args, data, "demo"
+    )
+    assert policy == "cross-family"
+    assert producer["risk_triggers"] == ["money", "permissions"]
+
+
 def test_environment_strips_api_billing_keys(monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "secret")
     env, stripped = agent_run.scrub_environment({"strip_environment": ["XAI_API_KEY"]})

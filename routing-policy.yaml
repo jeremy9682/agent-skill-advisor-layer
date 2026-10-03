@@ -403,6 +403,7 @@ runtime_routes:
     provider: claude
     seat: fable-final-review
     review_independence: cross-family
+    governance_effort: max          # Q116: execution effort is high, but the risk-overlay gate (xhigh/max) must not be loosened
     timeout_seconds: 900
     serial_group: claude-family
     concurrency: family_serial
