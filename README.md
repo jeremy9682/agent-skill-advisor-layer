@@ -72,6 +72,7 @@ scripts/install.sh               One-shot local install
 skills/dsh-dispatch/             Portable dispatch skill
 skills/skill-advisor/            High-cost skill suggestion layer
 skills/zcode-delegate-to-dsh/    ZCode → local sockets
+skills/codex-house-loop/         House Codex loop (Grok + dsh + herdr sol@high)
 gateway/                         Thin CLI over dsh / agent-run / cursor-acp
 server/dsh-mcp.mjs               MCP stdio (dsh_delegate / dsh_health)
 plugins/dsh-dispatch-pack/       Cordis bundle for `dsh plugin add`
@@ -152,6 +153,7 @@ For Codex:
 mkdir -p ~/.codex/skills/skill-advisor ~/.codex/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.codex/skills/skill-advisor/SKILL.md
 cp skills/dsh-dispatch/SKILL.md ~/.codex/skills/dsh-dispatch/SKILL.md
+cp -R skills/codex-house-loop ~/.codex/skills/codex-house-loop
 ```
 
 For Claude Code:
@@ -160,6 +162,7 @@ For Claude Code:
 mkdir -p ~/.claude/skills/skill-advisor ~/.claude/skills/dsh-dispatch
 cp skills/skill-advisor/SKILL.md ~/.claude/skills/skill-advisor/SKILL.md
 cp skills/dsh-dispatch/SKILL.md ~/.claude/skills/dsh-dispatch/SKILL.md
+cp -R skills/codex-house-loop ~/.claude/skills/codex-house-loop
 ```
 
 Then add the routing snippet from
