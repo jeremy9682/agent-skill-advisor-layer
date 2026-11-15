@@ -57,16 +57,38 @@ def test_high_cost_skill_names_are_suggest_confirm():
 def test_mattpocock_published_bundle_is_fully_registered_and_pinned():
     audit = load_audit_module()
     expected = {
-        "ask-matt", "code-review", "codebase-design", "diagnosing-bugs",
-        "domain-modeling", "grill-with-docs", "grill-me", "grilling",
-        "handoff", "implement", "improve-codebase-architecture", "prototype",
-        "research", "setup-matt-pocock-skills", "tdd", "teach", "to-spec",
-        "to-tickets", "triage", "wayfinder", "writing-great-skills",
+        "ask-matt",
+        "code-review",
+        "codebase-design",
+        "diagnosing-bugs",
+        "domain-modeling",
+        "grill-me",
+        "grill-with-docs",
+        "grilling",
+        "handoff",
+        "implement",
+        "implement-spec",
+        "improve-codebase-architecture",
+        "matt-retro",
+        "pr",
+        "prototype",
+        "research",
+        "setup-matt-pocock-skills",
+        "tdd",
+        "teach",
+        "to-questionnaire",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "wait-what",
+        "wayfinder",
+        "wizard",
+        "writing-for-agents",
     }
 
     assert audit.MATTPOCOCK_SKILLS == expected
     assert audit.REGISTERED_PINS["mattpocock-skills"] == (
-        "391a2701dd948f94f56a39f7533f8eea9a859c87"
+        "5863806dd4e15c63174bee4e7515a4256792ecfa"
     )
     for name in expected:
         path = audit.SKILL_ROOTS["codex"] / name

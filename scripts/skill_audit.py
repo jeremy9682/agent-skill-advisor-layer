@@ -62,22 +62,28 @@ MATTPOCOCK_SKILLS = {
     "codebase-design",
     "diagnosing-bugs",
     "domain-modeling",
-    "grill-with-docs",
     "grill-me",
+    "grill-with-docs",
     "grilling",
     "handoff",
     "implement",
+    "implement-spec",
     "improve-codebase-architecture",
+    "matt-retro",
+    "pr",
     "prototype",
     "research",
     "setup-matt-pocock-skills",
     "tdd",
     "teach",
+    "to-questionnaire",
     "to-spec",
     "to-tickets",
     "triage",
+    "wait-what",
     "wayfinder",
-    "writing-great-skills",
+    "wizard",
+    "writing-for-agents",
 }
 
 # Local entry-routing overlays. These do not edit the pinned upstream skill and
@@ -352,9 +358,11 @@ def git_info(path: Path) -> dict[str, Any]:
 def source_group(name: str, path: Path, git: dict[str, Any]) -> str:
     remote = git.get("git_remote", "")
     matt_copy_roots = {
-        root for key in ("codex", "claude")
+        root for key in ("codex", "claude", "agents")
         if (root := SKILL_ROOTS.get(key)) is not None
     }
+    if name == "resolving-merge-conflicts" and path.parent in matt_copy_roots:
+        return "mattpocock-skills-legacy"
     if (
         "mattpocock/skills" in remote
         or (name in MATTPOCOCK_SKILLS and path.parent in matt_copy_roots)
@@ -902,7 +910,8 @@ FIRST_PARTY_GROUP = "local-manual"
 # These SHAs are the immutable identifier for skills copied from an upstream
 # without a local git checkout. Keep in sync with docs/external-skill-sources.md.
 REGISTERED_PINS = {
-    "mattpocock-skills": "391a2701dd948f94f56a39f7533f8eea9a859c87",
+    "mattpocock-skills-legacy": "8b78b531ab965735c5dc74f6f7a219e1e37326df",
+    "mattpocock-skills": "5863806dd4e15c63174bee4e7515a4256792ecfa",
     "emilkowalski-skills": "f76beceb7d3fc8c43309cefad5a095a206103a4e",
     "huashu-skills": "35e7cf31328f6de07e5d125bfd094791f84b2352",
     "huashu-design": "0e7ec8aca0058184c1a9e06e57697e84f68a3f0f",
