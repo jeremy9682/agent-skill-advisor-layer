@@ -5,10 +5,15 @@ Codex 官方口径: skill 元数据(name+description)预算约为上下文窗口
 窗口未知时 8,000 字符;超预算先缩短 description,严重时省略并警告。
 (https://developers.openai.com/codex/skills)
 
-本脚本测量**用户级 skill 根目录**的元数据占用(下界估算:不含 plugin/
-system/repo 级 skills;frontmatter 为简化解析,block scalar 有 ±个位数字符误差;
-路径等固定开销按常数 40 字符/项计),对照 8k 保守预算与 2% 估算给出量级结论——
-数字是估算,不代表 Codex 实际截断点。只读,不改任何文件。
+列表文本来源(2026-07-14 逐字复述实测确认): **SKILL.md 的 `description`**。
+`agents/openai.yaml` 的 `interface.short_description` 对列表无效,不要计入;
+但 `policy.allow_implicit_invocation: false` 会让该 skill **完全退出列表**,
+其字符**不计入预算**——本脚本据此排除已降级的 skill。
+
+本脚本测量**用户级 skill 根目录**的占用(下界估算:不含 plugin/system/repo 级
+skills;frontmatter 简化解析,block scalar 有 ±个位数误差;路径等固定开销按 40
+字符/项计),对照 8k 保守预算与 2% 估算给出量级结论——数字是估算,不代表 Codex
+实际截断点。只读,不改任何文件。
 
 用法: python3 scripts/discovery_budget_check.py [--context-tokens N] [--json]
 """
@@ -63,6 +68,19 @@ def parse_frontmatter(path):
     return field("name"), field("description")
 
 
+def is_demoted(skill_dir):
+    """policy.allow_implicit_invocation: false → 退出发现列表,零预算。"""
+    p = os.path.join(skill_dir, "agents", "openai.yaml")
+    if not os.path.exists(p):
+        return False
+    try:
+        import yaml  # 可选依赖;缺失则保守地按"未降级"计入
+        cfg = yaml.safe_load(open(p, encoding="utf-8")) or {}
+    except Exception:
+        return False
+    return (cfg.get("policy") or {}).get("allow_implicit_invocation") is False
+
+
 def scan_root(root, label):
     root = os.path.expanduser(root)
     entries = []
@@ -73,6 +91,8 @@ def scan_root(root, label):
         if os.path.basename(p) not in ("README.md",)
     ]
     for p in sorted(set(candidates)):
+        if is_demoted(os.path.dirname(p)):
+            continue                      # 已降级 → 不在列表 → 不占预算
         name, desc = parse_frontmatter(p)
         if name is None and desc is None:
             continue
