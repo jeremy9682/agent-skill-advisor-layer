@@ -29,7 +29,8 @@ list of group → SHA:
 
 | Source group | Pinned commit SHA |
 | --- | --- |
-| mattpocock-skills | `391a2701dd948f94f56a39f7533f8eea9a859c87` |
+| mattpocock-skills | `5863806dd4e15c63174bee4e7515a4256792ecfa` |
+| mattpocock-skills-legacy | `8b78b531ab965735c5dc74f6f7a219e1e37326df` |
 | emilkowalski-skills | `f76beceb7d3fc8c43309cefad5a095a206103a4e` |
 | huashu-skills | `35e7cf31328f6de07e5d125bfd094791f84b2352` |
 | huashu-design | `0e7ec8aca0058184c1a9e06e57697e84f68a3f0f` |
@@ -47,44 +48,20 @@ benefit).
 
 ## mattpocock/skills
 
-- Source: `https://github.com/mattpocock/skills`
-- Branch: `main`
-- Checked main commit: `391a2701dd948f94f56a39f7533f8eea9a859c87`
-- Published set: the 21 paths declared in `.claude-plugin/plugin.json` at the
-  pinned commit. Directories under `deprecated/`, `in-progress/`, `misc/`, and
-  `personal/` are repository content, not members of the published plugin.
-- Installed skills:
-
-  - User-invoked upstream: `ask-matt`, `grill-with-docs`, `triage`,
-    `improve-codebase-architecture`, `setup-matt-pocock-skills`, `to-spec`,
-    `to-tickets`, `implement`, `wayfinder`, `grill-me`, `handoff`, `teach`,
-    `writing-great-skills`.
-  - Model-invoked upstream: `diagnosing-bugs`, `prototype`, `research`, `tdd`,
-    `domain-modeling`, `codebase-design`, `code-review`, `grilling`.
-- Install shape: reviewed copy pinned to the commit above. The two previously
-  installed productivity skills were byte-identical and retained; the other
-  19 were copied from the audited checkout into each runtime without
-  overwriting existing directories.
-- Reproduction outline (run against an empty destination or filter existing
-  names; the installer refuses overwrite):
-
-```bash
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo mattpocock/skills \
-  --ref 391a2701dd948f94f56a39f7533f8eea9a859c87 \
-  --path <paths-from-.claude-plugin/plugin.json> \
-  --dest ~/.codex/skills
-
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo mattpocock/skills \
-  --ref 391a2701dd948f94f56a39f7533f8eea9a859c87 \
-  --path <paths-from-.claude-plugin/plugin.json> \
-  --dest ~/.claude/skills
-```
+- Source: `https://github.com/mattpocock/skills`, branch `main`.
+- Checked main commit: `5863806dd4e15c63174bee4e7515a4256792ecfa`, official plugin version `1.3.2`, checked 2026-11-15 (Codex copies refreshed 2026-11-05, Claude and agents copies 2026-11-15; evidence kept in the local analysis folder `matt-skills-update-20261115`, not published).
+- Published set: exactly 27 paths declared in `.claude-plugin/plugin.json` at that commit. `deprecated/`, `in-progress/`, `misc/`, and `personal/` remain excluded.
+- Installed reviewed copies in `~/.codex/skills`, `~/.claude/skills`, and `~/.agents/skills`. Preserve compact discovery descriptions and managed `agents/openai.yaml`; current upstream bodies/support files are merged, not blindly replacing local metadata.
+- Published names: `ask-matt`, `diagnosing-bugs`, `grill-with-docs`, `triage`, `improve-codebase-architecture`, `setup-matt-pocock-skills`, `tdd`, `to-spec`, `to-tickets`, `wayfinder`, `implement`, `implement-spec`, `prototype`, `research`, `domain-modeling`, `codebase-design`, `code-review`, `pr`, `matt-retro`, `wizard`, `grill-me`, `grilling`, `handoff`, `teach`, `to-questionnaire`, `wait-what`, `writing-for-agents`.
+- Local collision mapping: upstream `retro` installs as `matt-retro` in all three runtimes; its frontmatter name and Matt internal `/retro` references map to `/matt-retro`. Existing gstack `retro` is unchanged.
+- `resolving-merge-conflicts` is no longer in the upstream published set. Its existing copies are retained unchanged as a legacy skill at `8b78b531ab965735c5dc74f6f7a219e1e37326df`, group `mattpocock-skills-legacy`, manual-only updates. Local permission to stop/abort unsafe merges still overrides upstream prose.
+- Latest upstream glossary name is `GLOSSARY.md`; update of installed skills does not rename any project's existing `CONTEXT.md` or rewrite its docs.
+- New `implement-spec` is explicit-only; installing it does not authorize its multi-agent orchestrator, worktree resets, cleanup, PR actions or cross-family substitutions. `matt-retro` is explicit-only; `pr` is a writing template and grants no publish/merge permission.
+- Evidence, per-file backups, installation hashes and restore scope: local analysis folder `skills-comparison-20261020` (not published).
 
 ### Runtime and routing integration
 
-- Claude honors `disable-model-invocation: true` for the 13 user-invoked
+- Claude honors `disable-model-invocation: true` for the user-invoked
   wrappers. Codex only consumes `name` and `description`; on Codex,
   `explicit-only` is therefore a governance convention reinforced by
   `AGENTS.md` and routing hints, not a runtime-enforced bit.
@@ -98,7 +75,7 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
 - `ask-matt` is an explicit router for this upstream bundle. The local
   `skill-advisor` remains authoritative for high-cost approval policy.
 - `grill-with-docs` is the codebase/documented variant: it composes `grilling`
-  with `domain-modeling` and may update `CONTEXT.md`/ADRs. Plain non-code
+  with `domain-modeling` and may update `GLOSSARY.md`/ADRs. Plain non-code
   pressure tests use the model directly unless the user explicitly enters
   `/grill-me`, `/grilling`, or the grilling workflow.
 - Source group is `mattpocock-skills`; update policy is `merge-only`. Updates
