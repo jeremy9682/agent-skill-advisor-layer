@@ -15,11 +15,15 @@ explain why in one sentence, then continue the main work unless the user
 approves.
 
 A user describing a large desired outcome is not approval to start the target
-skill. Approval must explicitly say to run, start, enable, pair, set up, or
-launch that specific workflow after the suggestion is made.
+skill. A direct explicit request to run, start, enable, pair, set up, or launch
+that specific workflow already supplies scoped startup approval; do not require
+a suggestion first or ask again. When the agent proposes the workflow, wait for
+explicit approval. Startup approval does not grant unspecified commits, pushes,
+deployments, spending, permission changes or other external mutations.
 
-If asked whether to execute one of the target skills directly, answer no unless
-the user has already explicitly approved that target workflow.
+Distinguish a capability question from a request to act. A direct request to
+run the named workflow grants scoped startup approval now; proceed without
+asking again. An informational question alone does not authorize execution.
 
 Use this format:
 
@@ -67,7 +71,8 @@ This looks like a candidate for <skill> because <reason>. I can run it if you ap
 ## Operating Notes
 
 - Suggestion is not invocation.
-- Ask for approval before executing any high-cost skill.
+- Obtain scoped approval before executing a high-cost skill; reuse an explicit
+  approval already supplied for this workflow and unchanged scope.
 - `grilling` is not a high-cost advisor target, but its top-level entry is
   explicit-only. Do not start it from a generic request to push back or find
   flaws; the user must name `/grill-me`, `/grilling`, or the grilling workflow.

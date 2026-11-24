@@ -1,0 +1,388 @@
+diff --git a/investigate/SKILL.md.tmpl b/investigate/SKILL.md.tmpl
+index 67e254d7..e1fd501f 100644
+--- a/investigate/SKILL.md.tmpl
++++ b/investigate/SKILL.md.tmpl
+@@ -65,6 +65,11 @@ gbrain:
+ 
+ # Systematic Debugging
+ 
++Diagnosis-only requests remain read-only: inspect and report evidence and
++proposed fixes; skip instrumentation writes, scope-state writes, implementation
++and persistence. Enter repair only when the user authorized it. Reversibility
++does not supply authorization. The scope rule applies to every phase below.
++
+ ## Iron Law
+ 
+ **NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.**
+@@ -137,7 +142,8 @@ Substitute `<detected-directory>` with the actual directory path (e.g., `src/aut
+ 
+ If the bug spans the entire repo or the scope is genuinely unclear, skip the lock and note why.
+ 
+-**If FREEZE_UNAVAILABLE:** Skip scope lock. Edits are unrestricted.
++**If FREEZE_UNAVAILABLE:** Skip the mechanical lock; the user's authorized file
++scope still applies. Tool absence does not make edits unrestricted.
+ 
+ ---
+ 
+@@ -174,15 +180,12 @@ Before writing ANY fix, verify your hypothesis.
+ 
+ 2. **If the hypothesis is wrong:** Before forming the next hypothesis, consider searching for the error. **Sanitize first** — strip hostnames, IPs, file paths, SQL fragments, customer identifiers, and any internal/proprietary data from the error message. Search only the generic error type and framework context: "{component} {sanitized error type} {framework version}". If the error message is too specific to sanitize safely, skip the search. If WebSearch is unavailable, skip and proceed. Then return to Phase 1. Gather more evidence. Do not guess.
+ 
+-3. **3-strike rule:** If 3 hypotheses fail, **STOP**. Use AskUserQuestion:
+-   ```
+-   3 hypotheses tested, none match. This may be an architectural issue
+-   rather than a simple bug.
+-
+-   A) Continue investigating — I have a new hypothesis: [describe]
+-   B) Escalate for human review — this needs someone who knows the system
+-   C) Add logging and wait — instrument the area and catch it next time
+-   ```
++3. **Reassess after three failed hypotheses.** Summarize what was falsified and
++   the new evidence. Continue if a distinct evidence-backed hypothesis remains
++   within the authorized scope and budget. Stop the dependent action and ask
++   only for a real missing permission, material scope decision, unavailable
++   evidence, or repeated lack of progress. Never infer that three failures alone
++   prove an architectural defect or authorize production instrumentation.
+ 
+ **Red flags** — if you see any of these, slow down:
+ - "Quick fix for now" — there is no "for now." Fix it right or escalate.
+@@ -193,7 +196,7 @@ Before writing ANY fix, verify your hypothesis.
+ 
+ ## Phase 4: Implementation
+ 
+-Once root cause is confirmed:
++Once root cause is confirmed and repair is authorized:
+ 
+ 1. **Fix the root cause, not the symptom.** The smallest change that eliminates the actual problem.
+ 
+@@ -205,13 +208,9 @@ Once root cause is confirmed:
+ 
+ 4. **Run the full test suite.** Paste the output. No regressions allowed.
+ 
+-5. **If the fix touches >5 files:** Use AskUserQuestion to flag the blast radius:
+-   ```
+-   This fix touches N files. That's a large blast radius for a bug fix.
+-   A) Proceed — the root cause genuinely spans these files
+-   B) Split — fix the critical path now, defer the rest
+-   C) Rethink — maybe there's a more targeted approach
+-   ```
++5. **If the fix touches >5 files:** Recheck callers and blast radius. File count
++   alone does not require confirmation. Continue an authorized in-scope fix;
++   escalate new behavior, contract changes, risk or permissions before proceeding.
+ 
+ ---
+ 
+@@ -249,11 +248,11 @@ Log the investigation as a learning for future sessions. Use `type: "investigati
+ 
+ ## Important Rules
+ 
+-- **3+ failed fix attempts → STOP and question the architecture.** Wrong architecture, not failed hypothesis.
++- **3+ failed attempts → reassess evidence and scope.** Continue only with fresh evidence and authority; repeated no-progress or a real decision gap requires escalation.
+ - **Never apply a fix you cannot verify.** If you can't reproduce and confirm, don't ship it.
+ - **Never say "this should fix it."** Verify and prove it. Run the tests.
+-- **If fix touches >5 files → AskUserQuestion** about blast radius before proceeding.
++- **More than 5 files → inspect blast radius**, not an automatic approval loop.
+ - **Completion status:**
+-  - DONE — root cause found, fix applied, regression test written, all tests pass
++  - DONE — requested deliverable verified: for repair, root cause found, fix applied, regression test written, all required tests pass; for diagnosis-only, report evidence and uncertainty without claiming a fix was applied
+   - DONE_WITH_CONCERNS — fixed but cannot fully verify (e.g., intermittent bug, requires staging)
+   - BLOCKED — root cause unclear after investigation, escalated
+diff --git a/review/SKILL.md.tmpl b/review/SKILL.md.tmpl
+index ae480da3..15504524 100644
+--- a/review/SKILL.md.tmpl
++++ b/review/SKILL.md.tmpl
+@@ -32,6 +32,12 @@ triggers:
+ 
+ You are running the `/review` workflow. Analyze the current branch's diff against the base branch for structural issues that tests don't catch.
+ 
++Default to read-only. Only enter fix handling when the user also authorized
++repairs in this scope. In read-only mode, report proposed changes instead of
++applying them; skip setup, all persistence/learning logs, external replies and
++other mutations. Use existing refs or read-only remote queries if a fetch would
++violate the user's no-write contract. Required independent review is not waived.
++
+ ---
+ 
+ ## Step 1: Check branch
+@@ -148,6 +154,12 @@ Follow the output format specified in the checklist. Respect the suppressions 
+ 
+ ## Step 5: Fix-First Review
+ 
++This section's writes apply only to an already-authorized repair. For a
++review-only request, classify and report findings with proposed fixes and tests;
++do not ask whether to fix each one. Explicitly approved routine fixes and their
++regression tests do not require another per-finding approval. New scope, risk
++gates and changes to accepted intent still require the appropriate decision.
++
+ **Every finding gets action — not just critical ones.**
+ 
+ {{CROSS_REVIEW_DEDUP}}
+@@ -158,10 +170,11 @@ For each finding, classify as AUTO-FIX or ASK per the Fix-First Heuristic in
+ checklist.md. Critical findings lean toward ASK; informational findings lean
+ toward AUTO-FIX.
+ 
+-**Test stub override:** Any finding that has a `test_stub` field (generated by a specialist)
++**Test stub review:** Any finding that has a `test_stub` field (generated by a specialist)
+ is reclassified as ASK regardless of its original classification. When presenting the ASK
+ item, show the proposed test file path and the test code. The user approves or skips the
+-test creation. If approved, write the fix + test file. Derive the test file path from
++test creation unless the same in-scope repair and regression test are already
++authorized. A stub alone is not a new approval gate. If authorized, write the fix + test file. Derive the test file path from
+ the finding's `path` using project conventions (`spec/` for RSpec, `__tests__/` for
+ Jest/Vitest, `test_` prefix for pytest, `_test.go` suffix for Go). If the test file
+ already exists, append the new test. Output: `[FIXED + TEST] [file:line] Problem -> fix + test at [test_path]`
+@@ -270,7 +283,7 @@ If no documentation files exist, skip this step silently.
+ 
+ ## Step 5.8: Persist Eng Review result
+ 
+-After all review passes complete, persist the final `/review` outcome so `/ship` can
++Only when persistence is authorized, after all review passes complete, persist the final `/review` outcome so `/ship` can
+ recognize that Eng Review was run on this branch.
+ 
+ Run:
+@@ -297,7 +310,7 @@ If the review exits early before a real review completes (for example, no diff a
+ ## Important Rules
+ 
+ - **Read the FULL diff before commenting.** Do not flag issues already addressed in the diff.
+-- **Fix-first, not read-only.** AUTO-FIX items are applied directly. ASK items are only applied after user approval. Never commit, push, or create PRs — that's /ship's job.
++- **Read-only unless repair is authorized.** AUTO-FIX applies only within that repair scope. Do not reconfirm already-authorized fixes; preserve approval for new scope and risk. Never commit, push, reply externally or create PRs merely because a review found an issue.
+ - **Be terse.** One line problem, one line fix. No preamble.
+ - **Only flag real problems.** Skip anything that's fine.
+ - **Use Greptile reply templates from greptile-triage.md.** Every reply includes evidence. Never post vague replies.
+diff --git a/scripts/resolvers/preamble/generate-ask-user-format.ts b/scripts/resolvers/preamble/generate-ask-user-format.ts
+index 533c002c..26c4a002 100644
+--- a/scripts/resolvers/preamble/generate-ask-user-format.ts
++++ b/scripts/resolvers/preamble/generate-ask-user-format.ts
+@@ -3,6 +3,16 @@ import type { TemplateContext } from '../types';
+ export function generateAskUserFormat(_ctx: TemplateContext): string {
+   return `## AskUserQuestion Format
+ 
++### Is a question necessary?
++
++Reuse explicit decisions already supplied for this unchanged scope. Continue
++ordinary authorized work using evidence and a reasonable explained default.
++Ask only when a material unresolved choice changes scope, risk, cost or outcome,
++or an explicit approval gate remains unmet. Tool availability does not create
++authority. Required approvals and explicit user-requested checkpoints remain.
++The formatting and fallback rules below apply only after a question is necessary;
++use the actual host's available question mechanism and permission rules.
++
+ ### Tool resolution (read first)
+ 
+ "AskUserQuestion" can resolve to two tools at runtime: the **host MCP variant** (e.g. \`mcp__conductor__AskUserQuestion\` — appears in your tool list when the host registers it) or the **native** Claude Code tool.
+@@ -21,8 +31,8 @@ Tell three outcomes apart:
+ 2. **Genuine failure** — no variant in your tool list, OR the variant is present but the call returns an error / missing result (MCP transport error, empty result, host bug — e.g. Conductor's MCP AskUserQuestion is flaky and returns \`[Tool result missing due to internal error]\`).
+    - If it was present and **errored** (not absent), retry the SAME call **once** — but only if no answer could have surfaced (a missing-result error can arrive after the user already saw the question; retrying would double-prompt, so if it may have reached them, treat as pending, don't retry).
+    - Then branch on \`SESSION_KIND\` (echoed by the preamble; empty/absent ⇒ \`interactive\`):
+-     - \`spawned\` → defer to the **Spawned session** block: auto-choose the recommended option. Never prose, never BLOCKED.
+-     - \`headless\` → \`BLOCKED — AskUserQuestion unavailable\`; stop and wait (no human can answer).
++     - \`spawned\` → return the unresolved approval or material choice to the parent; continue only independent authorized work, never auto-approve.
++     - \`headless\` → report the exact missing approval/decision and stop the dependent action; continue independent authorized work. Missing a question tool alone is not a blocker for routine choices.
+      - \`interactive\` → **prose fallback** (below).
+ 
+ **Prose fallback — render the decision brief as a markdown message, not a tool call.** Same information as the tool format below, different structure (paragraphs, not ✅/❌ bullets). It MUST surface this triad:
+diff --git a/scripts/resolvers/preamble/generate-completion-status.ts b/scripts/resolvers/preamble/generate-completion-status.ts
+index dc72a42e..fb960b5a 100644
+--- a/scripts/resolvers/preamble/generate-completion-status.ts
++++ b/scripts/resolvers/preamble/generate-completion-status.ts
+@@ -22,27 +22,40 @@ import type { TemplateContext } from '../types';
+ export function generatePlanModeInfo(_ctx: TemplateContext): string {
+   return `## Plan Mode Safe Operations
+ 
+-In plan mode, allowed because they inform the plan: \`$B\`, \`$D\`, \`codex exec\`/\`codex review\`, writes to \`~/.gstack/\`, writes to the plan file, and \`open\` for generated artifacts.
++The host's plan-mode and user-scope restrictions govern every operation. Tools,
++plan-file edits and local state writes are allowed only when that host and the
++current user authorization permit them; a skill does not create exceptions.
+ 
+ ## Skill Invocation During Plan Mode
+ 
+-If the user invokes a skill in plan mode, the skill takes precedence over generic plan mode behavior. **Treat the skill file as executable instructions, not reference.** Follow it step by step starting from Step 0; the first AskUserQuestion is the workflow entering plan mode, not a violation of it. AskUserQuestion (any variant — \`mcp__*__AskUserQuestion\` or native; see "AskUserQuestion Format → Tool resolution") satisfies plan mode's end-of-turn requirement. If AskUserQuestion is unavailable or a call fails, follow the AskUserQuestion Format failure fallback: \`headless\` → BLOCKED; \`interactive\` → the prose fallback (also satisfies end-of-turn). At a STOP point, stop immediately. Do not continue the workflow or call ExitPlanMode there. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" execute. Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.`;
++Follow the selected workflow only within the host's instruction hierarchy and
++the user's authorized scope. Reading a skill for an audit is not invoking it.
++Preserve explicit approval and STOP gates; reuse decisions already provided.
++If a question is genuinely necessary, use the host's supported mechanism or
++the documented prose/parent fallback. A missing question tool does not block
++routine authorized work or permit automatic approval. Do not invent plan-mode
++exceptions, automatically leave plan mode, or start implementation merely
++because a planning skill was invoked.`;
+ }
+ 
+ export function generateCompletionStatus(ctx: TemplateContext): string {
+   return `## Completion Status Protocol
+ 
+ When completing a skill workflow, report status using one of:
+-- **DONE** — completed with evidence.
+-- **DONE_WITH_CONCERNS** — completed, but list concerns.
++- **DONE** — every requested acceptance condition completed with evidence.
++- **DONE_WITH_CONCERNS** — requested outcome completed, with non-blocking concerns listed; missing required verification is not DONE.
+ - **BLOCKED** — cannot proceed; state blocker and what was tried.
+ - **NEEDS_CONTEXT** — missing info; state exactly what is needed.
+ 
+-Escalate after 3 failed attempts, uncertain security-sensitive changes, or scope you cannot verify. Format: \`STATUS\`, \`REASON\`, \`ATTEMPTED\`, \`RECOMMENDATION\`.
++After 3 failed attempts, reassess evidence, scope and progress. Continue a fresh
++evidence-backed authorized approach; escalate repeated no-progress, uncertain
++security-sensitive changes or a genuine permission/decision gap. Format:
++\`STATUS\`, \`REASON\`, \`ATTEMPTED\`, \`RECOMMENDATION\`.
+ 
+ ## Operational Self-Improvement
+ 
+-Before completing, if you discovered a durable project quirk or command fix that would save 5+ minutes next time, log it:
++Only when learning persistence is authorized (never during a no-write review),
++log a durable project quirk or command fix that would materially help next time:
+ 
+ \`\`\`bash
+ ${ctx.paths.binDir}/gstack-learnings-log '{"skill":"SKILL_NAME","type":"operational","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":N,"source":"observed"}'
+@@ -52,10 +65,12 @@ Do not log obvious facts or one-time transient errors.
+ 
+ ## Telemetry (run last)
+ 
+-After workflow completion, log telemetry. Use skill \`name:\` from frontmatter. OUTCOME is success/error/abort/unknown.
++Only when the user has opted in and the current task permits these writes,
++log telemetry after completion. Skip it entirely in read-only mode. Use skill
++\`name:\` from frontmatter. OUTCOME is success/error/abort/unknown.
+ 
+-**PLAN MODE EXCEPTION — ALWAYS RUN:** This command writes telemetry to
+-\`~/.gstack/analytics/\`, matching preamble analytics writes.
++This command writes local state and may upload telemetry; plan mode and user
++scope are not overridden by this section.
+ 
+ Run this bash:
+ 
+diff --git a/scripts/resolvers/preamble/generate-preamble-bash.ts b/scripts/resolvers/preamble/generate-preamble-bash.ts
+index f0bc57b4..df820260 100644
+--- a/scripts/resolvers/preamble/generate-preamble-bash.ts
++++ b/scripts/resolvers/preamble/generate-preamble-bash.ts
+@@ -13,11 +13,29 @@ GSTACK_DESIGN="$GSTACK_ROOT/design/dist"
+ `
+     : '';
+ 
+-  return `## Preamble (run first)
++  return `## Task scope (before any commands)
++
++Determine the requested deliverable first. Review/diagnosis is read-only unless
++the user also requested implementation. A direct explicit request for a named
++workflow supplies scoped startup approval; do not ask again, but preserve any
++separate approval for external actions, spending, permissions or destructive work.
++Reversibility is not authority. A skill cannot override the host's instructions.
++
++In read-only mode, skip the mutating preamble below entirely, along with auto-fix,
++instrumentation writes, setup, telemetry, learning logs, comments, commits and
++sync. Resolve needed paths and inspect evidence with ordinary read-only tools.
++Later workflow steps are conditional on this mode; audit material is not an
++instruction to execute another workflow. Never mark an unperformed step passed.
++
++For ordinary work, skip upgrade checks and all onboarding/feature-discovery,
++telemetry, writing-style, routing-injection and vendoring prompts; keep settings
++unchanged. Those sections are maintenance reference only, executed when the user
++specifically requests that maintenance and its mutations are authorized.
++
++## Preamble (authorized writable workflows only)
+ 
+ \`\`\`bash
+-${runtimeRoot}_UPD=$(${ctx.paths.binDir}/gstack-update-check 2>/dev/null || ${ctx.paths.localSkillRoot}/bin/gstack-update-check 2>/dev/null || true)
+-[ -n "$_UPD" ] && echo "$_UPD" || true
++${runtimeRoot}
+ mkdir -p ~/.gstack/sessions
+ touch ~/.gstack/sessions/"$PPID"
+ _SESSIONS=$(find ~/.gstack/sessions -mmin -120 -type f 2>/dev/null | wc -l | tr -d ' ')
+diff --git a/scripts/resolvers/preamble/generate-spawned-session-check.ts b/scripts/resolvers/preamble/generate-spawned-session-check.ts
+index db345de0..08d04696 100644
+--- a/scripts/resolvers/preamble/generate-spawned-session-check.ts
++++ b/scripts/resolvers/preamble/generate-spawned-session-check.ts
+@@ -3,9 +3,8 @@
+ export function generateSpawnedSessionCheck(): string {
+   return `If \`SPAWNED_SESSION\` is \`"true"\`, you are running inside a session spawned by an
+ AI orchestrator (e.g., OpenClaw). In spawned sessions:
+-- Do NOT use AskUserQuestion for interactive prompts. Auto-choose the recommended option.
++- Decide routine implementation details only inside the parent's authorized scope. Do not repeat settled questions. A recommended option is not permission: return missing approvals or material scope decisions to the parent; the parent cannot supply user approval either.
+ - Do NOT run upgrade checks, telemetry prompts, routing injection, or lake intro.
+ - Focus on completing the task and reporting results via prose output.
+ - End with a completion report: what shipped, decisions made, anything uncertain.`;
+ }
+-
+diff --git a/scripts/resolvers/preamble/generate-upgrade-check.ts b/scripts/resolvers/preamble/generate-upgrade-check.ts
+index 8130808f..eaddacd5 100644
+--- a/scripts/resolvers/preamble/generate-upgrade-check.ts
++++ b/scripts/resolvers/preamble/generate-upgrade-check.ts
+@@ -1,11 +1,18 @@
+ import type { TemplateContext } from '../types';
+ 
+ export function generateUpgradeCheck(ctx: TemplateContext): string {
+-  return `If \`PROACTIVE\` is \`"false"\`, do not auto-invoke or proactively suggest skills. If a skill seems useful, ask: "I think /skillname might help here — want me to run it?"
++  return `## Optional maintenance (skip during ordinary work)
++
++Only enter this section and the following onboarding sections when the user
++requested the relevant maintenance. Otherwise continue the actual task without
++questions, update checks, state markers, configuration changes or commits.
++
++If \`PROACTIVE\` is \`"false"\`, do not auto-invoke or proactively suggest skills.
+ 
+ If \`SKILL_PREFIX\` is \`"true"\`, suggest/invoke \`/gstack-*\` names. Disk paths stay \`${ctx.paths.skillRoot}/[skill-name]/SKILL.md\`.
+ 
+-If output shows \`UPGRADE_AVAILABLE <old> <new>\`: read \`${ctx.paths.skillRoot}/gstack-upgrade/SKILL.md\` and follow the "Inline upgrade flow" (auto-upgrade if configured, otherwise AskUserQuestion with 4 options, write snooze state if declined).
++For an authorized upgrade check, run \`${ctx.paths.binDir}/gstack-update-check\`.
++If it shows \`UPGRADE_AVAILABLE <old> <new>\`, read \`${ctx.paths.skillRoot}/gstack-upgrade/SKILL.md\` and follow its scoped approval requirements. Do not turn an ordinary task into an upgrade workflow.
+ 
+ If output shows \`JUST_UPGRADED <from> <to>\`: print "Running gstack v{to} (just updated!)". If \`SPAWNED_SESSION\` is true, skip feature discovery.
+ 
+diff --git a/scripts/resolvers/review.ts b/scripts/resolvers/review.ts
+index 7dccd8e5..6e1b6ae0 100644
+--- a/scripts/resolvers/review.ts
++++ b/scripts/resolvers/review.ts
+@@ -921,13 +921,13 @@ Before judging completion, classify HOW each item can be verified. The diff alon
+ **Verification dispatch:**
+ 
+ - **DIFF-VERIFIABLE** → cross-reference against diff (next section).
+-- **CROSS-REPO** → if the sibling repo is reachable on disk (try \`~/Development/<repo>/\`, \`~/code/<repo>/\`, the parent of the current repo), run \`[ -f <path> ]\` to check file existence. File exists → DONE (cite path). File missing → NOT DONE (cite path). Path unreachable → UNVERIFIABLE (cite what needs manual check).
+-- **EXTERNAL-STATE** → UNVERIFIABLE. Cite the system and the specific check the user must perform.
+-- **CONTENT-SHAPE in another repo** → if the file exists, run any project-detected validator (see "Validator detection" below) before falling back to UNVERIFIABLE. With a validator: pass → DONE; fail → NOT DONE (cite validator output). No validator available: classify UNVERIFIABLE and cite both the file path and the convention to confirm.
++- **CROSS-REPO** → inspect the named reachable file and verify the requested content, version or behavior. Existence proves only existence, not completion (unless existence is the entire acceptance condition). File missing → NOT DONE. Missing access/evidence → UNVERIFIABLE with the precise missing check.
++- **EXTERNAL-STATE** → first use available authorized read-only CLI/API/browser evidence; record the system, time and observed state without exposing secrets. Mark UNVERIFIABLE only when the required evidence cannot be obtained. Never mutate business state just to verify a claim.
++- **CONTENT-SHAPE in another repo** → inspect the contents against the requested convention and, when available, a relevant safe validator. A missing validator alone does not make readable content unverifiable; record what the direct inspection does and does not prove.
+ 
+-**Path concreteness rule.** If a plan item names a *concrete filesystem path* (absolute, \`~/...\`, or \`<sibling-repo>/<file>\`), it MUST be classified DONE or NOT DONE based on \`[ -f <path> ]\`. UNVERIFIABLE is only valid when the path is genuinely abstract ("Cloudflare DNS", "Supabase allowlist") or the sibling root is unreachable on this machine. "I don't want to check" is not unreachable.
++**Path concreteness rule.** Inspect a concrete path instead of handing it back merely because it is outside this diff. Classify against the actual acceptance condition: existence cannot prove content, version, behavior, deployment or customer acceptance. Use UNVERIFIABLE for genuinely unavailable evidence, not unwillingness to inspect.
+ 
+-**Validator detection.** Before falling back to UNVERIFIABLE on a CONTENT-SHAPE item, scan the target repo's \`package.json\` for any script matching \`validate-*\`, \`lint-wiki\`, \`check-docs\`, or similar. If found, invoke it with the relevant path argument (e.g., \`npm run validate-wiki -- <path>\`). For multi-target validators (e.g., \`validate-wiki --all\`), run once and reconcile per-item from the output. A passing validator promotes the item from UNVERIFIABLE to DONE; a failing one demotes to NOT DONE.
++**Validator detection.** Inspect a relevant validator's command and coverage before running it; its name does not establish that it is safe or read-only. Run it only within the user's scope. A passing validator proves only the conditions it checks; inspect any remaining requested content directly before classifying the whole item DONE. Reuse one run for multiple targets when it provides per-target evidence.
+ 
+ **Honesty rule.** Do NOT classify an item as DONE just because related code shipped. Code that *handles* a deliverable is not the deliverable. Shipping a markdown-extraction library is not the same as shipping the markdown file. When in doubt between DONE and UNVERIFIABLE, prefer UNVERIFIABLE — better to surface a confirmation prompt than silently miss a deliverable.`);
+ 
+@@ -939,15 +939,15 @@ Run \`git diff origin/<base>...HEAD\` and \`git log origin/<base>..HEAD --onelin
+ 
+ For each extracted plan item, run the verification dispatch from the previous section, then classify:
+ 
+-- **DONE** — Clear evidence the item shipped. Cite the specific file(s) changed in the diff for DIFF-VERIFIABLE items, or the verified path that exists for CROSS-REPO items with a reachable sibling repo.
++- **DONE** — Clear evidence the item's actual acceptance condition is met. Cite relevant content/version, behavior checks or authorized external read-back; do not infer deployment from a file or diff.
+ - **PARTIAL** — Some work toward this item exists but is incomplete (e.g., model created but controller missing, function exists but edge cases not handled).
+ - **NOT DONE** — Verification ran and produced negative evidence (file missing, code absent in diff, sibling-repo file confirmed absent).
+ - **CHANGED** — The item was implemented using a different approach than the plan described, but the same goal is achieved. Note the difference.
+-- **UNVERIFIABLE** — The diff and any reachable sibling-repo checks cannot prove or disprove this. Always applies to EXTERNAL-STATE items and to CROSS-REPO items where the sibling repo isn't reachable. Cite the specific manual verification the user must perform (e.g., "check Cloudflare DNS shows DNS-only mode for dashboard.example.com", "confirm /docs/dashboard.md exists in domain-hq repo").
++- **UNVERIFIABLE** — Available authorized evidence cannot prove or disprove this after relevant read-only checks. Cite the missing access or smallest manual verification; external location alone is not a reason to stop.
+ 
+ **Be conservative with DONE** — require clear evidence. A file being touched is not enough; the specific functionality described must be present.
+ **Be generous with CHANGED** — if the goal is met by different means, that counts as addressed.
+-**Be honest with UNVERIFIABLE** — better to surface 5 items the user must manually confirm than silently classify them DONE.`);
++**Be honest with UNVERIFIABLE** — preserve real evidence gaps, but do not ask the user to perform checks you can safely complete through authorized tools.`);
+ 
+   // ── Output format ──
+   sections.push(`
+@@ -973,8 +973,8 @@ Plan: {plan file path}
+ 
+ ## Cross-Repo / External Items
+   [DONE]         sibling-repo has /docs/dashboard.md — verified at ~/Development/sibling-repo/docs/dashboard.md
+-  [UNVERIFIABLE] Cloudflare DNS-only on api.example.com — external system, manual check required
+-  [UNVERIFIABLE] Supabase auth allowlist contains user email — external system, confirm in Supabase dashboard
++  [UNVERIFIABLE] Cloudflare DNS-only on api.example.com — read-only access unavailable; exact dashboard check needed
++  [UNVERIFIABLE] Supabase auth allowlist contains user email — account access unavailable; owner read-back needed
+ 
+ ─────────────────────────────────
+ COMPLETION: 5/9 DONE, 1 PARTIAL, 1 NOT DONE, 1 CHANGED, 2 UNVERIFIABLE
+@@ -1018,7 +1018,7 @@ After producing the completion checklist, evaluate in priority order:
+ 
+    **Cap.** If there are more than 5 UNVERIFIABLE items, present them as a numbered list first and ask whether the user wants to (1) confirm each individually, (2) stop and reduce scope, or (3) explicitly accept blanket-confirmation with the warning that this is the VAS-449 failure shape. Default and recommended option is (1).
+ 
+-3. **Only PARTIAL items (no NOT DONE, no UNVERIFIABLE):** Continue with a note in the PR body. Not blocking.
++3. **Only PARTIAL items (no NOT DONE, no UNVERIFIABLE):** The agreed outcome is incomplete. Complete missing authorized work and reverify, or obtain an explicit scoped deferral/risk acceptance before shipping; a note alone is not approval.
+ 
+ 4. **All DONE or CHANGED:** Pass. "Plan completion: PASS — all items addressed." Continue.

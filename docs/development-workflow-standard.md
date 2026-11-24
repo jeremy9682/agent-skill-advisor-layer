@@ -25,7 +25,14 @@ link here instead of copying long, drifting workflow text.
 | Shared GitHub standard | Canonical rules, schemas, routing tables, gate policy | Project-private learnings or machine-local config |
 | Fable or strongest available model | Low-frequency standard review, skill distillation, conflict arbitration | Daily code execution |
 | Claude | 0-to-1 design, long-context synthesis, implementation-ready plans, broad refactors | Final review of its own large change |
-| Codex | Scoped code edits, bug fixes, diff review, regression checks, gate confirmation | Architecture-scale 0-to-1 decisions |
+| Codex | Scoped code edits, bug fixes, accepted-plan features and bounded refactors, synthesis, diff review, regression checks, gate confirmation | New architecture-scale 0-to-1 direction or final review of its own changes |
+
+Approval is scoped to the requested outcome. A direct explicit request for a
+named high-cost workflow satisfies startup approval without another suggestion
+round. Review/diagnosis stays read-only unless repair is also requested; an
+authorized implementation continues through relevant verification without
+reconfirming settled decisions. Detailed boundaries and completion criteria are
+in [Gate Policy](gate-policy.md#scope-questions-and-completion).
 
 ## Adopted Sources
 

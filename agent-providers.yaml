@@ -63,7 +63,7 @@ providers:
     binary_candidates: [~/.local/bin/codex, codex]
     version_args: [--version]
     model_requested: gpt-5.6-terra
-    model_options: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
+    model_options: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol, gpt-6-astra]
     effort_requested: medium
     effort_options: [low, medium, high, xhigh, max]
     # Codex may legitimately spend more than two minutes between JSON events

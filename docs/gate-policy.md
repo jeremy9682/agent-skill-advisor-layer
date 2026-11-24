@@ -86,8 +86,44 @@ reads is worse than prose, because prose does not masquerade as enforcement.
 | --- | --- | --- |
 | Safe mechanical | Formatting, imports, spelling, generated artifacts, obvious typo fixes | Agent may fix and verify |
 | Gated auto | Concrete low-risk fix proposed, but behavior may be touched | Agent may apply only when the owning workflow permits and verification is available |
-| Intent-touching | Product behavior, public API, data model, auth, billing, UX, or tradeoff changes | Escalate to user or plan owner |
+| Intent-touching | Changes or adds to the accepted goal, constraints, contract, or deliberate tradeoffs; not merely restoring specified behavior | Escalate to user or plan owner |
 | Advisory | Risk, missing coverage, rollout note, or future cleanup | Record without blocking unless severity demands |
+
+Restoring specified behavior within an authorized repair is not a new product
+decision. Public-interface, schema, permission, money and other risk triggers
+still apply regardless of whether the finding is intent-touching.
+
+## Scope, Questions And Completion
+
+Determine the requested deliverable before applying a workflow: review or
+diagnosis is read-only unless the user also requests a repair; implementation
+includes relevant verification, not unrelated setup, configuration or release.
+Reading a skill as audit material is not authorization to execute its steps.
+Read-only mode suppresses auto-fix, instrumentation writes, setup, telemetry,
+memory writes and commits. Report findings and proposed fixes instead.
+
+Continue routine work while it is in scope, authorized and within the applicable
+risk gates. Reversibility does not create authority. Reuse explicit decisions
+and current evidence rather than asking the same question again. Clarify only
+when the unresolved choice materially changes scope, risk, cost or outcome and
+cannot be settled from the task's evidence. A file-count or failed-hypothesis
+threshold calls for reassessment, not a new approval when fresh evidence still
+supports safe in-scope progress. Preserve explicit stop/approval instructions.
+
+Tool unavailability does not decide authority: a routine implementation choice
+can use an explained default; an actual approval gap must be returned to the
+user (or by a child to its parent). No agent may supply the user's approval.
+
+Minimize implementation, not accepted requirements or verification. Reuse the
+repository's test framework and retain risk-appropriate regression coverage.
+File existence is not content correctness. Check the requested content/version
+or behavior; use available authorized read-only channels for external state.
+Only unavailable evidence is UNVERIFIABLE, with the smallest missing access or
+human action specified. Never perform a business write merely to prove a claim.
+
+Mark the requested outcome complete only when every in-scope acceptance item is
+verified or a user-approved exception is recorded. Report partial work and the
+next unclosed gate honestly; tests passing is not release/customer acceptance.
 
 ## Autonomous Pipeline Approval
 
@@ -104,8 +140,13 @@ feature". Use:
 This looks like a candidate for <skill> because <reason>. I can run it if you approve.
 ```
 
-Start only after the user explicitly says to run, start, enable, pair, set up,
-or launch that specific workflow.
+An explicit user request to run, start, enable, pair, set up, or launch the
+specific workflow already grants its scoped startup approval; it need not
+follow an agent suggestion. If the agent proposes the workflow, wait for that
+explicit approval. Startup approval is not permission for unspecified commits,
+pushes, deployment, spending, permission changes or other external mutations.
+Optional upgrades, telemetry and onboarding are not prerequisites to ordinary
+work; retain current settings unless the user requests those changes.
 
 ## Active Gate Runs
 

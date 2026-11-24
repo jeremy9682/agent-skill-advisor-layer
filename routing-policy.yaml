@@ -41,7 +41,7 @@ enums:
   execution_seat: [claude, codex, cursor]  # family that PRODUCES the diff
   execution_model:                       # producer model tiers, keyed by family
     claude: [sonnet, opus, fable, claude-fable-5]
-    codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
+    codex: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol, gpt-6-astra]
     # Shuttle Seal 飞梭：机械/快写默认走 Cursor 命名模型（非 Claude sonnet）。
     # Product default (2026-08-19, cursor-agent catalog): Grok 4.6.
     # 4.5 ids remain for explicit downgrade / catalog compatibility.
@@ -113,9 +113,13 @@ task_shapes:
     execution_mode: fast
     review_effort_floor: high
   standard_feature:
-    execution_seat: [claude]
+    # User-approved 2026-09-06: already-specified features / bounded refactors.
+    # New product/schema/architecture decisions still route to judgment; risk
+    # overlays and independent reciprocal-family review are not waived.
+    execution_seat: [claude, codex]
     execution_model:
       claude: opus
+      codex: gpt-6-astra
     execution_effort: medium       # base medium-high; may downshift
     execution_mode: careful
     review_effort_floor: high
@@ -319,6 +323,15 @@ runtime_routes:
     seat: claude-landing
     concurrency: family_serial
     serial_group: claude-family
+  # Opt-in: retain the existing standard_feature default and running seats.
+  # Availability must be verified on the actual host before dispatch.
+  standard_feature_codex:
+    policy_ref: task_shapes.standard_feature
+    policy_family: codex
+    provider: codex
+    seat: codex-landing
+    concurrency: family_serial
+    serial_group: codex-family
   judgment:
     policy_ref: task_shapes.judgment
     policy_family: claude

@@ -7,7 +7,7 @@ Use the smallest workflow that protects the user's goal.
 | Task shape | Default route | Required evidence |
 | --- | --- | --- |
 | Small fix | Codex edits directly, runs focused verification, reports result | Test, lint, typecheck, or a concrete reason none applies |
-| New feature | Claude reads project context and `docs/solutions/`, writes an implementation-ready plan, then implementation proceeds against that plan | Plan with repo-relative paths, test paths, decisions, and rationale |
+| New feature | Use the accepted plan; Claude or an admitted Codex model may implement already-specified features and bounded refactors. New direction decisions remain Claude-owned | Plan with repo-relative paths, test paths, decisions, and rationale |
 | Broad refactor | Claude plans and may implement in bounded units; Codex reviews against the plan before ship | Plan traceability, migration or rollback notes where relevant |
 | Bug or failing test | Systematic debugging first: reproduce, form hypotheses, prove root cause, then fix | Regression test or characterization evidence for the root cause |
 | Code review | Reviewer compares the diff to an intent statement, not only local style | Findings with severity, file references, and verification needs |
@@ -20,8 +20,11 @@ Use the smallest workflow that protects the user's goal.
 Claude handles the plan-heavy side: product ambiguity, architecture, long-context
 understanding, cross-file refactors, and implementation-ready plan creation.
 
-Codex handles the landing side: precise edits, bug fixes, diff review, focused
-regression checks, and confirming that the gate evidence is real.
+Codex handles precise edits, bug fixes, diff review, focused regression checks,
+already-specified features, bounded refactors, and checking real gate evidence.
+Reading and long-context synthesis alone do not require a model-family handoff.
+The opt-in `standard_feature_codex` route uses GPT-6; existing route defaults and
+running seats stay unchanged. Verify actual host availability before dispatch.
 
 Direction ownership follows task shape: fix-shaped work (bugs, diff
 convergence, regressions) may take direction from Codex; judgment-shaped work
@@ -31,7 +34,10 @@ judgment-shaped change.
 
 ## Seats Rule
 
-Each change has three seats: direction, landing, final review.
+Track direction, landing and final-review responsibilities. This is not a demand
+for three dispatched agents on every small task: direction and landing may share
+a session for an already-authorized ordinary repair. Required final review stays
+independent of the producer/direction; machine canon governs its family and floor.
 
 - Landing seat and final-review seat are never the same agent.
 - Direction seat and final-review seat are never the same agent.
@@ -53,7 +59,8 @@ e.g. a production ERP) default non-mechanical work to:
 plan (Claude) -> blind plan review (Codex) -> implement -> final review (Codex)
 ```
 
-Other repos use the conditional triggers above. Small fixes bypass everywhere.
+Other repos use the conditional triggers above. Small fixes bypass extra plan
+meetings and blind plan review, not a required final review or risk overlay.
 Every task gets a process budget up front; when exceeded, drop extra agents
 and keep only minimal verification plus final review.
 
@@ -65,7 +72,7 @@ inside `UserPromptSubmit`.
 
 | Task shape | Risk zone | Direction seat | Landing seat | Final review | Effort | Required gates |
 | --- | --- | --- | --- | --- | --- | --- |
-| `small_fix` | low/default | Codex | Codex | None by default | `medium-fast` | focused verification |
+| `small_fix` | low/default | Codex | Codex | Per machine canon; no automatic review waiver | `medium-fast` | focused verification; required final review |
 | `bug` | default | Codex | Codex | Codex when behavior or shared logic changed | `high` | reproduce/root cause/regression |
 | `feature` | default | Claude | planned implementation owner | Codex | `high` | intent, plan gate when 2+ modules/public API/data model |
 | `broad_refactor` | default | Claude | planned implementation owner | Codex | `high` | intent, plan gate, final diff review |

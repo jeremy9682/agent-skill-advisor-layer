@@ -303,3 +303,48 @@ def test_spawn_dispatch_requires_explicit_override_for_final_review():
     )
     assert overridden["status"] == "explicit-override"
     assert overridden["gated"] is True
+
+
+def test_gpt6_feature_route_preserves_defaults_and_review_boundaries():
+    canon = routing.load_routing_canon(ROOT / "routing-policy.yaml")
+    feature = routing.resolve_binding(canon, "standard_feature_codex")
+    manifest = yaml.safe_load((ROOT / "agent-providers.yaml").read_text())
+    assert feature["model"] in manifest["providers"]["codex"]["model_options"]
+    assert (feature["provider"], feature["model"], feature["effort"]) == (
+        "codex", "gpt-6-astra", "medium"
+    )
+    assert feature["seat"] == "codex-landing"
+    assert feature["serial_group"] == "codex-family"
+    assert routing.resolve_binding(canon, "standard_feature")["provider"] == "claude"
+    assert routing.resolve_binding(canon, "ordinary_bug_fix")["model"] == "gpt-5.6-terra"
+
+    for shape in ("judgment", "restricted_zone", "arbitration"):
+        assert canon["task_shapes"][shape]["execution_seat"] == ["claude"]
+        forbidden = copy.deepcopy(canon)
+        forbidden["runtime_routes"]["test-codex-direction"] = {
+            "policy_ref": f"task_shapes.{shape}", "policy_family": "codex",
+            "provider": "codex", "seat": "codex-landing",
+        }
+        with pytest.raises(routing.RoutingRuntimeError, match="not allowed"):
+            routing.resolve_binding(forbidden, "test-codex-direction")
+
+    for review in ("codex_final_review", "secondary_final_review"):
+        with pytest.raises(routing.RoutingRuntimeError, match="same model family"):
+            routing.validate_stage_gate(
+                canon, review_route=review, reviewer_family="openai",
+                producer_family="openai", producer_route="standard_feature_codex",
+            )
+    for trigger in canon["risk_overlays"]["triggers"]:
+        with pytest.raises(routing.RoutingRuntimeError, match="reciprocal reviewer"):
+            routing.validate_stage_gate(
+                canon, review_route="codex_final_review", reviewer_family="openai",
+                producer_family="openai", producer_route="standard_feature_codex",
+                risk_triggers=[trigger],
+            )
+        result = routing.validate_stage_gate(
+            canon, review_route="fable_final_review", reviewer_family="anthropic",
+            producer_family="openai", producer_route="standard_feature_codex",
+            risk_triggers=[trigger],
+        )
+        assert result["status"] == "stage-gate-ok"
+        assert result["review_effort_floor"] == "xhigh"
